@@ -1,0 +1,26 @@
+{
+  "version": "1.1",
+  "updatedAt": "2025-11-22T00:00:00Z",
+  "countries": [
+    { "code": "AU", "name": "Australia", "dialCode": "+61", "flagEmoji": "🇦🇺", "flagUrl": "", "phoneLength": 9, "phoneRegex": "^\\d{9}$", "priority": 5 },
+    { "code": "BR", "name": "Brazil", "dialCode": "+55", "flagEmoji": "🇧🇷", "flagUrl": "", "phoneLength": 11, "phoneRegex": "^\\d{10,11}$", "priority": 11 },
+    { "code": "CA", "name": "Canada", "dialCode": "+1", "flagEmoji": "🇨🇦", "flagUrl": "", "phoneLength": 10, "phoneRegex": "^\\d{10}$", "priority": 4 },
+    { "code": "CN", "name": "China", "dialCode": "+86", "flagEmoji": "🇨🇳", "flagUrl": "", "phoneLength": 11, "phoneRegex": "^\\d{11}$", "priority": 14 },
+    { "code": "FR", "name": "France", "dialCode": "+33", "flagEmoji": "🇫🇷", "flagUrl": "", "phoneLength": 9, "phoneRegex": "^\\d{9}$", "priority": 7 },
+    { "code": "DE", "name": "Germany", "dialCode": "+49", "flagEmoji": "🇩🇪", "flagUrl": "", "phoneLength": 10, "phoneRegex": "^\\d{10}$", "priority": 6 },
+    { "code": "IN", "name": "India", "dialCode": "+91", "flagEmoji": "🇮🇳", "flagUrl": "", "phoneLength": 10, "phoneRegex": "^\\d{10}$", "priority": 2 },
+    { "code": "IT", "name": "Italy", "dialCode": "+39", "flagEmoji": "🇮🇹", "flagUrl": "", "phoneLength": 9, "phoneRegex": "^\\d{9}$", "priority": 9 },
+    { "code": "JP", "name": "Japan", "dialCode": "+81", "flagEmoji": "🇯🇵", "flagUrl": "", "phoneLength": 10, "phoneRegex": "^\\d{9,10}$", "priority": 13 },
+    { "code": "MX", "name": "Mexico", "dialCode": "+52", "flagEmoji": "🇲🇽", "flagUrl": "", "phoneLength": 10, "phoneRegex": "^\\d{10}$", "priority": 12 },
+    { "code": "NL", "name": "Netherlands", "dialCode": "+31", "flagEmoji": "🇳🇱", "flagUrl": "", "phoneLength": 9, "phoneRegex": "^\\d{9}$", "priority": 10 },
+    { "code": "NG", "name": "Nigeria", "dialCode": "+234", "flagEmoji": "🇳🇬", "flagUrl": "", "phoneLength": 10, "phoneRegex": "^\\d{10}$", "priority": 17 },
+    { "code": "PK", "name": "Pakistan", "dialCode": "+92", "flagEmoji": "🇵🇰", "flagUrl": "", "phoneLength": 10, "phoneRegex": "^\\d{10}$", "priority": 18 },
+    { "code": "ZA", "name": "South Africa", "dialCode": "+27", "flagEmoji": "🇿🇦", "flagUrl": "", "phoneLength": 9, "phoneRegex": "^\\d{9}$", "priority": 16 },
+    { "code": "KR", "name": "South Korea", "dialCode": "+82", "flagEmoji": "🇰🇷", "flagUrl": "", "phoneLength": 10, "phoneRegex": "^\\d{9,10}$", "priority": 15 },
+    { "code": "SG", "name": "Singapore", "dialCode": "+65", "flagEmoji": "🇸🇬", "flagUrl": "", "phoneLength": 8, "phoneRegex": "^\\d{8}$", "priority": 20 },
+    { "code": "ES", "name": "Spain", "dialCode": "+34", "flagEmoji": "🇪🇸", "flagUrl": "", "phoneLength": 9, "phoneRegex": "^\\d{9}$", "priority": 8 },
+    { "code": "AE", "name": "United Arab Emirates", "dialCode": "+971", "flagEmoji": "🇦🇪", "flagUrl": "", "phoneLength": 9, "phoneRegex": "^\\d{9}$", "priority": 19 },
+    { "code": "UK", "name": "United Kingdom", "dialCode": "+44", "flagEmoji": "🇬🇧", "flagUrl": "", "phoneLength": 10, "phoneRegex": "^\\d{10}$", "priority": 3 },
+    { "code": "US", "name": "United States", "dialCode": "+1", "flagEmoji": "🇺🇸", "flagUrl": "", "phoneLength": 10, "phoneRegex": "^\\d{10}$", "priority": 1 }
+  ]
+}

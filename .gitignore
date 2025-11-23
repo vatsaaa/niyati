@@ -1,0 +1,68 @@
+# Project .gitignore — Node + Vite UI + macOS/editor ignores
+
+# Node modules
+node_modules/
+
+# UI (Vite) build artifacts and deps
+/ui/dist/
+/ui/.vite/
+/ui/node_modules/
+/ui/build/
+
+# Environment files (do NOT commit secrets)
+.env
+.env.local
+.env.*.local
+/ui/.env
+/ui/.env.local
+/ui/.env.*.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Coverage and test output
+coverage/
+.nyc_output/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDEs and editors
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+*.iml
+
+# Misc caches and temp
+.cache/
+.tmp/
+dist/
+build/
+
+# Certificates and keys
+*.pem
+*.key
+*.crt
+
+# Database / local storage
+*.sqlite
+*.db
+
+# Docker override (local)
+docker-compose.override.yml
+
+# ngrok and local tunnels
+.ngrok/
+
+# Misc
+*.tgz
+*.log.gz
+
+# Keep lockfiles in source control (do not ignore package-lock.json/yarn.lock by default)

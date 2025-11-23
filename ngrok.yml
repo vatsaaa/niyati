@@ -1,0 +1,11 @@
+version: "2"
+authtoken: 35C7AO4m8NoGkQgHMF8IMaSK3By_vyM2Abnqexgk3KvHDX9h # You must find this in your ngrok dashboard
+tunnels:
+  niyati-backend:
+    addr: 5678
+    proto: http
+    domain: nonexperientially-nonascetical-agnes.ngrok-free.dev
+  niyati-frontend:
+    addr: 5173
+    proto: http
+    # We do NOT specify a domain here, so ngrok assigns a random one
