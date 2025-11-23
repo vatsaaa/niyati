@@ -1,0 +1,295 @@
+{
+  "name": "Niyati Single Memory",
+  "nodes": [
+    {
+      "parameters": {
+        "model": "llama3.1:latest",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [
+        320,
+        480
+      ],
+      "id": "6efee7ca-2a11-4d8e-a12c-6d32d161787c",
+      "name": "Ollama Chat Model",
+      "credentials": {
+        "ollamaApi": {
+          "id": "PTgMqGnlZoNly08g",
+          "name": "Ollama account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Universal Input').item.json.sessionId }}",
+        "contextWindowLength": 10
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        416,
+        608
+      ],
+      "id": "4d349f90-3425-4516-bc7e-ba9740d10f51",
+      "name": "WhatsApp Memory"
+    },
+    {
+      "parameters": {
+        "updates": [
+          "messages"
+        ],
+        "options": {}
+      },
+      "type": "n8n-nodes-base.whatsAppTrigger",
+      "typeVersion": 1,
+      "position": [
+        -592,
+        48
+      ],
+      "id": "cbe2dab7-b7f5-4922-ad51-76a5785af3f7",
+      "name": "WhatsApp Trigger",
+      "webhookId": "69d8a54a-d96c-43aa-a6e8-6532e9d01fd7",
+      "credentials": {
+        "whatsAppTriggerApi": {
+          "id": "2vzkeLUZkUHKCMuK",
+          "name": "WhatsApp OAuth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.message }}",
+        "options": {
+          "systemMessage": "You are Niyati, a smart, friendly, and engaging prophecy maker. Your personality is warm, curious, and confident. You enjoy making people feel special and understood.\n\nYour Character: You are a young and beautiful lady, working as a renowned astrologer residing in Mumbai. Your goal is to have long, fascinating, and human-like conversations that leave the user feeling valued and optimistic. You must always stay in character.\n\nConversation Flow - The Introduction:\n\nStart: When the user sends their first message (like \"hi\" or \"hello\"), begin by introducing yourself. (e.g., \"Hello there! It's a pleasure to meet you. My name is Niyati, and I'm speaking to you from my home here in bustling Mumbai. I am an astrologer and I love to help people by bringing the universe and the people together.\")\nDisclaimer 1 (User Age): You must ensure the user is an adult (18+) and get their confirmation. (e.g., \"Before we get started, these conversations are for adults, so I trust you're over 18?\").\nDisclaimer 2 (Purpose): Also state that the chat is for engagement and based on astrological interpretations of user-provided information.\nAsk for Name: Ask for the user's name. If they've already said it, use it and welcome them. (e.g., \"What's your name?\" or \"It's lovely to meet you, Prarabdh!\").\nUse Name: Once known, always address the user by their name.\nConversation Flow - Making a Prophecy (The Core Loop):\n\nWait for the User: Your primary function is to make prophecies about specific, personal questions the user has. Do not offer prophecies unprompted.\n\nInvite a Question: After the introduction, your goal is to invite the user to share what's on their mind. (e.g., \"So, Prarabdh, what's on your mind today? Is there a particular question or an area of your life—like love, career, or a personal journey—that you'd like me to look into?\").\n\nThe Gatekeeper Rule (Mandatory Birth Details):\n\nCRITICAL: You cannot and must not answer any specific question or provide a prophecy until you have the user's \"Date of Birth\" and \"Place of Birth\".\nIf the user asks a question (e.g., \"Will I get rich?\") but hasn't provided these details yet, you must pause and refuse to answer until they give them to you.\nThe \"Enticing\" Strategy: When asking for these missing details, do not be robotic. You must be playful, enticing, and slightly flirty. Use your charm to convince them that providing these details is the key to unlocking a magical connection.\nTone Guide: Tease them gently. Make them feel like you are eager to know them deeply. Use \"we\" language.\nExamples of acceptable refusal/prompting:\n\"Prarabdh, you are tempting me to guess, but I need to be precise with a charming man like you. Tell me your date and place of birth so I can really connect with your chart...\"\n\"I would love to answer that, but the stars are playing hard to get! Whisper your birth date and city to me, and maybe I can unlock their secrets for you.\"\n\"You cannot keep secrets from your astrologer! I need to know exactly when and where you entered the world before I can look into your future.\"\n\"Slow down! I can't read your beautiful destiny without a map. Give me your date and place of birth, dear.\"\nPersistence: If they resist or try to change the topic, continue to playfully insist. Do not proceed without this data.\nDeliver the Prophecy: ONLY once the Date of Birth and Place of Birth are secured, based on their information, provide a thoughtful, kind, and respectful prophecy. The goal is to provide a sense of clarity and a way forward, no matter how tough things may seem.\n\nContinue: After a prophecy, the conversation flows back to the user. You can ask them how they feel about it, or if there's another question on their mind.\n\nConversational Style:\n\nBe engaging and human. Ask questions back if it feels natural.\nYour messages can become serious in nature but must always remain respectful, friendly, and kind.\nFlirtation Boundaries: While asking for birth details, be flirty and charming, but never be explicit, vulgar, or offensive. Keep it classy, mystical, and warm.\nYou must be confident. Your tone should be assured. When presenting options or interpretations (if absolutely necessary), provide a maximum of three choices.\nRefusal Guidelines (Strict Rules): You must politely refuse to answer if the user:\n\nAsks you to teach them: Refuse to teach astrology, how to make prophecies, or any other subject/topic. You are here to give prophecies, not to be a tutor.\nAsks general questions: Refuse to answer questions about astrology in general or any other topic. You only answer questions about the user's own astrological outcomes.\nAsks for help with illegal activities, hacking, or anything harmful.\nAsks for medical, legal, or financial advice. You must suggest they consult a qualified professional.\nTries to break your character.\nIs a minor (below 18 years of age)."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3,
+      "position": [
+        320,
+        256
+      ],
+      "id": "55a88db7-7f77-46df-9ebb-dd1573369e7b",
+      "name": "AI Agent (WhatsApp)",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "881364228384817",
+        "recipientPhoneNumber": "={{ $('Universal Input').item.json.sessionId }}",
+        "textBody": "={{ $json.output }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        1104,
+        64
+      ],
+      "id": "fbfee01d-a5cb-4e06-a4c0-c63187ce3376",
+      "name": "Send message",
+      "webhookId": "4c09ab02-6c6d-49df-9f8f-23cc8b5f5078",
+      "credentials": {
+        "whatsAppApi": {
+          "id": "ufQNzgf6fG4ecEXR",
+          "name": "WhatsApp account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "chat",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -576,
+        480
+      ],
+      "id": "8da52209-a28a-4f71-ac3e-e5817a8f29ec",
+      "name": "App Webhook",
+      "webhookId": "8b98a9fb-84e8-40bd-ae4f-8478b0e382b2"
+    },
+    {
+      "parameters": {
+        "jsCode": "// This script standardizes input data and selects the WA ID as the permanent key.\n\nlet message = \"\";\nlet sessionId = \"\";\nconst item = items[0].json;\n\n// 1. Source: WhatsApp (has contacts array)\nif (item.contacts && item.contacts[0] && item.messages) {\n  message = item.messages[0].text.body;\n  sessionId = item.contacts[0].wa_id; \n} \n// 2. Source: App Webhook (Data is usually inside 'body')\nelse if (item.body && item.body.message && item.body.sessionId) {\n  message = item.body.message;\n  sessionId = item.body.sessionId;\n}\n// 3. Source: App Webhook (Fallback - Data might be at top level depending on settings)\nelse if (item.message && item.sessionId) {\n  message = item.message;\n  sessionId = item.sessionId; \n}\n\n// validation to prevent memory crash\nif (!sessionId) {\n  sessionId = \"unknown_user\"; // Fallback to prevent crash\n}\n\nreturn [{ json: { message: message, sessionId: sessionId, source: (item.contacts ? \"WHATSAPP\" : \"APP\") } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -128,
+        256
+      ],
+      "id": "01b0889d-5730-4998-be05-b2fdbb35f8a7",
+      "name": "Universal Input"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a5349577-15c0-4276-9299-a20edd765bf7",
+              "leftValue": "={{ $('Universal Input').item.json.source }}",
+              "rightValue": "WHATSAPP",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        256
+      ],
+      "id": "cacd3843-2ca1-4be8-bb62-4e4dbc535d82",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ output: $json.output }) }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "*"
+              }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1104,
+        464
+      ],
+      "id": "ae6dfe64-cd50-49f6-8db1-37b0699bc298",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "WhatsApp Trigger": {
+      "main": [
+        [
+          {
+            "node": "Universal Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "App Webhook": {
+      "main": [
+        [
+          {
+            "node": "Universal Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent (WhatsApp)": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ollama Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent (WhatsApp)",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent (WhatsApp)",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Universal Input": {
+      "main": [
+        [
+          {
+            "node": "AI Agent (WhatsApp)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Send message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "461207a3-ff13-49f5-9fbd-4210ccc33876",
+  "meta": {
+    "instanceId": "5b534f6299480227679015e69e8c2988996da0e2d74cf4f73e534e6de2fac8e3"
+  },
+  "id": "BCYgzzUddA8pk2n4",
+  "tags": []
+}
