@@ -5,7 +5,6 @@ This BFF is a small Node/Express server that provides a unified API layer for th
 ## What it provides
 - **Geocoding**: Complete location services including search, reverse lookup, structured queries, and proxy endpoints
 - **Astrology**: Comprehensive astrology calculations including birth charts, planetary positions, divisional charts, and horoscope SVG generation
-- **Payments**: Payment processing scaffold with Razorpay integration for credits-based transactions
 - **Health Check**: Basic server status endpoint
 
 ## Quick start
@@ -35,7 +34,6 @@ Based on your `.env` file:
 - Server Port: `3000`
 - Geocoding: maps.co with API key configured
 - Astrology Provider: `https://json.apiastro.com` with API key configured
-- Payments: Razorpay (keys need to be configured for full functionality)
 
 This README documents all supported APIs with working curl examples for quick testing.
 
@@ -45,9 +43,6 @@ Current `.env` configuration:
 ```bash
 PORT=3000
 GEOCODE_MAPS_KEY=692331f47b1fb572260859afrd77c62  # Configured ✓
-RAZORPAY_KEY_ID=                                   # Needs configuration for payments
-RAZORPAY_KEY_SECRET=                               # Needs configuration for payments
-RAZORPAY_WEBHOOK_SECRET=                           # Needs configuration for payments
 ASTRO_API_KEY=rbFZQW05Fj6r382kuCNIA4A2rthPHHmVXBRXuQo2  # Configured ✓
 ASTRO_API_URL=https://json.apiastro.com           # Configured ✓
 NODE_ENV=development
@@ -63,8 +58,6 @@ NODE_ENV=development
 - `ASTRO_DEFAULT_TIMEZONE` — Default timezone offset (e.g. `5.5` for IST)
 - `GEOCODE_MAPS_BASE` — Maps.co base URL override (defaults to `https://geocode.maps.co`)
 - `GEOCODE_USER_AGENT` — Custom User-Agent for geocoding requests
-- `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET` — For payment processing
-- `NGROK_AUTH_TOKEN` — For webhook testing with ngrok
 
 ## Development Setup
 
@@ -84,7 +77,7 @@ NODE_ENV=development
 3. **Webhook testing with ngrok** (optional)
    ```bash
    ngrok http 3000
-   # Set payment provider webhook to: https://<your-id>.ngrok.io/api/payments/webhook
+   # Available for future webhook integrations
    ```
 
 ## Response Formats
@@ -107,6 +100,30 @@ NODE_ENV=development
 }
 ```
 
+### Current Location Response
+```json
+{
+  "status": "ok",
+  "source": "geolocation-db.com",
+  "ipVerification": {
+    "primary": "123.201.8.217",
+    "verification": "123.201.8.217",
+    "match": true,
+    "verifiedBy": "api.ipify.org"
+  },
+  "location": {
+    "ip": "123.201.8.217",
+    "country": "India",
+    "countryCode": "IN",
+    "state": "Maharashtra",
+    "city": "Mumbai",
+    "postal": "400011",
+    "latitude": 18.975,
+    "longitude": 72.8258
+  }
+}
+```
+
 ### Astrology Response
 ```json
 {
@@ -119,20 +136,6 @@ NODE_ENV=development
     "raw": { /* complete provider response */ }
   },
   "summary": "Brief interpretation"
-}
-```
-
-### Payments Response
-```json
-{
-  "status": "ok",
-  "orderId": "uuid-v4",
-  "providerOrderId": "order_razorpay_id",
-  "amountInPaise": 30000,
-  "currency": "INR",
-  "planId": "plan_5",
-  "credits": 5,
-  "keyId": "rzp_test_key"
 }
 ```
 
@@ -211,7 +214,17 @@ All examples assume server running at `http://localhost:3000`. The server is con
       -d '{"street":"MG Road","city":"Pune","state":"Maharashtra","country":"India"}'
     ```
 
-#### 5. Proxy Endpoints
+#### 5. Current Location (IP-based)
+- **GET** `/api/geocode/current-location`
+  - Purpose: Get user's current location based on their IP address
+  - Features: IP verification using dual sources (geolocation-db.com + api.ipify.org), optimized response structure
+  - Returns: Comprehensive location data with IP verification details
+  - Example:
+    ```bash
+    curl http://localhost:3000/api/geocode/current-location
+    ```
+
+#### 6. Proxy Endpoints
 - **GET** `/api/geocode/proxy/*`
   - Purpose: Safe passthrough to maps.co for `/search`, `/reverse`, `/lookup`
   - Examples:
@@ -394,59 +407,6 @@ All examples assume server running at `http://localhost:3000`. The server is con
 
 ---
 
-### Payments APIs (`/api/payments`)
-
-#### 1. Create Order
-- **POST** `/api/payments/create-order`
-  - Purpose: Create a new payment order
-  - Body: `{ "phone": "...", "planId": "plan_5" | "plan_10" }`
-  - Available plans:
-    - `plan_5`: 5 credits for ₹300
-    - `plan_10`: 10 credits for ₹500
-  - Example:
-    ```bash
-    curl -X POST http://localhost:3000/api/payments/create-order \
-      -H "Content-Type: application/json" \
-      -d '{"phone":"+919876543210","planId":"plan_5"}'
-    ```
-
-#### 2. Verify Payment
-- **POST** `/api/payments/verify`
-  - Purpose: Verify Razorpay payment signature
-  - Body: Razorpay response payload
-  - Example:
-    ```bash
-    curl -X POST http://localhost:3000/api/payments/verify \
-      -H "Content-Type: application/json" \
-      -d '{
-        "razorpay_payment_id": "pay_xxxx",
-        "razorpay_order_id": "order_xxxx",
-        "razorpay_signature": "signature_xxxx"
-      }'
-    ```
-
-#### 3. Order Status
-- **GET** `/api/payments/status?orderId=...`
-  - Purpose: Get order status and remaining credits
-  - Example:
-    ```bash
-    curl 'http://localhost:3000/api/payments/status?orderId=your-order-id-here'
-    ```
-
-#### 4. Payment Webhook
-- **POST** `/api/payments/webhook`
-  - Purpose: Handle payment provider webhooks
-  - Example test webhook:
-    ```bash
-    curl -X POST http://localhost:3000/api/payments/webhook \
-      -H "Content-Type: application/json" \
-      -d '{
-        "event": "payment.captured",
-        "orderId": "your-order-id",
-        "phone": "+919876543210"
-      }'
-    ```
-
 ---
 
 ## API Testing Status & Commands
@@ -461,7 +421,7 @@ Copy and paste each command to test. Update the status column as you go.
 | 4 | **Geocoding - Reverse Lookup** | `curl -X POST http://localhost:3000/api/geocode/reverse -H "Content-Type: application/json" -d '{"lat":18.5204,"lon":73.8567,"limit":3}'` | ✅ | Status: "ok", Found: Siddharth Library, Shivaji Road, Kasba Peth, Pune (18.5204303, 73.8567437) with postcode 411002 |
 | 5 | **Geocoding - OSM Lookup** | `curl -X POST http://localhost:3000/api/geocode/lookup -H "Content-Type: application/json" -d '{"osm_ids":"R146656"}'` | ✅ | Status: "ok", Found: Manchester, UK (53.4794892, -2.2451148) with pop: 503,100 and 80+ language names |
 | 6 | **Geocoding - Structured Search** | `curl -X POST http://localhost:3000/api/geocode/structured -H "Content-Type: application/json" -d '{"street":"MG Road","city":"Pune","state":"Maharashtra","country":"India"}'` | ✅ | Status: "ok", Found 2 MG Roads: Uruli Kanchan (18.4930274, 74.1350385) + Mahatma Gandhi Marg, Pune Cantonment |
-| 7 | **Geocoding - Proxy Search** | `curl 'http://localhost:3000/api/geocode/proxy/search?format=json&q=Delhi&limit=2'` | ✅ | Status: "ok", Found 2 results: New Delhi (28.6138954, 77.2090057) capital + Delhi territory (28.6328027, 77.2197713) |
+| 7 | **Geocoding - Current Location** | `curl http://localhost:3000/api/geocode/current-location` | ⏳ | - |
 | 8 | **Astrology - Geo Details** | `curl -X POST http://localhost:3000/api/astrology/geo-details -H "Content-Type: application/json" -d '{"location":"New Delhi"}'` | ✅ | Status: "ok", Found: New Delhi (28.63576, 77.22445) with timezone Asia/Kolkata (UTC+5.5) - Ready for astrology calculations |
 | 9 | **Astrology - Complete Computation** | `curl -X POST http://localhost:3000/api/astrology/compute -H "Content-Type: application/json" -d '{"profile":{"name":"Test User","dob":"1990-11-23","timeOfBirth":"07:30:00","placeOfBirth":{"city":"Pune","countryCode":"IN","lat":18.5204,"lng":73.8567}}}'` | ✅ | Status: "ok", Complete computation: Sun: Scorpio, Moon: Capricorn, Asc: Scorpio. Detailed planetary data with nakshatras, padas, degrees/minutes/seconds, house positions, and zodiac lords. Ready for comprehensive astrological analysis |
 | 10 | **Astrology - Planets/Rasi Chart** | `curl -X POST http://localhost:3000/api/astrology/planets -H "Content-Type: application/json" -d '{"year":1990,"month":11,"date":23,"hours":7,"minutes":30,"seconds":0,"latitude":18.5204,"longitude":73.8567,"timezone":5.5,"settings":{"observation_point":"topocentric","ayanamsha":"lahiri"}}'` | ✅ | Status: "ok", Complete planetary positions: Sun/Mercury/Venus in Scorpio (8th sign), Moon/Rahu in Capricorn, Jupiter/Ketu in Cancer, Mars in Gemini (retrograde), Saturn in Sagittarius. Ayanamsa: 23.73° (Lahiri) |
@@ -469,10 +429,6 @@ Copy and paste each command to test. Update the status column as you go.
 | 12 | **Astrology - Divisional Chart (D10)** | `curl -X POST http://localhost:3000/api/astrology/divisional -H "Content-Type: application/json" -d '{"divisional":10,"year":1990,"month":11,"date":23,"hours":7,"minutes":30,"seconds":0,"latitude":18.5204,"longitude":73.8567,"timezone":5.5,"settings":{"observation_point":"topocentric","ayanamsha":"lahiri"}}'` | ✅ | Status: "ok", D10 Dashamsha chart: Ascendant/Moon in Sagittarius (1st house), Sun/Jupiter/Saturn in Virgo (10th house), Mars/Ketu in Gemini (6th house), Mercury in Pisces (4th house), Venus/Rahu in Scorpio (12th house). Career analysis ready |
 | 13 | **Astrology - Horoscope SVG** | `curl -X POST http://localhost:3000/api/astrology/horoscope-svg -H "Content-Type: application/json" -d '{"year":1990,"month":11,"date":23,"hours":7,"minutes":30,"seconds":0,"latitude":18.5204,"longitude":73.8567,"timezone":5.5,"config":{"observation_point":"topocentric","ayanamsha":"lahiri"}}'` | ✅ | Status: "ok", Generated complete 400x400 SVG horoscope chart with all planets positioned in houses. Birth details: Nov 23, 1990, 7:30:0 (5:30 EAST), 73°E 51', 18°N 31'. Ready for web display |
 | 14 | **Astrology - Provider Probe (Debug)** | `curl -X POST http://localhost:3000/api/astrology/probe -H "Content-Type: application/json" -d '{"payload":{"year":1990,"month":11,"date":23,"hours":7,"minutes":30,"seconds":0,"latitude":18.5204,"longitude":73.8567,"timezone":5.5,"settings":{"observation_point":"topocentric","ayanamsha":"lahiri"}}}'` | ✅ | Debug probe with proper authentication. Tests actual working endpoints: /planets/extended, /navamsa-chart-info, /d10-chart-info, /horoscope-chart-svg-code, /geo-details. Returns successful planetary data and chart information |
-| 15 | **Payments - Create Order** | `curl -X POST http://localhost:3000/api/payments/create-order -H "Content-Type: application/json" -d '{"phone":"+919876543210","planId":"plan_5"}'` | ⏳ | - |
-| 16 | **Payments - Verify Payment** | `curl -X POST http://localhost:3000/api/payments/verify -H "Content-Type: application/json" -d '{"razorpay_payment_id":"pay_test","razorpay_order_id":"order_test","razorpay_signature":"signature_test"}'` | ⏳ | - |
-| 17 | **Payments - Order Status** | `curl 'http://localhost:3000/api/payments/status?orderId=test-order-id'` | ⏳ | - |
-| 18 | **Payments - Test Webhook** | `curl -X POST http://localhost:3000/api/payments/webhook -H "Content-Type: application/json" -d '{"event":"payment.captured","orderId":"test-order","phone":"+919876543210"}'` | ⏳ | - |
 
 ### Status Legend
 - ⏳ **Pending** - Not tested yet
@@ -707,15 +663,10 @@ curl -X POST http://localhost:3000/api/payments/create-order -H "Content-Type: a
   - API Key: Configured ✓
   - Features: Planets, charts, divisional charts, SVG generation
 
-- **Payments**: Razorpay
-  - Environment: Development (keys need configuration)
-  - Features: Order creation, signature verification, webhooks
-
 ## References
 
 - [maps.co Geocoding API](https://geocode.maps.co/docs/endpoints/)
 - [Apiastro API Documentation](https://apiastro.com/)
-- [Razorpay Payment Gateway](https://razorpay.com/docs/)
 
 ## Support
 
@@ -736,9 +687,6 @@ curl -X POST http://localhost:3000/api/geocode -H "Content-Type: application/jso
 
 # Astrology test
 curl -X POST http://localhost:3000/api/astrology/geo-details -H "Content-Type: application/json" -d '{"location":"Mumbai"}'
-
-# Payment test
-curl -X POST http://localhost:3000/api/payments/create-order -H "Content-Type: application/json" -d '{"phone":"test","planId":"plan_5"}'
 
 # Run full integration test
 npm run test:integ

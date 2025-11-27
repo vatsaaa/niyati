@@ -117,4 +117,72 @@ function mapItemToSuggestion(item) {
   };
 }
 
-module.exports = { search, reverse, lookup, structuredSearch, callMapsCo };
+async function getCurrentLocation() {
+  const cacheKey = 'current-location';
+  const cached = cache.get(cacheKey);
+  if (cached) return cached;
+
+  try {
+    // Fetch location data from geolocation-db.com
+    const geoResp = await axios.get('https://geolocation-db.com/json/', {
+      headers: { 'User-Agent': process.env.GEOCODE_USER_AGENT || 'niyati-bff/1.0' },
+      timeout: 5000
+    });
+    
+    // Verify IP with ipify.org
+    const ipifyResp = await axios.get('https://api.ipify.org/?format=json', {
+      headers: { 'User-Agent': process.env.GEOCODE_USER_AGENT || 'niyati-bff/1.0' },
+      timeout: 5000
+    });
+    
+    const geoData = geoResp.data;
+    const ipifyData = ipifyResp.data;
+    
+    // Verify IP consistency
+    const ipMatch = geoData.IPv4 === ipifyData.ip;
+    
+    const result = {
+      status: 'ok',
+      source: 'geolocation-db.com',
+      ipVerification: {
+        primary: geoData.IPv4,
+        verification: ipifyData.ip,
+        match: ipMatch,
+        verifiedBy: 'api.ipify.org'
+      },
+      location: {
+        // Core location data
+        ip: geoData.IPv4,
+        country: geoData.country_name,
+        countryCode: geoData.country_code,
+        state: geoData.state,
+        city: geoData.city,
+        postal: geoData.postal,
+        latitude: parseFloat(geoData.latitude),
+        longitude: parseFloat(geoData.longitude),
+        timezone: geoData.timezone,
+        // Additional raw fields that might be useful
+        ...Object.fromEntries(
+          Object.entries(geoData).filter(([key, value]) => 
+            !['IPv4', 'country_name', 'country_code', 'state', 'city', 'postal', 'latitude', 'longitude', 'timezone'].includes(key) &&
+            value !== null && value !== undefined && value !== ''
+          )
+        )
+      }
+    };
+    
+    // Cache for 5 minutes (IP location doesn't change frequently)
+    cache.set(cacheKey, result, 300);
+    return result;
+    
+  } catch (err) {
+    console.error('current location error:', err.message);
+    return { 
+      status: 'error', 
+      reason: 'provider_error',
+      message: 'Failed to fetch current location from IP geolocation services'
+    };
+  }
+}
+
+module.exports = { search, reverse, lookup, structuredSearch, callMapsCo, getCurrentLocation };

@@ -91,4 +91,15 @@ router.get('/proxy/*', async (req, res) => {
   }
 });
 
+// GET /api/geocode/current-location - Get user's current location based on IP
+router.get('/current-location', async (req, res) => {
+  try {
+    const result = await geocodeService.getCurrentLocation();
+    return res.json(result);
+  } catch (err) {
+    console.error('current location error', err);
+    return res.status(500).json({ status: 'error', reason: 'server_error' });
+  }
+});
+
 module.exports = router;

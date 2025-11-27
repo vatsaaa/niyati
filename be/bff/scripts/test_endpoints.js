@@ -78,6 +78,18 @@ async function testGeocodeProxySearch() {
   }
 }
 
+async function testCurrentLocation() {
+  console.log('\n== Geocode: Current Location ==');
+  try {
+    const resp = await axios.get(`${base}/api/geocode/current-location`, { timeout: 10000 });
+    console.log('Status:', resp.status);
+    console.log('Body:', JSON.stringify(resp.data, null, 2));
+  } catch (err) {
+    console.error('Current location error:', err.message);
+    if (err.response) console.error('Response:', err.response.status, err.response.data);
+  }
+}
+
 async function testAstroProbe() {
   console.log('\n== Astrology: Probe ==');
   try {
@@ -146,6 +158,7 @@ async function run() {
   await testGeocodeLookup(searchResult);
   await testGeocodeStructured();
   await testGeocodeProxySearch();
+  await testCurrentLocation();
 
   await testAstroProbe();
   await testAstroCompute();
