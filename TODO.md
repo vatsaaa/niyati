@@ -400,3 +400,29 @@
 			3. Tests: simulate webhook events and ensure credits are granted and queued requests are flushed.
 
 		If you'd like, I can scaffold the Node/Express server with Razorpay sandbox wiring and a minimal client integration for the chat UI next.
+
+
+
+Replace the mocked astrology endpoint with a real provider adapter (if you have a provider/key)
+
+This is a local prototype: everything is in-memory. For production replace in-memory maps with a DB (Postgres/Mongo) and Redis for caching/atomic counters.
+
+Astrology is a mocked endpoint — I can add a provider adapter and caching when you pick a provider and provide API keys
+
+Wire the UI Checkout flow (client-side) to use these endpoints
+Add a small integration test and a client-side example wiring to the ui that uses /api/geocode to resolve placeOfBirth
+
+Add a small script to simulate webhooks and exercise the full flow locally
+
+Add Razorpay sandbox keys & webhook secret to be/bff/.env and test a full checkout flow.
+
+Wire the frontend to:
+Call /api/payments/create-order to get orderId and keyId.
+
+Open Razorpay Checkout (if providerOrderId / keyId returned).
+
+After checkout, call /api/payments/verify (best-effort) and poll /api/payments/status.
+
+Replace in-memory orders/credits with persistent DB or Redis for production-grade reliability.
+
+

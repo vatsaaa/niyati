@@ -1,0 +1,14 @@
+# Local env
+.env
+
+# Node
+node_modules/
+
+# Logs
+*.log
+
+# Build
+dist/
+
+# VSCode
+.vscode/
