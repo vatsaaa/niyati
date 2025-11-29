@@ -426,3 +426,5 @@ After checkout, call /api/payments/verify (best-effort) and poll /api/payments/s
 Replace in-memory orders/credits with persistent DB or Redis for production-grade reliability.
 
 
+TODO:
+When "Logout / Reset" button of app is clicked, should we also clear the localStorage keys?

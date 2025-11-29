@@ -3,6 +3,7 @@ import { Send, Sparkles, Moon, Star, Trash2, Phone, ChevronDown } from 'lucide-r
 
 // --- CONFIGURATION ---
 const N8N_WEBHOOK_URL = "https://nonexperientially-nonascetical-agnes.ngrok-free.dev/webhook/chat";
+const BFF_BASE_URL = window.location.hostname === 'localhost' ? 'http://localhost:3000' : '';
 
 // Default fallback countries (used until /countries.json is fetched)
 const DEFAULT_COUNTRIES = [
@@ -232,7 +233,7 @@ const NiyatiChat = () => {
   );
 
   // 3. LOGIN HANDLER
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
     const requiredLen = selectedCountry?.phoneLength || 10;
     if (!tempPhone.trim() || tempPhone.length !== requiredLen) {
@@ -252,10 +253,32 @@ const NiyatiChat = () => {
     try { localStorage.setItem('niyati_user_country_code', selectedCountry.code); } catch (e) {}
     try { localStorage.setItem('niyati_country_code', selectedCountry.code); } catch (e) {}
 
-    // Persist consent in canonical profile shape
+    // Get current location and persist along with consent
+    let currentLocationData = null;
+    try {
+      // Call the current location API
+      const locationResponse = await fetch(`${BFF_BASE_URL}/api/geocode/current-location`);
+      if (locationResponse.ok) {
+        const locationData = await locationResponse.json();
+        if (locationData.status === 'ok' && locationData.location) {
+          // Store only the location object as specified
+          currentLocationData = locationData.location;
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to fetch current location:', e);
+      // Continue with login even if location fetch fails
+    }
+
+    // Persist consent and current location in canonical profile shape
     try {
       const existing = JSON.parse(localStorage.getItem('niyati_user_profile') || '{}');
-      const updatedProfile = { ...existing, user_consentGiven: true, updatedAt: new Date().toISOString() };
+      const updatedProfile = { 
+        ...existing, 
+        user_consentGiven: true,
+        user_currentLocation: currentLocationData || existing.user_currentLocation || '',
+        updatedAt: new Date().toISOString() 
+      };
       localStorage.setItem('niyati_user_profile', JSON.stringify(updatedProfile));
       // also keep legacy shape for transition
       const legacy = {
@@ -267,7 +290,23 @@ const NiyatiChat = () => {
         consentGiven: updatedProfile.user_consentGiven
       };
       localStorage.setItem('niyati_profile', JSON.stringify(legacy));
-      setProfile(prev => ({ ...prev, user_consentGiven: true }));
+      setProfile(prev => ({ 
+        ...prev, 
+        user_consentGiven: true,
+        user_currentLocation: currentLocationData || prev.user_currentLocation 
+      }));
+      
+      // Check if profile is complete after consent and process astrology
+      const updatedProfileWithConsent = {
+        ...existing,
+        user_consentGiven: true,
+        user_currentLocation: currentLocationData || existing.user_currentLocation || ''
+      };
+      
+      if (isProfileComplete(updatedProfileWithConsent)) {
+        console.log('Profile complete after login, processing astrology...');
+        processCompleteProfile(updatedProfileWithConsent);
+      }
     } catch (e) {}
     setPhoneNumber(fullPhone);
     setIsLoggedIn(true);
@@ -336,6 +375,23 @@ const NiyatiChat = () => {
           ...(extracted.timeOfBirth ? { timeOfBirth: false } : {})
         }
       }));
+      
+      // Check if profile is now complete and process astrology if so
+      const updatedProfile = {
+        user_name: extracted.name || profile.user_name,
+        user_dob: extracted.dob ? (normalizeDateString(extracted.dob) || extracted.dob) : profile.user_dob,
+        user_placeOfBirth: extracted.placeOfBirth || profile.user_placeOfBirth,
+        user_timeOfBirth: extracted.timeOfBirth ? (normalizeTimeString(extracted.timeOfBirth) || extracted.timeOfBirth) : profile.user_timeOfBirth,
+        user_currentLocation: profile.user_currentLocation,
+        user_consentGiven: profile.user_consentGiven
+      };
+      
+      // Process astrology in background if profile is complete
+      if (isProfileComplete(updatedProfile)) {
+        console.log('Profile is complete, processing astrology...');
+        processCompleteProfile(updatedProfile);
+      }
+      
       // No chat confirmation message — the UI header will surface extracted details for manual review.
     }
 
@@ -531,6 +587,243 @@ const NiyatiChat = () => {
     if (!y || !m || !d) return null;
     const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     return `${String(d).padStart(2, '0')}-${months[m-1]}-${y}`;
+  }
+
+  // Format current location object for display
+  function formatCurrentLocationForDisplay(currentLocation) {
+    if (!currentLocation) return null;
+    if (typeof currentLocation === 'string') return currentLocation;
+    if (typeof currentLocation === 'object') {
+      const parts = [];
+      if (currentLocation.city) parts.push(currentLocation.city);
+      if (currentLocation.state) parts.push(currentLocation.state);
+      if (currentLocation.country) parts.push(currentLocation.country);
+      return parts.join(', ') || null;
+    }
+    return null;
+  }
+
+  // Check if user profile is complete for astrology calculations
+  function isProfileComplete(profile) {
+    return !!(profile.user_name && 
+             profile.user_dob && 
+             profile.user_placeOfBirth && 
+             profile.user_timeOfBirth && 
+             profile.user_consentGiven);
+  }
+
+  // Determine the appropriate geocoding API based on location format
+  function determineGeocodingEndpoint(location) {
+    if (!location) return null;
+    
+    // Clean the location string and split by common separators
+    const cleaned = location.trim();
+    const parts = cleaned.split(/[,;|]/g).map(p => p.trim()).filter(p => p.length > 0);
+    
+    // Check if it looks like structured address (street, city, state, country)
+    const hasStreetIndicators = /\b(\d+\s+\w+|road|street|avenue|lane|drive|blvd|ave|rd|st|ln|dr)\b/i.test(cleaned);
+    
+    if (hasStreetIndicators || parts.length >= 4) {
+      // Use structured API
+      return {
+        endpoint: '/api/geocode/structured',
+        payload: {
+          street: parts[0] || '',
+          city: parts[1] || '',
+          state: parts[2] || '',
+          country: parts[3] || ''
+        }
+      };
+    } else if (parts.length === 3) {
+      // Format: "City, State, Country" - use search API
+      return {
+        endpoint: '/api/geocode/search',
+        payload: { q: cleaned, limit: 5 }
+      };
+    } else if (parts.length === 2) {
+      // Format: "City, Country" - use basic geocode API
+      return {
+        endpoint: '/api/geocode',
+        payload: { q: cleaned, limit: 5 }
+      };
+    } else {
+      // Single location - use basic geocode API
+      return {
+        endpoint: '/api/geocode',
+        payload: { q: cleaned, limit: 5 }
+      };
+    }
+  }
+
+  // Call geocoding API and get timezone
+  async function resolveLocationAndTimezone(placeOfBirth) {
+    try {
+      // Determine which geocoding API to use
+      const geocodingConfig = determineGeocodingEndpoint(placeOfBirth);
+      if (!geocodingConfig) {
+        throw new Error('Invalid location format');
+      }
+
+      // Call geocoding API
+      const geocodeResponse = await fetch(`${BFF_BASE_URL}${geocodingConfig.endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(geocodingConfig.payload)
+      });
+
+      if (!geocodeResponse.ok) {
+        throw new Error(`Geocoding failed: ${geocodeResponse.status}`);
+      }
+
+      const geocodeData = await geocodeResponse.json();
+      
+      // Extract location data from geocoding response
+      let locationData = null;
+      if (geocodeData.status === 'ok' && geocodeData.place) {
+        locationData = geocodeData.place;
+      } else if (geocodeData.status === 'ambiguous' && geocodeData.suggestions && geocodeData.suggestions.length > 0) {
+        // Use the first suggestion
+        locationData = geocodeData.suggestions[0];
+      }
+
+      if (!locationData) {
+        throw new Error('No location data found');
+      }
+
+      // Get timezone using astrology geo-details API
+      const timezonePayload = {
+        lat: locationData.lat,
+        lon: locationData.lon
+      };
+
+      const timezoneResponse = await fetch(`${BFF_BASE_URL}/api/astrology/geo-details`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(timezonePayload)
+      });
+
+      if (!timezoneResponse.ok) {
+        throw new Error(`Timezone lookup failed: ${timezoneResponse.status}`);
+      }
+
+      const timezoneData = await timezoneResponse.json();
+      let timezone = 0; // Default to UTC
+      
+      if (timezoneData.status === 'ok' && timezoneData.data) {
+        // Extract timezone from the response
+        timezone = timezoneData.data.timezone || timezoneData.data.utc_offset || 0;
+      }
+
+      return {
+        location: locationData,
+        timezone: timezone
+      };
+    } catch (error) {
+      console.error('Error resolving location and timezone:', error);
+      throw error;
+    }
+  }
+
+  // Call astrology APIs (planets and horoscope SVG)
+  async function calculateAstrology(profile, locationData, timezone) {
+    try {
+      // Parse birth date and time
+      const [year, month, date] = profile.user_dob.split('-').map(n => parseInt(n, 10));
+      const timeParts = (profile.user_timeOfBirth || '00:00:00').split(':').map(n => parseInt(n, 10));
+      const [hours, minutes, seconds] = [timeParts[0] || 0, timeParts[1] || 0, timeParts[2] || 0];
+
+      // Prepare astrology payload
+      const astrologyPayload = {
+        year,
+        month,
+        date,
+        hours,
+        minutes,
+        seconds,
+        latitude: locationData.lat,
+        longitude: locationData.lon,
+        timezone,
+        settings: {
+          observation_point: 'topocentric',
+          ayanamsha: 'lahiri',
+          language: 'en'
+        }
+      };
+
+      // Call both astrology APIs in parallel
+      const [planetsResponse, horoscopeSvgResponse] = await Promise.all([
+        fetch(`${BFF_BASE_URL}/api/astrology/planets`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(astrologyPayload)
+        }),
+        fetch(`${BFF_BASE_URL}/api/astrology/horoscope-svg`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...astrologyPayload,
+            config: astrologyPayload.settings // Some endpoints expect 'config' instead of 'settings'
+          })
+        })
+      ]);
+
+      const results = {};
+
+      if (planetsResponse.ok) {
+        results.planets = await planetsResponse.json();
+      } else {
+        console.error('Planets API failed:', planetsResponse.status);
+      }
+
+      if (horoscopeSvgResponse.ok) {
+        results.horoscopeSvg = await horoscopeSvgResponse.json();
+      } else {
+        console.error('Horoscope SVG API failed:', horoscopeSvgResponse.status);
+      }
+
+      return results;
+    } catch (error) {
+      console.error('Error calculating astrology:', error);
+      throw error;
+    }
+  }
+
+  // Main function to process complete profile and generate astrology
+  async function processCompleteProfile(profile) {
+    try {
+      console.log('Processing complete profile for astrology calculations...');
+      
+      // Step 1: Resolve location and get timezone
+      const { location, timezone } = await resolveLocationAndTimezone(profile.user_placeOfBirth);
+      
+      console.log('Location resolved:', location);
+      console.log('Timezone:', timezone);
+      
+      // Step 2: Calculate astrology
+      const astrologyResults = await calculateAstrology(profile, location, timezone);
+      
+      console.log('Astrology calculations complete:', astrologyResults);
+      
+      // Store the results in localStorage for later use
+      const cacheKey = `astrology_${phoneNumber}_${Date.now()}`;
+      try {
+        localStorage.setItem(cacheKey, JSON.stringify({
+          profile,
+          location,
+          timezone,
+          results: astrologyResults,
+          calculatedAt: new Date().toISOString()
+        }));
+        console.log('Astrology results cached:', cacheKey);
+      } catch (e) {
+        console.warn('Failed to cache astrology results:', e);
+      }
+      
+      return astrologyResults;
+    } catch (error) {
+      console.error('Failed to process complete profile:', error);
+      // Don't throw - let the app continue functioning
+    }
   }
 
   return (
