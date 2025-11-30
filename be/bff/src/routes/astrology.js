@@ -53,6 +53,8 @@ router.post('/planets', async (req, res) => {
   const payload = body.payload || body;
   if (!payload) return res.status(400).json({ status: 'error', reason: 'missing_payload' });
   try {
+    // Propagate incoming request id into service calls for downstream correlation
+    try { payload._reqId = req._niyati_reqId || reqIdFromReq(req) || req.headers['x-request-id']; } catch (e) {}
     const data = await astrologyService.planets(payload);
     return res.json({ status: 'ok', source: process.env.ASTRO_API_URL || 'https://json.freeastrologyapi.com', data });
   } catch (err) {
@@ -100,6 +102,13 @@ router.post('/horoscope-svg', async (req, res) => {
   const payload = body.payload || body;
   if (!payload) return res.status(400).json({ status: 'error', reason: 'missing_payload' });
   try {
+    const incomingReqId = req._niyati_reqId || reqIdFromReq(req) || (req.headers && req.headers['x-request-id']);
+    logger.info(sanitize({ msg: 'astrology.route.horoscope_incoming', reqId: incomingReqId, path: req.path, body: req.body }));
+  } catch (e) {
+    // best-effort logging, don't fail the request
+  }
+  try {
+    try { payload._reqId = req._niyati_reqId || reqIdFromReq(req) || req.headers['x-request-id']; } catch (e) {}
     const result = await astrologyService.horoscopeSvg(payload);
     return res.json(result);
   } catch (err) {

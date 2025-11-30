@@ -515,8 +515,16 @@ const NiyatiChat = () => {
     else if (dobMatchTextSpace) result.dob = dobMatchTextSpace[1];
 
     // Place of birth patterns
-    const placeMatch = text.match(/(?:born in|from|i was born in)\s+([A-Za-z0-9 ,.\-']{3,100})/i);
-    if (placeMatch) result.placeOfBirth = placeMatch[1].trim();
+    // Match common variants: "born in", "born at", "from", and forms like
+    // "place of my birth is", "place of birth is", "my place of birth is",
+    // as well as "birth place", "birthplace", and variants that include 'was'/'is'.
+    const placeMatch = text.match(/(?:born in|born at|from|i was born in|place of my birth(?: is| was)?|place of birth(?: is| was|[:\s]*)|my place of birth(?: is| was)?|birthplace(?: is| was|[:\s]*)|birth\s*place(?: is| was|[:\s]*)|my birth place(?: is| was|[:\s]*))\s*([A-Za-z0-9 ,.\-']{2,100})/i);
+    if (placeMatch) {
+      // Trim and defensively strip common leading verbs/articles that may be captured
+      let p = placeMatch[1].trim();
+      p = p.replace(/^(?:was|is|my|the|born in|born at)\b[:\s-]*/i, '').trim();
+      result.placeOfBirth = p;
+    }
 
     // Time of birth patterns (e.g., 7:30 PM, 19:30, 7 pm, 11:00:04 am)
     const timeMatchSecAmPm = text.match(/(\d{1,2}:\d{2}:\d{2}\s*(?:am|pm))/i);
@@ -709,7 +717,17 @@ const NiyatiChat = () => {
       if (asciiCandidate) cityToUse = asciiCandidate;
     }
 
-    const parts = [cityToUse, state, country].map(p => (p || '').trim()).filter(p => p.length > 0);
+    // If state or country are missing, try to extract them from display_name
+    let stateToUse = state || '';
+    let countryToUse = country || '';
+    if ((!stateToUse || !countryToUse) && location.display_name && typeof location.display_name === 'string') {
+      const partsFromDisplay = location.display_name.split(',').map(s => s.trim()).filter(Boolean);
+      if (!cityToUse && partsFromDisplay[0]) cityToUse = partsFromDisplay[0];
+      if (!stateToUse && partsFromDisplay[1]) stateToUse = partsFromDisplay[1];
+      if (!countryToUse && partsFromDisplay.length > 0) countryToUse = partsFromDisplay[partsFromDisplay.length - 1];
+    }
+
+    const parts = [cityToUse, stateToUse, countryToUse].map(p => (p || '').trim()).filter(p => p.length > 0);
     if (parts.length > 0) return parts.join(', ');
     // final fallbacks: try to use display_name or formatted if available
     return location.display_name || location.formatted || '';
@@ -783,11 +801,40 @@ const NiyatiChat = () => {
         body: JSON.stringify(geocodingConfig.payload)
       });
 
+      // Capture response headers and body for debugging/correlation
+      const geoRespReqId = geocodeResponse && geocodeResponse.headers && geocodeResponse.headers.get
+        ? geocodeResponse.headers.get('x-request-id')
+        : null;
+      const geoRespContentType = geocodeResponse && geocodeResponse.headers && geocodeResponse.headers.get
+        ? geocodeResponse.headers.get('content-type') || ''
+        : '';
+
       if (!geocodeResponse.ok) {
+        const text = await geocodeResponse.text().catch(() => '');
+        console.error('Geocoding request failed', { status: geocodeResponse.status, reqId: geoRespReqId, bodyPreview: text.slice ? text.slice(0, 400) : text });
+        try { sendClientLog('geocode.resolve_failed', { status: geocodeResponse.status, reqId: geoRespReqId }); } catch (e) {}
         throw new Error(`Geocoding failed: ${geocodeResponse.status}`);
       }
 
-      const geocodeData = await geocodeResponse.json();
+      // Try to parse JSON but fall back to text if provider returned non-JSON
+      let geocodeData = null;
+      try {
+        if (geoRespContentType && geoRespContentType.includes('application/json')) {
+          geocodeData = await geocodeResponse.json();
+        } else {
+          const txt = await geocodeResponse.text();
+          try { geocodeData = JSON.parse(txt); } catch (e) { geocodeData = txt; }
+        }
+      } catch (e) {
+        console.error('Failed to parse geocode response body', e);
+        try { sendClientLog('geocode.resolve_parse_error', { message: e && e.message, reqId: geoRespReqId }); } catch (ee) {}
+        throw e;
+      }
+
+      // Log a short preview for debugging and correlation with BFF logs
+      const geoPreview = typeof geocodeData === 'string' ? geocodeData.slice(0, 400) : (geocodeData ? JSON.stringify(geocodeData).slice(0, 400) : '');
+      console.log('resolveLocationAndTimezone: geocode response', { status: geocodeResponse.status, reqId: geoRespReqId, contentType: geoRespContentType, bodyPreview: geoPreview });
+      try { sendClientLog('geocode.resolve_response', { reqId: geoRespReqId, contentType: geoRespContentType }); } catch (e) {}
       
       // Extract location data from geocoding response
       let locationData = null;
@@ -799,6 +846,8 @@ const NiyatiChat = () => {
       }
 
       if (!locationData) {
+        console.error('No location data found after geocode. geocodeData:', geocodeData);
+        try { sendClientLog('geocode.no_location_found', { geocodeData: (typeof geocodeData === 'string' ? geocodeData.slice(0,400) : (geocodeData ? JSON.stringify(geocodeData).slice(0,400) : null)), reqId: geoRespReqId }); } catch (e) {}
         throw new Error('No location data found');
       }
 
@@ -946,13 +995,39 @@ const NiyatiChat = () => {
             })
           });
 
+          // Capture response headers for correlation
+          const respReqId = horoscopeResponse && horoscopeResponse.headers && horoscopeResponse.headers.get
+            ? horoscopeResponse.headers.get('x-request-id')
+            : null;
+          const respContentType = horoscopeResponse && horoscopeResponse.headers && horoscopeResponse.headers.get
+            ? horoscopeResponse.headers.get('content-type') || ''
+            : '';
+
+          let horoscopeBody = null;
+          try {
+            if (respContentType && respContentType.includes('application/json')) {
+              horoscopeBody = await horoscopeResponse.json();
+            } else {
+              // Try to read as text (covers SVG, plain text, or JSON returned as text)
+              const txt = await horoscopeResponse.text();
+              try { horoscopeBody = JSON.parse(txt); } catch (e) { horoscopeBody = txt; }
+            }
+          } catch (e) {
+            console.error('calculateAstrology: failed to read horoscope response body', e);
+            try { sendClientLog('calculateAstrology.horoscope.read_error', { message: e && e.message }); } catch (ee) {}
+          }
+
+          // Small preview for logs
+          const preview = typeof horoscopeBody === 'string' ? horoscopeBody.slice(0, 400) : (horoscopeBody ? JSON.stringify(horoscopeBody).slice(0, 400) : '');
+          console.log('calculateAstrology: /horoscope-svg response', { status: horoscopeResponse.status, reqId: respReqId, contentType: respContentType, bodyPreview: preview });
+
           if (horoscopeResponse.ok) {
-            results.horoscopeSvg = await horoscopeResponse.json();
+            results.horoscopeSvg = horoscopeBody;
             console.log('calculateAstrology: /horoscope-svg success');
-            sendClientLog('calculateAstrology.horoscope.success');
+            sendClientLog('calculateAstrology.horoscope.success', { reqId: respReqId, contentType: respContentType });
           } else {
             console.error('Horoscope SVG API failed:', horoscopeResponse.status);
-            sendClientLog('calculateAstrology.horoscope.failed', { status: horoscopeResponse.status });
+            sendClientLog('calculateAstrology.horoscope.failed', { status: horoscopeResponse.status, reqId: respReqId });
           }
         } else {
           console.error('Planets API failed:', planetsResponse.status);
