@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const astrologyService = require('../services/astrologyService');
 const axios = require('axios');
+const { logger, sanitize, reqIdFromReq } = require('../lib/logger');
 
 // POST /api/astrology/compute
 // Accepts { profile: { name, dob, timeOfBirth, placeOfBirth: { city, countryCode, lat, lng } } }
@@ -16,7 +17,7 @@ router.post('/compute', async (req, res) => {
     const result = await astrologyService.compute(profile);
     return res.json(result);
   } catch (err) {
-    console.error('Astrology compute error:', err && err.message);
+    logger.error(sanitize({ msg: 'Astrology compute error', error: err && err.message }));
     return res.status(500).json({ status: 'error', reason: 'provider_error' });
   }
 });
@@ -40,7 +41,7 @@ router.post('/geo-details', async (req, res) => {
     const result = await astrologyService.geoDetails(query);
     return res.json(result);
   } catch (err) {
-    console.error('Astrology geo-details error:', err && err.message);
+    logger.error(sanitize({ msg: 'Astrology geo-details error', error: err && err.message }));
     return res.status(500).json({ status: 'error', reason: 'provider_error' });
   }
 });
@@ -55,7 +56,7 @@ router.post('/planets', async (req, res) => {
     const data = await astrologyService.planets(payload);
     return res.json({ status: 'ok', source: process.env.ASTRO_API_URL || 'https://json.freeastrologyapi.com', data });
   } catch (err) {
-    console.error('Astrology planets error:', err && (err.message || err.original));
+    logger.error(sanitize({ msg: 'Astrology planets error', error: err && (err.message || err.original) }));
     return res.status(500).json({ status: 'error', reason: 'provider_error' });
   }
 });
@@ -70,7 +71,7 @@ router.post('/navamsa', async (req, res) => {
     const result = await astrologyService.navamsa(payload);
     return res.json(result);
   } catch (err) {
-    console.error('Astrology navamsa error:', err && (err.message || err.original));
+    logger.error(sanitize({ msg: 'Astrology navamsa error', error: err && (err.message || err.original) }));
     return res.status(500).json({ status: 'error', reason: 'provider_error' });
   }
 });
@@ -86,7 +87,7 @@ router.post('/divisional', async (req, res) => {
     const result = await astrologyService.divisional(n, payload);
     return res.json(result);
   } catch (err) {
-    console.error('Astrology divisional error:', err && (err.message || err.original));
+    logger.error(sanitize({ msg: 'Astrology divisional error', error: err && (err.message || err.original) }));
     if (err && err.code === 'invalid_divisional') return res.status(400).json({ status: 'error', reason: 'invalid_divisional' });
     return res.status(500).json({ status: 'error', reason: 'provider_error' });
   }
@@ -102,7 +103,7 @@ router.post('/horoscope-svg', async (req, res) => {
     const result = await astrologyService.horoscopeSvg(payload);
     return res.json(result);
   } catch (err) {
-    console.error('Astrology horoscope-svg error:', err && (err.message || err.original));
+    logger.error(sanitize({ msg: 'Astrology horoscope-svg error', error: err && (err.message || err.original) }));
     return res.status(500).json({ status: 'error', reason: 'provider_error' });
   }
 });

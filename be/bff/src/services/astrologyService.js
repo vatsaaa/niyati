@@ -9,6 +9,97 @@ function makeCacheKey(profile) {
   return `astro:${hash}`;
 }
 
+const { logger, sanitize } = require('../lib/logger');
+function _sanitizeForLogs(obj) {
+  try {
+    const clone = JSON.parse(JSON.stringify(obj));
+    // broaden sanitization to many common sensitive keys and patterns
+    const SENSITIVE_RE = /(?:phone|phonenumber|email|ssn|passport|aadhar|nationalid|api[_-]?key|apikey|token|access[_-]?token|authorization|auth|password|card|cvv|creditcard|bank[_-]?account|account[_-]?number|routing[_-]?number|id(_)?number|\baddress\b|street|zip|zipcode)/i;
+    // value-level patterns: long numeric strings (cards/account), JWT-like, long tokens, base64-ish
+    const VALUE_SENSITIVE_RE = /^(?:\d{12,19}|[A-Za-z0-9-_]{30,}|[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+)$/;
+    const BASE64_RE = /^[A-Za-z0-9+/=]{40,}$/;
+
+    const redact = (o, depth = 0) => {
+      if (!o || typeof o !== 'object' || depth > 12) return;
+      if (Array.isArray(o)) {
+        for (let i = 0; i < o.length; i++) {
+          const v = o[i];
+          if (typeof v === 'object') redact(v, depth + 1);
+          else if (typeof v === 'string') {
+            if (v.includes('@') || /^\d{8,}$/.test(v) || VALUE_SENSITIVE_RE.test(v) || BASE64_RE.test(v)) o[i] = '[REDACTED]';
+          }
+        }
+        return;
+      }
+
+      for (const k of Object.keys(o)) {
+        try {
+          const lk = k.toString().toLowerCase();
+          const v = o[k];
+          // redact by key name first
+          if (SENSITIVE_RE.test(lk)) {
+            o[k] = '[REDACTED]';
+            continue;
+          }
+
+          // specific: if this is a headers object, redact common auth headers
+          if (lk === 'headers' && v && typeof v === 'object') {
+            if (v.authorization) v.authorization = '[REDACTED]';
+            if (v['x-api-key']) v['x-api-key'] = '[REDACTED]';
+            if (v['api_key']) v['api_key'] = '[REDACTED]';
+            if (v['authorization']) v['authorization'] = '[REDACTED]';
+            // continue to recurse for other header keys
+            redact(v, depth + 1);
+            continue;
+          }
+
+          if (typeof v === 'string') {
+            // redact email-like values
+            if (v.includes('@')) { o[k] = '[REDACTED]'; continue; }
+            // long digit-only strings (cards, accounts)
+            if (/^\d{8,}$/.test(v)) { o[k] = '[REDACTED]'; continue; }
+            // JWTs or long tokens
+            if (VALUE_SENSITIVE_RE.test(v) || BASE64_RE.test(v)) { o[k] = '[REDACTED]'; continue; }
+            // mask Authorization-like header values if present as string
+            if (lk === 'authorization' || lk === 'auth' || lk === 'token' || lk.includes('api_key') || lk.includes('apikey')) { o[k] = '[REDACTED]'; continue; }
+          } else if (typeof v === 'object') {
+            redact(v, depth + 1);
+          }
+        } catch (e) {
+          // ignore errors while redacting specific keys
+        }
+      }
+    };
+
+    redact(clone);
+    return clone;
+  } catch (e) {
+    return obj;
+  }
+}
+
+function genReqId() {
+  try {
+    if (crypto && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  } catch (e) {
+    // ignore
+  }
+  // fallback
+  return crypto.randomBytes(16).toString('hex');
+}
+function logDebug(tag, payload) {
+  try { logger.debug(sanitize({ tag, ...payload })); } catch (e) { /* best effort */ }
+}
+function logInfo(tag, payload) {
+  try { logger.info(sanitize({ tag, ...payload })); } catch (e) { /* best effort */ }
+}
+function logWarn(tag, payload) {
+  try { logger.warn(sanitize({ tag, ...payload })); } catch (e) { /* best effort */ }
+}
+function logError(tag, payload) {
+  try { logger.error(sanitize({ tag, ...payload })); } catch (e) { /* best effort */ }
+}
+
 async function callProvider(profile) {
   const configured = process.env.ASTRO_API_URL || 'https://json.freeastrologyapi.com';
   const key = process.env.ASTRO_API_KEY;
@@ -153,9 +244,9 @@ async function compute(profile) {
   } catch (err) {
     // Detailed logging to help diagnose provider errors (do not expose keys)
     if (err && err.response) {
-      console.warn('Astrology provider call failed:', err.response.status, err.response.data);
+      logger.warn(sanitize({ msg: 'Astrology provider call failed', status: err.response.status, data: err.response.data }));
     } else {
-      console.warn('Astrology provider call failed:', err && err.message);
+      logger.warn(sanitize({ msg: 'Astrology provider call failed', message: err && err.message }));
     }
     // Do NOT silently return a mock when the provider is configured and fails.
     // Throw so the route can return a 500 and surface the provider failure during debugging.
@@ -219,9 +310,9 @@ async function geoDetails(query) {
       lastErr = err;
       // continue trying others
       if (err && err.response) {
-        console.warn('geoDetails candidate failed', url, err.response.status, err.response.data);
+        logger.warn(sanitize({ msg: 'geoDetails candidate failed', url, status: err.response.status, data: err.response.data }));
       } else {
-        console.warn('geoDetails request failed', url, err && err.message);
+        logger.warn(sanitize({ msg: 'geoDetails request failed', url, message: err && err.message }));
       }
     }
   }
@@ -233,6 +324,8 @@ async function geoDetails(query) {
 module.exports = { compute, _cache: cache, geoDetails };
 
 async function planets(payloadOrProfile) {
+  // generate or accept a request-level correlation id to include in logs
+  const _reqId = (payloadOrProfile && payloadOrProfile._reqId) || genReqId();
   const configured = process.env.ASTRO_API_URL || 'https://json.freeastrologyapi.com';
   const key = process.env.ASTRO_API_KEY;
   const base = configured.replace(/\/$/, '');
@@ -303,20 +396,88 @@ async function planets(payloadOrProfile) {
 
   const variants = [payload];
   if (simplePayload) variants.push(simplePayload);
+  // Simple in-memory caching to reduce repeated provider calls for identical inputs
+  try {
+    const cacheKeyPlanets = makeCacheKey(payload || payloadOrProfile || {});
+    const cachedPlanets = cache.get(cacheKeyPlanets);
+    if (cachedPlanets) {
+      logDebug('planets:cache_hit', { reqId: _reqId });
+      return cachedPlanets;
+    }
+  } catch (e) {
+    // ignore cache failures
+  }
+
+  // Retry/backoff configuration
+  const MAX_RETRIES = parseInt(process.env.ASTRO_RETRY_MAX || '2', 10); // number of retry attempts on 429/5xx
+  const RETRY_BASE_MS = parseInt(process.env.ASTRO_RETRY_BASE_MS || '500', 10);
+  const jitter = (ms) => Math.floor(ms * (0.5 + Math.random() * 0.5));
+  const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
   for (const p of candidates) {
     const url = base + (p.startsWith('/') ? p : `/${p}`);
     for (const v of variants) {
-      try {
-        console.debug('planets: trying', url, 'payload-shape', v && v.name ? 'simple' : 'numeric');
-        const resp = await axios.post(url, v, { headers, timeout: 12_000, validateStatus: null });
-        if (resp.status >= 200 && resp.status < 300) return resp.data;
-        lastErr = resp;
-        console.warn('planets candidate non-2xx', url, resp.status, { payload: v, response: resp.data });
-      } catch (err) {
-        lastErr = err;
-        if (err && err.response) console.warn('planets request failed', url, { payload: v, status: err.response.status, body: err.response.data });
-        else console.warn('planets request failed', url, { payload: v, message: err && err.message });
+      let attempt = 0;
+      while (attempt <= MAX_RETRIES) {
+        try {
+          logDebug('planets:trying', { reqId: _reqId, url, payloadShape: v && v.name ? 'simple' : 'numeric', payload: v, attempt });
+          const resp = await axios.post(url, v, { headers, timeout: 12_000, validateStatus: null });
+
+          // success
+          if (resp.status >= 200 && resp.status < 300) {
+            logDebug('planets:response', { reqId: _reqId, url, status: resp.status, data: resp.data });
+            try { cache.set(makeCacheKey(payload || payloadOrProfile || {}), resp.data, 60 * 60); } catch (e) { /* ignore cache errors */ }
+            return resp.data;
+          }
+
+          // auth errors should be surfaced immediately
+          if (resp.status === 401 || resp.status === 403) {
+            lastErr = resp;
+            logError('planets:auth_error', { reqId: _reqId, url, status: resp.status, payload: v, response: resp.data });
+            // no retry on auth failure
+            throw new Error('provider_auth_error');
+          }
+
+          // rate limited or server errors -> retry with backoff
+          if (resp.status === 429 || (resp.status >= 500 && resp.status < 600)) {
+            lastErr = resp;
+            const ra = resp.headers && (resp.headers['retry-after'] || resp.headers['Retry-After']);
+            let waitMs = RETRY_BASE_MS * Math.pow(2, attempt);
+            if (ra) {
+              const parsed = parseInt(ra, 10);
+              if (!Number.isNaN(parsed)) waitMs = Math.max(waitMs, parsed * 1000);
+            }
+            waitMs = jitter(waitMs);
+            logWarn('planets:retry_backoff', { reqId: _reqId, url, status: resp.status, attempt, waitMs });
+            await sleep(waitMs);
+            attempt += 1;
+            continue; // retry
+          }
+
+          // other non-2xx -> log and break to try next variant/endpoint
+          lastErr = resp;
+          logError('planets:candidate_non_2xx', { reqId: _reqId, url, status: resp.status, payload: v, response: resp.data });
+          break;
+        } catch (err) {
+          // network or thrown errors
+          lastErr = err;
+          // if we threw a provider_auth_error above, bubble up
+          if (err && err.message === 'provider_auth_error') throw err;
+
+          const status = err && err.response && err.response.status;
+          if (status === 429 || (status >= 500 && status < 600)) {
+            // retry
+            const waitMs = jitter(RETRY_BASE_MS * Math.pow(2, attempt));
+            logWarn('planets:retry_on_error', { reqId: _reqId, url, status, attempt, waitMs, message: err && err.message });
+            await sleep(waitMs);
+            attempt += 1;
+            continue;
+          }
+
+          // not retryable
+          logError('planets:request_failed', { reqId: _reqId, url, payload: v, message: err && err.message, status });
+          break;
+        }
       }
     }
   }
@@ -337,6 +498,13 @@ async function navamsa(payloadOrProfile) {
   const headers = { 'Content-Type': 'application/json' };
   if (key) headers['x-api-key'] = key;
   if (process.env.ASTRO_API_TOKEN) headers['Authorization'] = `Bearer ${process.env.ASTRO_API_TOKEN}`;
+
+  // Some provider gateways expect different header names for API keys.
+  // Send common variants so the gateway accepts one of them.
+  if (key) {
+    headers['api_key'] = key;
+    headers['X-Api-Key'] = key;
+  }
 
   // build numeric payload if a profile-like shape provided
   let payload = payloadOrProfile || {};
@@ -382,20 +550,20 @@ async function navamsa(payloadOrProfile) {
           const r2 = await axios.post(retryUrl, payload, { headers, timeout: 12000, validateStatus: null });
           if (r2.status >= 200 && r2.status < 300) return { status: 'ok', source: retryUrl, data: r2.data };
           lastErr = r2;
-          console.warn('navamsa retry non-2xx', retryUrl, r2.status, r2.data);
+          logger.warn(sanitize({ msg: 'navamsa retry non-2xx', retryUrl, status: r2.status, data: r2.data }));
         } catch (err2) {
           lastErr = err2;
-          if (err2 && err2.response) console.warn('navamsa retry failed', url, err2.response.status, err2.response.data);
-          else console.warn('navamsa retry failed', url, err2 && err2.message);
+          if (err2 && err2.response) logger.warn(sanitize({ msg: 'navamsa retry failed', url, status: err2.response.status, data: err2.response.data }));
+          else logger.warn(sanitize({ msg: 'navamsa retry failed', url, message: err2 && err2.message }));
         }
       } else {
         lastErr = resp;
-        console.warn('navamsa candidate non-2xx', url, resp.status, resp.data);
+        logger.warn(sanitize({ msg: 'navamsa candidate non-2xx', url, status: resp.status, data: resp.data }));
       }
     } catch (err) {
       lastErr = err;
-      if (err && err.response) console.warn('navamsa request failed', url, err.response.status, err.response.data);
-      else console.warn('navamsa request failed', url, err && err.message);
+      if (err && err.response) logger.warn(sanitize({ msg: 'navamsa request failed', url, status: err.response.status, data: err.response.data }));
+      else logger.warn(sanitize({ msg: 'navamsa request failed', url, message: err && err.message }));
     }
   }
   const e = new Error('provider_error');
@@ -471,20 +639,20 @@ async function divisional(n, payloadOrProfile) {
             const r2 = await axios.post(retryUrl, payload, { headers, timeout: 12000, validateStatus: null });
             if (r2.status >= 200 && r2.status < 300) return { status: 'ok', source: retryUrl, data: r2.data };
             lastErr = r2;
-            console.warn('divisional retry non-2xx', retryUrl, r2.status, r2.data);
+              logger.warn(sanitize({ msg: 'divisional retry non-2xx', retryUrl, status: r2.status, data: r2.data }));
           } catch (err2) {
             lastErr = err2;
-            if (err2 && err2.response) console.warn('divisional retry failed', url, err2.response.status, err2.response.data);
-            else console.warn('divisional retry failed', url, err2 && err2.message);
+              if (err2 && err2.response) logger.warn(sanitize({ msg: 'divisional retry failed', url, status: err2.response.status, data: err2.response.data }));
+              else logger.warn(sanitize({ msg: 'divisional retry failed', url, message: err2 && err2.message }));
           }
         } else {
           lastErr = resp;
-          console.warn('divisional candidate non-2xx', url, resp.status, resp.data);
+            logger.warn(sanitize({ msg: 'divisional candidate non-2xx', url, status: resp.status, data: resp.data }));
         }
       } catch (err) {
         lastErr = err;
-        if (err && err.response) console.warn('divisional request failed', url, err.response.status, err.response.data);
-        else console.warn('divisional request failed', url, err && err.message);
+          if (err && err.response) logger.warn(sanitize({ msg: 'divisional request failed', url, status: err.response.status, data: err.response.data }));
+          else logger.warn(sanitize({ msg: 'divisional request failed', url, message: err && err.message }));
       }
     }
   }
@@ -506,7 +674,12 @@ async function horoscopeSvg(payloadOrProfile) {
   let payload = payloadOrProfile || {};
   if (payload && payload.profile) payload = payload.profile;
 
-  const candidates = ['/horoscope-chart-svg-code', '/v1/horoscope-chart-svg-code', '/horoscope-chart-svg', '/v1/horoscope-chart-svg'];
+  // Default candidate paths. For FreeAstrology use the non-/v1 paths first and avoid
+  // aggressive auth fallbacks (the provider accepts `x-api-key` on the base path).
+  const isFreeAstro = base.includes('freeastrologyapi.com');
+  const candidates = isFreeAstro
+    ? ['/horoscope-chart-svg-code', '/horoscope-chart-svg']
+    : ['/horoscope-chart-svg-code', '/v1/horoscope-chart-svg-code', '/horoscope-chart-svg', '/v1/horoscope-chart-svg'];
   let lastErr = null;
   for (const p of candidates) {
     const url = base + (p.startsWith('/') ? p : `/${p}`);
@@ -514,25 +687,75 @@ async function horoscopeSvg(payloadOrProfile) {
       const resp = await axios.post(url, payload, { headers, timeout: 12000, validateStatus: null });
       if (resp.status >= 200 && resp.status < 300) return { status: 'ok', source: url, data: resp.data };
       if (resp.status === 403 && key) {
-        try {
-          const retryUrl = url + (url.includes('?') ? '&' : '?') + `api_key=${encodeURIComponent(key)}`;
-          const r2 = await axios.post(retryUrl, payload, { headers, timeout: 12000, validateStatus: null });
-          if (r2.status >= 200 && r2.status < 300) return { status: 'ok', source: retryUrl, data: r2.data };
-          lastErr = r2;
-          console.warn('horoscopeSvg retry non-2xx', retryUrl, r2.status, r2.data);
-        } catch (err2) {
-          lastErr = err2;
-          if (err2 && err2.response) console.warn('horoscopeSvg retry failed', url, err2.response.status, err2.response.data);
-          else console.warn('horoscopeSvg retry failed', url, err2 && err2.message);
+        // If this is the FreeAstrology provider, prefer the simple x-api-key header on
+        // the non-/v1 path and try the api_key query param only as a fallback.
+        if (isFreeAstro) {
+          try {
+            const retryUrl = url + (url.includes('?') ? '&' : '?') + `api_key=${encodeURIComponent(key)}`;
+            const r2 = await axios.post(retryUrl, payload, { headers, timeout: 12000, validateStatus: null });
+            if (r2.status >= 200 && r2.status < 300) return { status: 'ok', source: retryUrl, data: r2.data };
+            lastErr = r2;
+            logger.warn(sanitize({ msg: 'horoscopeSvg retry non-2xx (freeastrology query param)', retryUrl, status: r2.status, data: r2.data }));
+          } catch (err2) {
+            lastErr = err2;
+            if (err2 && err2.response) logger.warn(sanitize({ msg: 'horoscopeSvg retry failed (freeastrology query param)', url, status: err2.response.status, data: err2.response.data }));
+            else logger.warn(sanitize({ msg: 'horoscopeSvg retry failed (freeastrology query param)', url, message: err2 && err2.message }));
+          }
+        } else {
+          // For other providers (e.g., apiastro) preserve the existing more complex
+          // auth fallbacks which may require query-param or Authorization variants.
+          try {
+            const retryUrl = url + (url.includes('?') ? '&' : '?') + `api_key=${encodeURIComponent(key)}`;
+            const r2 = await axios.post(retryUrl, payload, { headers, timeout: 12000, validateStatus: null });
+            if (r2.status >= 200 && r2.status < 300) return { status: 'ok', source: retryUrl, data: r2.data };
+            lastErr = r2;
+            logger.warn(sanitize({ msg: 'horoscopeSvg retry non-2xx', retryUrl, status: r2.status, data: r2.data }));
+          } catch (err2) {
+            lastErr = err2;
+            if (err2 && err2.response) logger.warn(sanitize({ msg: 'horoscopeSvg retry failed (query param)', url, status: err2.response.status, data: err2.response.data }));
+            else logger.warn(sanitize({ msg: 'horoscopeSvg retry failed (query param)', url, message: err2 && err2.message }));
+          }
+
+          try {
+            const altHeaders = { ...headers, Authorization: `Token ${key}` };
+            const r3 = await axios.post(url, payload, { headers: altHeaders, timeout: 12000, validateStatus: null });
+            if (r3.status >= 200 && r3.status < 300) return { status: 'ok', source: url + ' (Authorization: Token)', data: r3.data };
+            lastErr = r3;
+            logger.warn(sanitize({ msg: 'horoscopeSvg retry token-non-2xx', url, status: r3.status, data: r3.data }));
+          } catch (err3) {
+            lastErr = err3;
+            if (err3 && err3.response) logger.warn(sanitize({ msg: 'horoscopeSvg retry failed (Authorization: Token)', url, status: err3.response.status, data: err3.response.data }));
+            else logger.warn(sanitize({ msg: 'horoscopeSvg retry failed (Authorization: Token)', url, message: err3 && err3.message }));
+          }
+
+          const authVariants = [
+            `key=${key}`,
+            `api_key=${key}`,
+            `ApiKey key=${key}`,
+            `ApiKey api_key=${key}`
+          ];
+          for (const av of authVariants) {
+            try {
+              const avHeaders = { ...headers, Authorization: av };
+              const rAv = await axios.post(url, payload, { headers: avHeaders, timeout: 12000, validateStatus: null });
+              if (rAv.status >= 200 && rAv.status < 300) return { status: 'ok', source: url + ` (Authorization: ${av.split(' ')[0]})`, data: rAv.data };
+              lastErr = rAv;
+              logger.warn(sanitize({ msg: 'horoscopeSvg retry auth-variant-non-2xx', url, variant: av, status: rAv.status, data: rAv.data }));
+            } catch (errAv) {
+              lastErr = errAv;
+              if (errAv && errAv.response) logger.warn(sanitize({ msg: 'horoscopeSvg retry failed (Authorization variant)', url, variant: av, status: errAv.response.status, data: errAv.response.data }));
+              else logger.warn(sanitize({ msg: 'horoscopeSvg retry failed (Authorization variant)', url, variant: av, message: errAv && errAv.message }));
+            }
+          }
         }
-      } else {
-        lastErr = resp;
-        console.warn('horoscopeSvg candidate non-2xx', url, resp.status, resp.data);
-      }
+        } else {
+          lastErr = resp;
+          logger.warn(sanitize({ msg: 'horoscopeSvg candidate non-2xx', url, status: resp.status, data: resp.data }));
+        }
     } catch (err) {
       lastErr = err;
-      if (err && err.response) console.warn('horoscopeSvg request failed', url, err.response.status, err.response.data);
-      else console.warn('horoscopeSvg request failed', url, err && err.message);
+      if (err && err.response) logger.warn(sanitize({ msg: 'horoscopeSvg request failed', url, status: err.response.status, data: err.response.data }));
+      else logger.warn(sanitize({ msg: 'horoscopeSvg request failed', url, message: err && err.message }));
     }
   }
 

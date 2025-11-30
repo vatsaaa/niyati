@@ -15,14 +15,14 @@ const DEFAULT_COUNTRIES = [
 const NiyatiChat = () => {
   // 1. STATE MANAGEMENT
   // We store the phone number instead of a random session ID
-  // Use canonical keys: `niyati_user_phone_number`, fall back to legacy `niyati_phone_number`.
+  // Use canonical keys: `niyati_user_phone_number`.
   const [phoneNumber, setPhoneNumber] = useState(() => {
-    return localStorage.getItem('niyati_user_phone_number') || localStorage.getItem('niyati_phone_number') || '';
+    return localStorage.getItem('niyati_user_phone_number') || '';
   });
 
   // Only show chat if we have a phone number (check both new and legacy keys)
   const [isLoggedIn, setIsLoggedIn] = useState(() => {
-    return !!(localStorage.getItem('niyati_user_phone_number') || localStorage.getItem('niyati_phone_number'));
+    return !!localStorage.getItem('niyati_user_phone_number');
   });
 
   const [tempPhone, setTempPhone] = useState('');
@@ -38,7 +38,7 @@ const NiyatiChat = () => {
   // initialize selected country from localStorage or fallback
   const [selectedCountry, setSelectedCountry] = useState(() => {
     try {
-      const savedCode = localStorage.getItem('niyati_user_country_code') || localStorage.getItem('niyati_country_code');
+      const savedCode = localStorage.getItem('niyati_user_country_code');
       if (savedCode) {
         const found = (JSON.parse(localStorage.getItem('niyati_countries')) || DEFAULT_COUNTRIES).find(c => c.code === savedCode);
         if (found) return found;
@@ -80,25 +80,7 @@ const NiyatiChat = () => {
       const savedNew = localStorage.getItem('niyati_user_profile');
       if (savedNew) return JSON.parse(savedNew);
 
-      // Fallback: legacy shape `niyati_profile` -> map to canonical `niyati_user_profile`
-      const legacy = localStorage.getItem('niyati_profile');
-      if (legacy) {
-        const p = JSON.parse(legacy || '{}');
-        const mapped = {
-          user_name: p.name || '',
-          user_dob: p.dob || '',
-          user_placeOfBirth: p.placeOfBirth || '',
-          user_timeOfBirth: p.timeOfBirth || '',
-          user_currentLocation: p.currentLocation || '',
-          user_verified: p.verified || {},
-          user_consentGiven: !!p.consentGiven,
-          createdAt: p.createdAt || new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        };
-        // write canonical key for future reads (one-time migration)
-        try { localStorage.setItem('niyati_user_profile', JSON.stringify(mapped)); } catch (e) {}
-        return mapped;
-      }
+      // No legacy fallback: only read canonical `niyati_user_profile`
 
       // Default canonical shape
       return { user_name: '', user_dob: '', user_placeOfBirth: '', user_timeOfBirth: '', user_currentLocation: '', user_verified: {}, user_consentGiven: false };
@@ -172,19 +154,6 @@ const NiyatiChat = () => {
   // Persist canonical profile whenever it changes
   useEffect(() => {
     try { localStorage.setItem('niyati_user_profile', JSON.stringify(profile)); } catch (e) {}
-    // Also keep legacy key updated for a transition period
-    try {
-      const legacy = {
-        name: profile.user_name,
-        dob: profile.user_dob,
-        placeOfBirth: profile.user_placeOfBirth,
-        timeOfBirth: profile.user_timeOfBirth,
-        currentLocation: profile.user_currentLocation,
-        verified: profile.user_verified,
-        consentGiven: profile.user_consentGiven
-      };
-      localStorage.setItem('niyati_profile', JSON.stringify(legacy));
-    } catch (e) {}
   }, [profile]);
 
   // Close dropdown when clicking outside
@@ -213,7 +182,7 @@ const NiyatiChat = () => {
         setCountries(mapped);
         try { localStorage.setItem('niyati_countries', JSON.stringify(mapped)); } catch (e) {}
         // If user has previously selected a country code, update the selectedCountry reference
-        const savedCode = localStorage.getItem('niyati_user_country_code') || localStorage.getItem('niyati_country_code');
+        const savedCode = localStorage.getItem('niyati_user_country_code');
         if (savedCode) {
           const found = mapped.find(m => m.code === savedCode);
           if (found) setSelectedCountry(found);
@@ -233,6 +202,64 @@ const NiyatiChat = () => {
   );
 
   // 3. LOGIN HANDLER
+  // Helper: create a UUIDv4 for request correlation and a wrapper to call BFF with `x-request-id` header
+  function createUUIDv4() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+      const r = (Math.random() * 16) | 0;
+      const v = c === 'x' ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
+  }
+
+  // Session-level request id management: persist in localStorage under `niyati_x_request_id`
+  function getSessionReqId() {
+    try {
+      let id = localStorage.getItem('niyati_x_request_id');
+      if (!id) {
+        id = createUUIDv4();
+        try { localStorage.setItem('niyati_x_request_id', id); } catch (e) {}
+      }
+      return id;
+    } catch (e) {
+      return createUUIDv4();
+    }
+  }
+
+  // bffFetch: prefixes BFF_BASE_URL when needed and adds an `x-request-id` header (session-level)
+  async function bffFetch(pathOrUrl, options = {}) {
+    const url = (typeof pathOrUrl === 'string' && (pathOrUrl.startsWith('http://') || pathOrUrl.startsWith('https://')))
+      ? pathOrUrl
+      : `${BFF_BASE_URL}${pathOrUrl}`;
+
+    const reqId = getSessionReqId();
+
+    const headers = new Headers(options.headers || {});
+    headers.set('x-request-id', reqId);
+
+    const merged = { ...options, headers };
+    return fetch(url, merged);
+  }
+
+  // Send a small, sanitized telemetry event to the BFF for central logging.
+  // Only send when the user has given consent in profile (best-effort privacy).
+  async function sendClientLog(tag, meta = {}) {
+    try {
+      // respect user consent
+      if (!profile || !profile.user_consentGiven) return;
+      const safe = { ...meta };
+      // remove obvious PII keys if accidentally passed
+      delete safe.user_name; delete safe.user_dob; delete safe.user_placeOfBirth; delete safe.user_timeOfBirth; delete safe.phoneNumber;
+
+      // fire-and-forget to BFF telemetry endpoint (bffFetch attaches x-request-id)
+      await bffFetch('/api/telemetry/log', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tag, meta: safe, ts: Date.now() })
+      });
+    } catch (e) {
+      // best-effort, do not surface to user
+    }
+  }
   const handleLogin = async (e) => {
     e.preventDefault();
     const requiredLen = selectedCountry?.phoneLength || 10;
@@ -247,17 +274,18 @@ const NiyatiChat = () => {
     // Combine country code with phone number (format: +1-5551234567)
     const fullPhone = `${selectedCountry.dialCode}-${tempPhone.trim()}`;
     
-    // Persist phone and country under canonical keys and keep legacy keys for transition
+    // Persist phone and country under canonical keys. Legacy writes removed (Phase A).
     try { localStorage.setItem('niyati_user_phone_number', fullPhone); } catch (e) {}
-    try { localStorage.setItem('niyati_phone_number', fullPhone); } catch (e) {}
     try { localStorage.setItem('niyati_user_country_code', selectedCountry.code); } catch (e) {}
-    try { localStorage.setItem('niyati_country_code', selectedCountry.code); } catch (e) {}
+
+    // Generate a fresh session-level request id for this login session
+    try { localStorage.setItem('niyati_x_request_id', createUUIDv4()); } catch (e) {}
 
     // Get current location and persist along with consent
     let currentLocationData = null;
     try {
-      // Call the current location API
-      const locationResponse = await fetch(`${BFF_BASE_URL}/api/geocode/current-location`);
+      // Call the current location API (BFF) with request-id header
+      const locationResponse = await bffFetch('/api/geocode/current-location');
       if (locationResponse.ok) {
         const locationData = await locationResponse.json();
         if (locationData.status === 'ok' && locationData.location) {
@@ -280,16 +308,6 @@ const NiyatiChat = () => {
         updatedAt: new Date().toISOString() 
       };
       localStorage.setItem('niyati_user_profile', JSON.stringify(updatedProfile));
-      // also keep legacy shape for transition
-      const legacy = {
-        name: updatedProfile.user_name,
-        dob: updatedProfile.user_dob,
-        placeOfBirth: updatedProfile.user_placeOfBirth,
-        currentLocation: updatedProfile.user_currentLocation,
-        verified: updatedProfile.user_verified,
-        consentGiven: updatedProfile.user_consentGiven
-      };
-      localStorage.setItem('niyati_profile', JSON.stringify(legacy));
       setProfile(prev => ({ 
         ...prev, 
         user_consentGiven: true,
@@ -314,7 +332,7 @@ const NiyatiChat = () => {
 
   // Get country data for logged-in user
   const getUserCountry = () => {
-    const savedCountryCode = localStorage.getItem('niyati_user_country_code') || localStorage.getItem('niyati_country_code') || 'US';
+    const savedCountryCode = localStorage.getItem('niyati_user_country_code') || 'US';
     return countries.find(c => c.code === savedCountryCode) || countries[0] || DEFAULT_COUNTRIES[0];
   };
 
@@ -323,12 +341,12 @@ const NiyatiChat = () => {
     if (window.confirm("This will clear your chat history on this device and log you out. Continue?")) {
       localStorage.removeItem('niyati_chat_history');
       // remove both canonical and legacy keys
+      // Remove only canonical keys. Legacy keys are no longer written by the app.
       localStorage.removeItem('niyati_user_phone_number');
-      localStorage.removeItem('niyati_phone_number');
       localStorage.removeItem('niyati_user_country_code');
-      localStorage.removeItem('niyati_country_code');
       localStorage.removeItem('niyati_user_profile');
-      localStorage.removeItem('niyati_profile');
+      // Clear session request id
+      try { localStorage.removeItem('niyati_x_request_id'); } catch (e) {}
       // Reset in-memory state as well
       setIsLoggedIn(false);
       setPhoneNumber('');
@@ -392,6 +410,44 @@ const NiyatiChat = () => {
         processCompleteProfile(updatedProfile);
       }
       
+      // Background: resolve the extracted placeOfBirth to a structured place (geocode)
+      if (extracted.placeOfBirth) {
+        (async () => {
+          try {
+            const { location } = await resolveLocationAndTimezone(extracted.placeOfBirth);
+            if (location) {
+              const formatted = formatPlaceFromLocation(location);
+              const existing = JSON.parse(localStorage.getItem('niyati_user_profile') || '{}');
+              const updated = {
+                ...existing,
+                user_placeOfBirth: formatted || extracted.placeOfBirth,
+                // keep currentLocation untouched here (it's a separate value)
+                updatedAt: new Date().toISOString()
+              };
+              // Persist canonical profile
+              try { localStorage.setItem('niyati_user_profile', JSON.stringify(updated)); } catch (e) {}
+              // Update in-memory profile
+              setProfile(prev => ({ ...prev, user_placeOfBirth: formatted || extracted.placeOfBirth }));
+
+              // After resolving place, optionally trigger astrology if profile is now complete
+              const candidate = {
+                ...updated,
+                user_consentGiven: updated.user_consentGiven || profile.user_consentGiven,
+                user_timeOfBirth: profile.user_timeOfBirth || updated.user_timeOfBirth,
+                user_dob: profile.user_dob || updated.user_dob,
+                user_name: profile.user_name || updated.user_name
+              };
+              if (isProfileComplete(candidate)) {
+                processCompleteProfile(candidate);
+              }
+            }
+          } catch (err) {
+            // fail silently
+            console.warn('Place resolution failed:', err);
+          }
+        })();
+      }
+
       // No chat confirmation message — the UI header will surface extracted details for manual review.
     }
 
@@ -447,13 +503,16 @@ const NiyatiChat = () => {
     const nameMatch = text.match(/(?:my name is|i am|i'm)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})/i);
     if (nameMatch) result.name = nameMatch[1].trim();
 
-    // DoB patterns (YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY, 12th Jan 1990)
+    // DoB patterns (YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY, 12th Jan 1990, or '11 November 2005')
     const dobMatchISO = text.match(/(\d{4}-\d{2}-\d{2})/);
     const dobMatchDMY = text.match(/(\d{1,2}[\/\.-]\d{1,2}[\/\.-]\d{2,4})/);
-    const dobMatchText = text.match(/(\d{1,2}[\/-][A-Za-z]{3,9}[\/-]\d{2,4})/i);
+    // Matches things like '12-Jan-1990' or '12 Jan 1990' (with separators or spaces)
+    const dobMatchText = text.match(/(\d{1,2}[\/\.-]\s*[A-Za-z]{3,9}[\/\.-]\s*\d{2,4})/i);
+    const dobMatchTextSpace = text.match(/(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{2,4})/i);
     if (dobMatchISO) result.dob = dobMatchISO[1];
     else if (dobMatchDMY) result.dob = dobMatchDMY[1];
     else if (dobMatchText) result.dob = dobMatchText[1];
+    else if (dobMatchTextSpace) result.dob = dobMatchTextSpace[1];
 
     // Place of birth patterns
     const placeMatch = text.match(/(?:born in|from|i was born in)\s+([A-Za-z0-9 ,.\-']{3,100})/i);
@@ -603,6 +662,59 @@ const NiyatiChat = () => {
     return null;
   }
 
+  // Return the best display string for user's place of birth.
+  // Prefer normalized `user_placeOfBirth`; if absent, try to extract an ASCII-friendly fragment from the raw provider string.
+  function getDisplayPlace(profileObj) {
+    if (!profileObj) return '—';
+    if (profileObj.user_placeOfBirth) return profileObj.user_placeOfBirth;
+    const raw = profileObj.placeOfBirth_raw || profileObj.user_placeOfBirth || '';
+    if (!raw) return '—';
+    // If raw contains ASCII fragment separated by commas, prefer that
+    const parts = raw.split(',').map(p => p.trim()).filter(Boolean);
+    const ascii = parts.find(p => /[A-Za-z]/.test(p));
+    if (ascii) return ascii;
+    return raw;
+  }
+
+  // Format a geocoding location object into a single place string for display
+  function formatPlaceFromLocation(location) {
+    if (!location) return '';
+    // location may have different shapes depending on provider: try common keys
+    const city = location.city || location.town || location.village || location.name || '';
+    const state = location.state || location.region || location.county || '';
+
+    // try multiple possible country fields and country code
+    let country = location.country || location.country_name || '';
+    let countryCode = (location.countryCode || location.country_code || (location.address && (location.address.country_code || location.address.countryCode)) || '').toString();
+    country = country || (location.address && (location.address.country || location.address.country_name)) || '';
+
+    // If the returned country is non-ASCII (localized), but we have a country code, map it to our countries list (English name)
+    const hasNonAscii = (str) => /[^\u0000-\u007F]/.test(str || '');
+    if ((!country || hasNonAscii(country)) && countryCode) {
+      try {
+        const code = countryCode.toString().toUpperCase();
+        const mapped = (countries || []).find(c => (c.code || '').toString().toUpperCase() === code);
+        if (mapped && mapped.name) country = mapped.name;
+      } catch (e) {
+        // ignore mapping errors
+      }
+    }
+
+    // For city: if it contains non-ASCII characters, try to extract an ASCII fragment from display_name
+    let cityToUse = city || '';
+    if (hasNonAscii(cityToUse) && location.display_name && typeof location.display_name === 'string') {
+      const partsFromDisplay = location.display_name.split(',').map(s => s.trim()).filter(Boolean);
+      // prefer the first segment that contains ASCII letters
+      const asciiCandidate = partsFromDisplay.find(p => /[A-Za-z]/.test(p));
+      if (asciiCandidate) cityToUse = asciiCandidate;
+    }
+
+    const parts = [cityToUse, state, country].map(p => (p || '').trim()).filter(p => p.length > 0);
+    if (parts.length > 0) return parts.join(', ');
+    // final fallbacks: try to use display_name or formatted if available
+    return location.display_name || location.formatted || '';
+  }
+
   // Check if user profile is complete for astrology calculations
   function isProfileComplete(profile) {
     return !!(profile.user_name && 
@@ -664,8 +776,8 @@ const NiyatiChat = () => {
         throw new Error('Invalid location format');
       }
 
-      // Call geocoding API
-      const geocodeResponse = await fetch(`${BFF_BASE_URL}${geocodingConfig.endpoint}`, {
+      // Call geocoding API (via BFF) with request-id header
+      const geocodeResponse = await bffFetch(geocodingConfig.endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(geocodingConfig.payload)
@@ -690,13 +802,46 @@ const NiyatiChat = () => {
         throw new Error('No location data found');
       }
 
+      // Normalize returned location to prefer English-friendly names when possible
+      // Use country code mapping to our `countries` list and try to extract ASCII city from display_name
+      const normalizeLocation = (loc) => {
+        if (!loc || typeof loc !== 'object') return loc;
+        const out = { ...loc };
+        const countryCode = (loc.countryCode || loc.country_code || (loc.address && (loc.address.country_code || loc.address.countryCode)) || '').toString().toUpperCase();
+
+        // Map country code to English country name if available
+        if (countryCode) {
+          const mapped = (countries || []).find(c => (c.code || '').toString().toUpperCase() === countryCode);
+          if (mapped && mapped.name) out.country = mapped.name;
+        }
+
+        // If city contains non-ASCII characters, try to pick an ASCII candidate from display_name
+        const hasNonAscii = (str) => /[^\u0000-\u007F]/.test(str || '');
+        if (out.city && hasNonAscii(out.city) && out.display_name && typeof out.display_name === 'string') {
+          const parts = out.display_name.split(',').map(p => p.trim()).filter(Boolean);
+          const asciiCandidate = parts.find(p => /[A-Za-z]/.test(p));
+          if (asciiCandidate) out.city = asciiCandidate;
+        }
+
+        // Also, if country now equals a non-meaningful value, prefer display_name's last segment mapped via countries
+        if ((!out.country || hasNonAscii(out.country)) && out.display_name) {
+          const parts = out.display_name.split(',').map(p => p.trim()).filter(Boolean);
+          const last = parts[parts.length - 1] || '';
+          if (last && /[A-Za-z]/.test(last)) out.country = last;
+        }
+
+        return out;
+      };
+
+      locationData = normalizeLocation(locationData);
+
       // Get timezone using astrology geo-details API
       const timezonePayload = {
         lat: locationData.lat,
         lon: locationData.lon
       };
 
-      const timezoneResponse = await fetch(`${BFF_BASE_URL}/api/astrology/geo-details`, {
+      const timezoneResponse = await bffFetch('/api/astrology/geo-details', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(timezonePayload)
@@ -712,6 +857,24 @@ const NiyatiChat = () => {
       if (timezoneData.status === 'ok' && timezoneData.data) {
         // Extract timezone from the response
         timezone = timezoneData.data.timezone || timezoneData.data.utc_offset || 0;
+      }
+
+      // Persist a UI-friendly place string into the canonical profile shape
+      try {
+        const formattedPlace = formatPlaceFromLocation(locationData) || (locationData.display_name || '');
+        const existing = JSON.parse(localStorage.getItem('niyati_user_profile') || '{}');
+        const updatedProfile = {
+          ...existing,
+          user_placeOfBirth: formattedPlace,
+          // keep raw provider string for debugging/privacy decisions
+          placeOfBirth_raw: locationData.display_name || existing.placeOfBirth_raw || '',
+          updatedAt: new Date().toISOString()
+        };
+        localStorage.setItem('niyati_user_profile', JSON.stringify(updatedProfile));
+        // Update in-memory profile for immediate UI reflection
+        try { setProfile(prev => ({ ...prev, user_placeOfBirth: formattedPlace })); } catch (e) {}
+      } catch (e) {
+        // best-effort, do not block
       }
 
       return {
@@ -750,35 +913,54 @@ const NiyatiChat = () => {
         }
       };
 
-      // Call both astrology APIs in parallel
-      const [planetsResponse, horoscopeSvgResponse] = await Promise.all([
-        fetch(`${BFF_BASE_URL}/api/astrology/planets`, {
+      // Sequential pipeline: call planets first, then (on success) call horoscope-svg after a short delay.
+      // This keeps work in the background (caller often doesn't await `processCompleteProfile`),
+      // and makes it easy to add more follow-up APIs later.
+      const results = {};
+
+      try {
+        console.log('calculateAstrology: calling /api/astrology/planets');
+        sendClientLog('calculateAstrology.planets.call');
+        const planetsResponse = await bffFetch('/api/astrology/planets', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(astrologyPayload)
-        }),
-        fetch(`${BFF_BASE_URL}/api/astrology/horoscope-svg`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            ...astrologyPayload,
-            config: astrologyPayload.settings // Some endpoints expect 'config' instead of 'settings'
-          })
-        })
-      ]);
+        });
 
-      const results = {};
+        if (planetsResponse.ok) {
+          results.planets = await planetsResponse.json();
+          console.log('calculateAstrology: /planets success');
+          sendClientLog('calculateAstrology.planets.success');
 
-      if (planetsResponse.ok) {
-        results.planets = await planetsResponse.json();
-      } else {
-        console.error('Planets API failed:', planetsResponse.status);
-      }
+          // Wait a short delay before calling follow-up APIs to avoid provider race/throttling
+          await new Promise((r) => setTimeout(r, 1000));
 
-      if (horoscopeSvgResponse.ok) {
-        results.horoscopeSvg = await horoscopeSvgResponse.json();
-      } else {
-        console.error('Horoscope SVG API failed:', horoscopeSvgResponse.status);
+          console.log('calculateAstrology: calling /api/astrology/horoscope-svg');
+          sendClientLog('calculateAstrology.horoscope.call');
+          const horoscopeResponse = await bffFetch('/api/astrology/horoscope-svg', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              ...astrologyPayload,
+              config: astrologyPayload.settings // Some endpoints expect 'config' instead of 'settings'
+            })
+          });
+
+          if (horoscopeResponse.ok) {
+            results.horoscopeSvg = await horoscopeResponse.json();
+            console.log('calculateAstrology: /horoscope-svg success');
+            sendClientLog('calculateAstrology.horoscope.success');
+          } else {
+            console.error('Horoscope SVG API failed:', horoscopeResponse.status);
+            sendClientLog('calculateAstrology.horoscope.failed', { status: horoscopeResponse.status });
+          }
+        } else {
+          console.error('Planets API failed:', planetsResponse.status);
+          sendClientLog('calculateAstrology.planets.failed', { status: planetsResponse.status });
+        }
+      } catch (err) {
+        console.error('calculateAstrology: error during astrology calls', err);
+        try { sendClientLog('calculateAstrology.error', { message: err && err.message }); } catch (e) {}
       }
 
       return results;
@@ -962,7 +1144,7 @@ const NiyatiChat = () => {
                           <div className="min-w-0 truncate">{formatDobForDisplay(profile.user_dob, getUserCountry().code) || '—'}</div>
                           
                           {/* Row 2: place directly under flag/phone (col 1), optional center column left blank, time under DOB (col 3) */}
-                          <div title={profile.user_placeOfBirth || ''} className="min-w-0 truncate sm:col-span-2">{profile.user_placeOfBirth || '—'}</div>
+                          <div title={profile.user_placeOfBirth || profile.placeOfBirth_raw || ''} className="min-w-0 truncate sm:col-span-2">{getDisplayPlace(profile)}</div>
                           <div className="min-w-0 truncate">{formatTimeForDisplay(profile.user_timeOfBirth) || '—'}</div>
                         </div>
                       </div>

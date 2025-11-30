@@ -427,4 +427,17 @@ Replace in-memory orders/credits with persistent DB or Redis for production-grad
 
 
 TODO:
-When "Logout / Reset" button of app is clicked, should we also clear the localStorage keys?
+- When "Logout / Reset" button of app is clicked, should we also clear the localStorage keys?
+- Add the session x-request-id header to the external webhook call (N8N_WEBHOOK_URL) to help correlate webhook processing with BFF logs. This would add the same x-request-id header (from getSessionReqId()) to that POST.
+- Add an Express middleware to the BFF to ensure x-request-id exists (generate one server-side when missing) and echo it back in response headers — useful for robust correlation.
+- User said "I was born on 11th day of November 2005" the date was not resolved correctly. Add better date parsing / NLU to extract DoB from chat messages.
+- User said "I was born in Doha" and the update in user section of app screen was in a different language - 
+الدوحة, قطر"
+"
+Language should be fixed to English.
+- User said "I was born at Raghopur" and the placeOfBirth was not displayed in user details section on the app screen.
+- User said "I was born at Hamirpur", place of birth was not resolved by app.
+- User said "Place of my birth is New Delhi" but place of birth was not updated in user details section of app screen.
+- User said "I was born on 19-May-1979 at 7:31 am" and the date of birth and time of birth were properly inferred and displayed.
+
+- Add sampling/rate-limiting on the BFF telemetry endpoint to avoid flooding with many requests in a short time.

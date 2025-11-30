@@ -1,10 +1,29 @@
 const axios = require('axios');
 const NodeCache = require('node-cache');
+const { logger, sanitize } = require('../lib/logger');
 
 const cache = new NodeCache({ stdTTL: 60 * 60 * 24 }); // 24h cache
 const GEOCODE_KEY = process.env.GEOCODE_MAPS_KEY || '';
 
 const DEFAULT_LIMIT = 5;
+
+// Load English country names from the UI's countries.json (best-effort). If unavailable, fallback to whatever provider returns.
+const fs = require('fs');
+let COUNTRY_NAME_BY_CODE = {};
+try {
+  const countriesPath = `${__dirname}/../../../ui/public/countries.json`;
+  const raw = fs.readFileSync(countriesPath, 'utf8');
+  const parsed = JSON.parse(raw);
+  if (parsed && Array.isArray(parsed.countries)) {
+    COUNTRY_NAME_BY_CODE = parsed.countries.reduce((acc, c) => {
+      if (c && c.code) acc[c.code.toString().toUpperCase()] = c.name || acc[c.code.toString().toUpperCase()];
+      return acc;
+    }, {});
+  }
+} catch (e) {
+  // fail silently; mapping is optional
+  logger.debug('geocode:country_map_load_failed', sanitize({ error: e && e.message }));
+}
 
 function makeCacheKey(path, params) {
   const s = `${path}:${Object.keys(params || {}).sort().map(k => `${k}=${params[k]}`).join('&')}`;
@@ -23,27 +42,36 @@ async function callMapsCo(path, params = {}, opts = {}) {
 
   try {
     const reqParams = { ...params, format: params.format || 'json', limit };
+      // Prefer English responses where provider supports it
+      reqParams['accept-language'] = reqParams['accept-language'] || 'en';
+      // Request namedetails when possible (Nominatim supports namedetails=1)
+      reqParams['namedetails'] = reqParams['namedetails'] || 1;
     if (GEOCODE_KEY) reqParams.api_key = GEOCODE_KEY;
+    logger.debug('geocode:outgoing_request', sanitize({ url, params: reqParams }));
     const resp = await axios.get(url, { params: reqParams, headers, timeout: opts.timeout || 6000 });
+    logger.debug('geocode:outgoing_response', sanitize({ url, status: resp.status, data: resp.data }));
     cache.set(cacheKey, resp.data);
     return resp.data;
   } catch (err) {
     if (err.response) {
-      console.warn('maps.co error', path, err.response.status, err.response.data);
+      logger.warn('maps.co error', sanitize({ path, status: err.response.status, data: err.response.data }));
     } else {
-      console.warn('maps.co request failed', path, err.message);
+      logger.warn('maps.co request failed', sanitize({ path, message: err.message }));
     }
     // try fallback to Nominatim for compatible endpoints
     if (path.startsWith('/search') || path.startsWith('/reverse') || path.startsWith('/lookup')) {
       try {
         const nominatimBase = 'https://nominatim.openstreetmap.org';
         const nomUrl = `${nominatimBase}${path}`;
-        const resp2 = await axios.get(nomUrl, { params: { ...params, format: params.format || 'json', limit }, headers, timeout: 8000 });
+        logger.debug('geocode:outgoing_request_fallback', sanitize({ url: nomUrl, params: { ...params, format: params.format || 'json', limit } }));
+        const fallbackParams = { ...params, format: params.format || 'json', limit, 'accept-language': 'en', namedetails: 1 };
+        const resp2 = await axios.get(nomUrl, { params: fallbackParams, headers, timeout: 8000 });
+        logger.debug('geocode:outgoing_response_fallback', sanitize({ url: nomUrl, status: resp2.status, data: resp2.data }));
         cache.set(cacheKey, resp2.data);
         return resp2.data;
       } catch (err2) {
-        if (err2.response) console.warn('nominatim error', err2.response.status, err2.response.data);
-        else console.warn('nominatim request failed', err2.message);
+        if (err2.response) logger.warn('nominatim error', sanitize({ status: err2.response.status, data: err2.response.data }));
+        else logger.warn('nominatim request failed', sanitize({ message: err2.message }));
         throw err2;
       }
     }
@@ -54,12 +82,15 @@ async function callMapsCo(path, params = {}, opts = {}) {
 async function search(q, opts = {}) {
   const params = { q, limit: opts.limit || DEFAULT_LIMIT };
   try {
+    logger.debug('geocode:search_incoming', sanitize({ q, params }));
     const data = await callMapsCo('/search', params, opts);
     if (!Array.isArray(data) || !data.length) return { status: 'error', reason: 'no_results' };
     const suggestions = (Array.isArray(data) ? data : []).slice(0, params.limit).map(item => mapItemToSuggestion(item));
     const result = { status: suggestions.length === 1 ? 'ok' : 'ambiguous', source: process.env.GEOCODE_MAPS_BASE || 'geocode.maps.co', suggestions, place: suggestions[0] };
+    logger.debug('geocode:search_result', sanitize({ q, result }));
     return result;
   } catch (err) {
+    logger.error('geocode:search_failed', sanitize({ q, error: err && err.message }));
     return { status: 'error', reason: 'provider_error' };
   }
 }
@@ -67,12 +98,15 @@ async function search(q, opts = {}) {
 async function reverse(lat, lon, opts = {}) {
   const params = { lat, lon, limit: opts.limit || 1 };
   try {
+    logger.debug('geocode:reverse_incoming', sanitize({ lat, lon, params }));
     const data = await callMapsCo('/reverse', params, opts);
     // reverse returns an object for maps.co / Nominatim; normalize to array for suggestions
     const arr = Array.isArray(data) ? data : [data];
     const suggestions = arr.slice(0, params.limit).map(item => mapItemToSuggestion(item));
+    logger.debug('geocode:reverse_result', sanitize({ lat, lon, suggestions }));
     return { status: suggestions.length ? 'ok' : 'error', source: process.env.GEOCODE_MAPS_BASE || 'geocode.maps.co', suggestions, place: suggestions[0] };
   } catch (err) {
+    logger.error('geocode:reverse_failed', sanitize({ lat, lon, error: err && err.message }));
     return { status: 'error', reason: 'provider_error' };
   }
 }
@@ -93,19 +127,58 @@ async function structuredSearch(params = {}, opts = {}) {
   // structured: pass supported fields (street, city, county, state, country, postalcode)
   const p = { ...params, limit: opts.limit || DEFAULT_LIMIT };
   try {
+    logger.debug('geocode:structured_incoming', sanitize({ params: p }));
     const data = await callMapsCo('/search', p, opts);
     const suggestions = (Array.isArray(data) ? data : []).slice(0, p.limit).map(item => mapItemToSuggestion(item));
+    logger.debug('geocode:structured_result', sanitize({ params: p, suggestions }));
     return { status: suggestions.length ? 'ok' : 'error', source: process.env.GEOCODE_MAPS_BASE || 'geocode.maps.co', suggestions, place: suggestions[0] };
   } catch (err) {
+    logger.error('geocode:structured_failed', sanitize({ params: p, error: err && err.message }));
     return { status: 'error', reason: 'provider_error' };
   }
 }
 
 function mapItemToSuggestion(item) {
   const addr = item.address || {};
-  const city = addr.city || addr.town || addr.village || addr.county || item.name || (item.display_name && item.display_name.split(',')[0]);
-  const country = addr.country || (item.display_name && item.display_name.split(',').slice(-1)[0]) || '';
-  const countryCode = (addr.country_code || '').toUpperCase();
+  let city = addr.city || addr.town || addr.village || addr.county || item.name || (item.display_name && item.display_name.split(',')[0]);
+  let country = addr.country || (item.display_name && item.display_name.split(',').slice(-1)[0]) || '';
+  const countryCode = (addr.country_code || (item && item.extratags && item.extratags.country_code) || '').toString().toUpperCase();
+
+  // Prefer explicit English name tags if the provider returned them
+  try {
+    if (item && item.namedetails && (item.namedetails['name:en'] || item.namedetails['name:eng'])) {
+      const nd = item.namedetails['name:en'] || item.namedetails['name:eng'];
+      if (nd) city = nd;
+    }
+  } catch (e) {}
+  try {
+    if (item && item.extratags && (item.extratags['name:en'] || item.extratags['name:eng'])) {
+      const et = item.extratags['name:en'] || item.extratags['name:eng'];
+      if (et) city = et;
+    }
+  } catch (e) {}
+
+  // Normalize country to English name when we have a mapping for countryCode
+  if (countryCode && COUNTRY_NAME_BY_CODE[countryCode]) {
+    const mappedCountry = COUNTRY_NAME_BY_CODE[countryCode];
+    if (mappedCountry && mappedCountry !== country) {
+      logger.debug('geocode:country_normalized', sanitize({ from: country, to: mappedCountry, countryCode }));
+      country = mappedCountry;
+    }
+  }
+
+  // If city is non-ASCII, try to extract an ASCII-friendly candidate from display_name
+  const hasNonAscii = (str) => /[^\u0000-\u007F]/.test(str || '');
+  if (city && hasNonAscii(city)) {
+    if (item.display_name && typeof item.display_name === 'string') {
+      const parts = item.display_name.split(',').map(p => p.trim()).filter(Boolean);
+      const asciiCandidate = parts.find(p => /[A-Za-z]/.test(p));
+      if (asciiCandidate) {
+        logger.debug('geocode:city_normalized', sanitize({ from: city, to: asciiCandidate, countryCode }));
+        city = asciiCandidate;
+      }
+    }
+  }
   return {
     display_name: item.display_name,
     city,
@@ -176,7 +249,7 @@ async function getCurrentLocation() {
     return result;
     
   } catch (err) {
-    console.error('current location error:', err.message);
+    logger.error(sanitize({ msg: 'current location error', error: err && err.message }));
     return { 
       status: 'error', 
       reason: 'provider_error',
