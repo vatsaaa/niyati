@@ -48,6 +48,11 @@ const LoginForm = ({
 
   return (
     <div className="w-full max-w-md bg-slate-900/80 backdrop-blur-md border border-slate-700 rounded-2xl shadow-2xl p-8 z-10 text-center">
+      <div className="flex gap-3 justify-center mb-4">
+        <button type="button" onClick={() => window.location.href = '/api/v1/auth/google'} className="px-3 py-2 bg-white/5 rounded-lg text-white">Sign in with Google</button>
+        <button type="button" onClick={() => window.location.href = '/api/v1/auth/github'} className="px-3 py-2 bg-white/5 rounded-lg text-white">Sign in with GitHub</button>
+      </div>
+      <div className="text-slate-500 text-sm mb-4">or sign in with phone</div>
       <div className="w-16 h-16 rounded-full bg-gradient-to-tr from-purple-600 to-amber-500 flex items-center justify-center shadow-lg mx-auto mb-6">
         <Sparkles className="text-white w-8 h-8" />
       </div>
