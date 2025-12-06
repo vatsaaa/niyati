@@ -18,7 +18,10 @@ const { attachResponseHelpers, ErrorCodes } = require('./lib/responses');
 const geocodeRouter = require('./routes/geocode');
 const astrologyRouter = require('./routes/astrology');
 const telemetryRouter = require('./routes/telemetry');
+const authRouter = require('./routes/auth');
 const { logger, reqIdFromReq } = require('./lib/logger');
+const cookieParser = require('cookie-parser');
+const { Pool } = require('pg');
 
 const app = express();
 const PORT = config.server.port;
@@ -36,6 +39,18 @@ app.use(compression({
 
 app.use(bodyParser.json({ limit: config.server.bodyLimit }));
 app.use(bodyParser.urlencoded({ extended: false }));
+app.use(cookieParser());
+
+// Configure Postgres pool if DATABASE_URL is present
+if (process.env.DATABASE_URL) {
+  try {
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    app.set('db', pool);
+    logger.info({ msg: 'db_pool_created' });
+  } catch (err) {
+    logger.error({ msg: 'db_pool_error', error: err.message });
+  }
+}
 
 // Rate limiting configuration
 const apiLimiter = rateLimit({
@@ -112,6 +127,15 @@ const apiRouter = express.Router();
 apiRouter.use('/geocode', strictLimiter, geocodeRouter);
 apiRouter.use('/astrology', strictLimiter, astrologyRouter);
 apiRouter.use('/telemetry', apiLimiter, telemetryRouter);
+// Mount auth routes (session token endpoints)
+apiRouter.use('/auth', apiLimiter, authRouter);
+// OAuth provider routes
+try {
+  const oauthRouter = require('./routes/oauth');
+  apiRouter.use('/auth', oauthRouter);
+} catch (e) {
+  console.warn('OAuth routes not loaded:', e && e.message);
+}
 
 // Dev-only webhook receiver: enable based on feature flag
 if (config.features.webhookRoute) {
@@ -188,6 +212,14 @@ const gracefulShutdown = (signal) => {
   server.close(() => {
     logger.info({ msg: 'HTTP server closed' });
     
+    // close DB pool if present
+    try {
+      const pool = app.get('db');
+      if (pool && typeof pool.end === 'function') {
+        pool.end().then(() => logger.info({ msg: 'DB pool closed' })).catch(() => {});
+      }
+    } catch (e) {}
+
     // Give ongoing requests a chance to complete
     setTimeout(() => {
       logger.info({ msg: 'Graceful shutdown complete, exiting' });

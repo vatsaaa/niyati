@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { logger, sanitize, reqIdFromReq } = require('../lib/logger');
+const { ErrorCodes } = require('../lib/responses');
 
 // Telemetry rate-limiter (token bucket) with sampling fallback.
 // Environment variables:
@@ -37,8 +38,8 @@ router.post('/log', (req, res) => {
 
   // Validate input: require message field and a valid level
   const validLevels = ['debug', 'info', 'warn', 'error'];
-  if (!message) return res.sendError('MISSING_REQUIRED_FIELD', 'Missing required field: message');
-  if (!level || !validLevels.includes(level)) return res.sendError('INVALID_INPUT', 'Invalid log level');
+  if (!message) return res.sendError(ErrorCodes.MISSING_REQUIRED_FIELD, 'Missing required field: message');
+  if (!level || !validLevels.includes(level)) return res.sendError(ErrorCodes.INVALID_INPUT, 'Invalid log level');
 
   // decide acceptance
   let accepted = false;
@@ -66,7 +67,7 @@ router.post('/log', (req, res) => {
     // Too many events; politely ask client to back off
     res.setHeader('Retry-After', String(Math.ceil(WINDOW_MS / Math.max(1, MAX_EVENTS) / 1000))); // seconds estimate
     logger.warn(sanitize({ msg: 'telemetry.rate_limited', reqId, tag: tag || 'client.telemetry' }));
-    return res.sendError('RATE_LIMIT_EXCEEDED', 'Rate limit exceeded');
+    return res.sendError(ErrorCodes.RATE_LIMIT_EXCEEDED, 'Rate limit exceeded');
   }
 
   try {

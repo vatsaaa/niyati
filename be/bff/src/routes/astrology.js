@@ -1,9 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const astrologyService = require('../services/astrologyService');
+const express = require('express');
+const router = express.Router();
+const astrologyService = require('../services/astrologyService');
 const axios = require('axios');
 const { logger, sanitize, reqIdFromReq } = require('../lib/logger');
 const config = require('../../config');
+const { ErrorCodes } = require('../lib/responses');
 
 // POST /api/astrology/compute
 // Accepts { profile: { name, dob, timeOfBirth, placeOfBirth: { city, countryCode, lat, lng } } }
@@ -11,7 +15,7 @@ const config = require('../../config');
 router.post('/compute', async (req, res) => {
   const profile = req.body.profile || {};
   if (!profile.dob || !profile.placeOfBirth) {
-    return res.status(400).json({ status: 'error', reason: 'missing_profile_fields' });
+    return res.sendError(ErrorCodes.MISSING_REQUIRED_FIELD, 'Missing profile fields');
   }
 
   try {
@@ -19,7 +23,7 @@ router.post('/compute', async (req, res) => {
     return res.json(result);
   } catch (err) {
     logger.error(sanitize({ msg: 'Astrology compute error', error: err && err.message }));
-    return res.status(500).json({ status: 'error', reason: 'provider_error' });
+    return res.sendError(ErrorCodes.PROVIDER_ERROR, 'Provider error');
   }
 });
 
@@ -35,7 +39,7 @@ router.post('/geo-details', async (req, res) => {
   else if (body.lat || body.lon || body.latitude || body.longitude) query = { lat: body.lat || body.latitude, lon: body.lon || body.longitude };
 
   if (!query || (typeof query === 'object' && !query.q && !query.lat && !query.lon && !query.location && !query.placeOfBirth)) {
-    return res.status(400).json({ status: 'error', reason: 'missing_query' });
+    return res.sendError(ErrorCodes.MISSING_REQUIRED_FIELD, 'Missing query');
   }
 
   try {
@@ -43,7 +47,7 @@ router.post('/geo-details', async (req, res) => {
     return res.json(result);
   } catch (err) {
     logger.error(sanitize({ msg: 'Astrology geo-details error', error: err && err.message }));
-    return res.status(500).json({ status: 'error', reason: 'provider_error' });
+    return res.sendError(ErrorCodes.PROVIDER_ERROR, 'Provider error');
   }
 });
 
@@ -52,7 +56,7 @@ router.post('/geo-details', async (req, res) => {
 router.post('/planets', async (req, res) => {
   const body = req.body || {};
   const payload = body.payload || body;
-  if (!payload) return res.status(400).json({ status: 'error', reason: 'missing_payload' });
+  if (!payload) return res.sendError(ErrorCodes.MISSING_REQUIRED_FIELD, 'Missing payload');
   try {
     // Propagate incoming request id into service calls for downstream correlation
     try { payload._reqId = req._niyati_reqId || reqIdFromReq(req) || req.headers['x-request-id']; } catch (e) {}
@@ -60,7 +64,7 @@ router.post('/planets', async (req, res) => {
     return res.json({ status: 'ok', source: process.env.ASTRO_API_URL || 'https://json.freeastrologyapi.com', data });
   } catch (err) {
     logger.error(sanitize({ msg: 'Astrology planets error', error: err && (err.message || err.original) }));
-    return res.status(500).json({ status: 'error', reason: 'provider_error' });
+    return res.sendError(ErrorCodes.PROVIDER_ERROR, 'Provider error');
   }
 });
 
@@ -69,13 +73,13 @@ router.post('/planets', async (req, res) => {
 router.post('/navamsa', async (req, res) => {
   const body = req.body || {};
   const payload = body.payload || body;
-  if (!payload) return res.status(400).json({ status: 'error', reason: 'missing_payload' });
+  if (!payload) return res.sendError(ErrorCodes.MISSING_REQUIRED_FIELD, 'Missing payload');
   try {
     const result = await astrologyService.navamsa(payload);
     return res.json(result);
   } catch (err) {
     logger.error(sanitize({ msg: 'Astrology navamsa error', error: err && (err.message || err.original) }));
-    return res.status(500).json({ status: 'error', reason: 'provider_error' });
+    return res.sendError(ErrorCodes.PROVIDER_ERROR, 'Provider error');
   }
 });
 
@@ -84,15 +88,15 @@ router.post('/navamsa', async (req, res) => {
 router.post('/divisional', async (req, res) => {
   const body = req.body || {};
   const n = parseInt(body.divisional || body.n || body.d || 0, 10);
-  if (!n || n < 2 || n > 60) return res.status(400).json({ status: 'error', reason: 'invalid_divisional' });
+  if (!n || n < 2 || n > 60) return res.sendError(ErrorCodes.INVALID_INPUT, 'Invalid divisional');
   const payload = body.payload || body;
   try {
     const result = await astrologyService.divisional(n, payload);
     return res.json(result);
   } catch (err) {
     logger.error(sanitize({ msg: 'Astrology divisional error', error: err && (err.message || err.original) }));
-    if (err && err.code === 'invalid_divisional') return res.status(400).json({ status: 'error', reason: 'invalid_divisional' });
-    return res.status(500).json({ status: 'error', reason: 'provider_error' });
+    if (err && err.code === 'invalid_divisional') return res.sendError(ErrorCodes.INVALID_INPUT, 'Invalid divisional');
+    return res.sendError(ErrorCodes.PROVIDER_ERROR, 'Provider error');
   }
 });
 
@@ -101,7 +105,7 @@ router.post('/divisional', async (req, res) => {
 router.post('/horoscope-svg', async (req, res) => {
   const body = req.body || {};
   const payload = body.payload || body;
-  if (!payload) return res.status(400).json({ status: 'error', reason: 'missing_payload' });
+  if (!payload) return res.sendError(ErrorCodes.MISSING_REQUIRED_FIELD, 'Missing payload');
   try {
     const incomingReqId = req._niyati_reqId || reqIdFromReq(req) || (req.headers && req.headers['x-request-id']);
     logger.info(sanitize({ msg: 'astrology.route.horoscope_incoming', reqId: incomingReqId, path: req.path, body: req.body }));
@@ -114,7 +118,7 @@ router.post('/horoscope-svg', async (req, res) => {
     return res.json(result);
   } catch (err) {
     logger.error(sanitize({ msg: 'Astrology horoscope-svg error', error: err && (err.message || err.original) }));
-    return res.status(500).json({ status: 'error', reason: 'provider_error' });
+    return res.sendError(ErrorCodes.PROVIDER_ERROR, 'Provider error');
   }
 });
 
@@ -125,7 +129,7 @@ router.post('/horoscope-svg', async (req, res) => {
 router.post('/probe', async (req, res) => {
   // Disable based on feature flag
   if (!config.features.probeEndpoint) {
-    return res.status(404).json({ status: 'error', reason: 'not_found' });
+    return res.sendError(ErrorCodes.NOT_FOUND, 'Probe endpoint not enabled');
   }
 
   const base = (process.env.ASTRO_API_URL || 'https://json.freeastrologyapi.com').replace(/\/$/, '');

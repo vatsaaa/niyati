@@ -35,6 +35,7 @@ const ErrorCodes = {
   
   // Business logic errors
   NO_RESULTS: 'NO_RESULTS',
+  CONFLICT: 'CONFLICT',
   AMBIGUOUS_RESULTS: 'AMBIGUOUS_RESULTS'
 };
 
@@ -57,7 +58,13 @@ const ErrorStatusCodes = {
   
   [ErrorCodes.NO_RESULTS]: 404,
   [ErrorCodes.AMBIGUOUS_RESULTS]: 200 // Still successful, just needs disambiguation
+  ,
+  [ErrorCodes.CONFLICT]: 409
 };
+
+// Note: prefer using canonical ErrorCodes constants throughout the codebase.
+// Remove legacy lowercase mappings to enforce consistent usage.
+
 
 /**
  * Create a standardized error response
