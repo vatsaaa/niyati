@@ -1,6 +1,6 @@
 # Niyati — Backend-for-Frontend (BFF)
 
-This BFF is a small Node/Express server that provides a unified API layer for the Niyati application, handling geocoding, astrology calculations, and payments processing.
+This BFF is a small Node/Express server that provides a unified API layer for the Niyati application, handling geocoding and astrology calculations.
 
 ## What it provides
 - **Geocoding**: Complete location services including search, reverse lookup, structured queries, and proxy endpoints
@@ -556,13 +556,11 @@ be/bff/
 │   ├── index.js                 # Main Express server
 │   ├── routes/
 │   │   ├── astrology.js         # Astrology API endpoints
-│   │   ├── geocode.js           # Geocoding API endpoints
-│   │   └── payments.js          # Payment processing endpoints
+│   │   └── geocode.js           # Geocoding API endpoints
 │   └── services/
 │       ├── astrologyService.js  # Astrology provider adapter
 │       ├── creditsService.js    # Credits management
-│       ├── geocodeService.js    # Geocoding provider adapter
-│       └── paymentsService.js   # Payment processing logic
+│       └── geocodeService.js    # Geocoding provider adapter
 ├── scripts/
 │   └── test_endpoints.js        # Integration test harness
 ├── package.json                 # Dependencies and scripts
@@ -590,7 +588,7 @@ The BFF provides comprehensive error handling and logging:
 
 ### Security Considerations
 1. **Never commit API keys** to source control
-2. **Set strong Razorpay webhook secrets**
+2. **Protect webhook secrets and provider credentials**
 3. **Add rate limiting** for production usage
 4. **Implement authentication** for sensitive endpoints
 5. **Disable debug endpoints** (`/api/astrology/probe`)
@@ -604,8 +602,8 @@ The BFF provides comprehensive error handling and logging:
 ### Monitoring
 - Add application monitoring (health checks, metrics)
 - Set up error tracking and alerting
-- Monitor API provider usage and rate limits
-- Log payment transactions for audit trails
+ - Monitor API provider usage and rate limits
+ - Log important transaction events for audit trails
 
 ## Troubleshooting
 
@@ -623,11 +621,7 @@ The BFF provides comprehensive error handling and logging:
   - Verify `GEOCODE_MAPS_KEY` is valid (currently configured)
   - Test with `/api/geocode/proxy/*` endpoints for direct provider access
 
-#### Payment Issues
-- **Razorpay integration**
-  - Configure `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`
-  - Use ngrok for local webhook testing
-  - Check webhook signature verification
+
 
 #### Server Issues
 - **Port conflicts**: Change `PORT` in `.env` file
@@ -645,9 +639,6 @@ curl -X POST http://localhost:3000/api/geocode -H "Content-Type: application/jso
 
 # Test astrology provider connection
 curl -X POST http://localhost:3000/api/astrology/probe -H "Content-Type: application/json" -d '{}'
-
-# Check payment system
-curl -X POST http://localhost:3000/api/payments/create-order -H "Content-Type: application/json" -d '{"phone":"test","planId":"plan_5"}'
 ```
 
 ## API Provider Information

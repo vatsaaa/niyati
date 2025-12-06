@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+# Pre-commit hook for Niyati project
+
+set -e
+
+echo "🔍 Running pre-commit checks..."
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Get list of staged files
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM)
+
+# Check if there are any staged files
+if [ -z "$STAGED_FILES" ]; then
+    echo -e "${YELLOW}No staged files to check${NC}"
+    exit 0
+fi
+
+# Function to check if directory has changes
+has_changes() {
+    echo "$STAGED_FILES" | grep -q "^$1/"
+}
+
+# BFF checks
+if has_changes "be/bff"; then
+    echo -e "${YELLOW}📦 Checking BFF...${NC}"
+    
+    cd be/bff
+    
+    # Check if node_modules exists
+    if [ ! -d "node_modules" ]; then
+        echo -e "${YELLOW}Installing BFF dependencies...${NC}"
+        npm install
+    fi
+    
+    # Run linter if available
+    if npm run | grep -q "lint"; then
+        echo "  → Running ESLint..."
+        npm run lint || {
+            echo -e "${RED}❌ BFF linting failed${NC}"
+            exit 1
+        }
+    fi
+    
+    # Run formatter check if available
+    if npm run | grep -q "format:check"; then
+        echo "  → Checking code formatting..."
+        npm run format:check || {
+            echo -e "${RED}❌ BFF formatting check failed${NC}"
+            echo -e "${YELLOW}Run 'npm run format' to fix${NC}"
+            exit 1
+        }
+    fi
+    
+    # Run tests if available
+    if npm run | grep -q "test"; then
+        echo "  → Running tests..."
+        npm test || {
+            echo -e "${RED}❌ BFF tests failed${NC}"
+            exit 1
+        }
+    fi
+    
+    cd ../..
+    echo -e "${GREEN}✓ BFF checks passed${NC}"
+fi
+
+# UI checks
+if has_changes "ui"; then
+    echo -e "${YELLOW}🎨 Checking UI...${NC}"
+    
+    cd ui
+    
+    # Check if node_modules exists
+    if [ ! -d "node_modules" ]; then
+        echo -e "${YELLOW}Installing UI dependencies...${NC}"
+        npm install
+    fi
+    
+    # Run linter if available
+    if npm run | grep -q "lint"; then
+        echo "  → Running ESLint..."
+        npm run lint || {
+            echo -e "${RED}❌ UI linting failed${NC}"
+            exit 1
+        }
+    fi
+    
+    # Run formatter check if available
+    if npm run | grep -q "format:check"; then
+        echo "  → Checking code formatting..."
+        npm run format:check || {
+            echo -e "${RED}❌ UI formatting check failed${NC}"
+            echo -e "${YELLOW}Run 'npm run format' to fix${NC}"
+            exit 1
+        }
+    fi
+    
+    # Type check if TypeScript
+    if [ -f "tsconfig.json" ] && npm run | grep -q "type-check"; then
+        echo "  → Running type check..."
+        npm run type-check || {
+            echo -e "${RED}❌ UI type check failed${NC}"
+            exit 1
+        }
+    fi
+    
+    cd ..
+    echo -e "${GREEN}✓ UI checks passed${NC}"
+fi
+
+# Check for common issues
+echo -e "${YELLOW}🔍 Running additional checks...${NC}"
+
+# Check for console.log in production code (excluding test files)
+CONSOLE_LOGS=$(echo "$STAGED_FILES" | grep -E '\.(js|jsx|ts|tsx)$' | grep -v -E '(test|spec)\.(js|jsx|ts|tsx)$' | xargs grep -n "console\\.log" 2>/dev/null || true)
+if [ ! -z "$CONSOLE_LOGS" ]; then
+    echo -e "${YELLOW}⚠️  Warning: console.log statements found:${NC}"
+    echo "$CONSOLE_LOGS"
+    echo -e "${YELLOW}Consider removing them before committing${NC}"
+fi
+
+# Check for TODO/FIXME comments in new code
+TODOS=$(echo "$STAGED_FILES" | xargs grep -n -E "(TODO|FIXME|XXX)" 2>/dev/null || true)
+if [ ! -z "$TODOS" ]; then
+    echo -e "${YELLOW}⚠️  Warning: TODO/FIXME comments found:${NC}"
+    echo "$TODOS"
+fi
+
+# Check for sensitive data patterns
+SENSITIVE_PATTERNS="(password|api[_-]?key|secret|token|private[_-]?key).*=.*['\"][^'\"]{8,}"
+SENSITIVE_DATA=$(echo "$STAGED_FILES" | xargs grep -niE "$SENSITIVE_PATTERNS" 2>/dev/null || true)
+if [ ! -z "$SENSITIVE_DATA" ]; then
+    echo -e "${RED}❌ Potential sensitive data found in staged files:${NC}"
+    echo "$SENSITIVE_DATA"
+    echo -e "${RED}Please remove sensitive data before committing${NC}"
+    exit 1
+fi
+
+# Check for large files (>5MB)
+LARGE_FILES=$(echo "$STAGED_FILES" | while read file; do
+    if [ -f "$file" ]; then
+        size=$(wc -c < "$file")
+        if [ $size -gt 5242880 ]; then
+            echo "$file ($(($size / 1048576))MB)"
+        fi
+    fi
+done)
+if [ ! -z "$LARGE_FILES" ]; then
+    echo -e "${RED}❌ Large files detected (>5MB):${NC}"
+    echo "$LARGE_FILES"
+    echo -e "${YELLOW}Consider using Git LFS or reducing file size${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}✅ All pre-commit checks passed!${NC}"
+exit 0

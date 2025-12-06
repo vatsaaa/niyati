@@ -1,0 +1,31 @@
+# Docker Compose - Production Overrides
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+services:
+  bff-service:
+    build:
+      target: production
+    container_name: niyati-bff-prod
+    volumes:
+      # No source code mounting in production
+      # Only environment file if needed (use secrets in real prod)
+      - ./.env.bff:/app/.env:ro
+    environment:
+      - NODE_ENV=production
+      - LOG_PRETTY_PRINT=false
+      - LOG_LEVEL=info
+    restart: always
+
+  ui-service:
+    build:
+      target: production
+    container_name: niyati-ui-prod
+    ports:
+      - "80:80"
+    volumes:
+      # No source code mounting
+      # Nginx config is baked into image
+      []
+    environment:
+      - NODE_ENV=production
+    restart: always

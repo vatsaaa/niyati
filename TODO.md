@@ -60,123 +60,21 @@
 	- Show Name and masked phone/DoB/place in header or side panel.
 
 - [ ] 2.4 Edit flow & immediate update (20-60m, Medium)
-	- Allow editing profile with optimistic update of UI + save to `localStorage`.
-
-- [ ] 2.5 Progressive chat prompts for missing fields (30-90m, Medium)
-	- Small chat messages that gently request missing DoB/place; when user replies, validate and persist.
-
-## Payment (safe, testable steps)
-
-- Overview: gate premium astrological computations behind a paid flow while keeping the chat UI active and non-blocking. Support India-friendly providers (Razorpay, PayU) and multiple payment methods (UPI, cards, wallets).
-
-- [ ] 3.1 Decide pricing model & gating rules (design) (1-2 days)
-
-	- Choose when to require payment (e.g., after profile completion + X free previews, or per-request). Document free vs premium boundaries.
-	- Decide single-price vs subscription vs credits model. Decide currency support (INR, or multi-currency if you plan global payments).
-
-- [ ] 3.2 Provider selection & test accounts (Razorpay / PayU) (0.5-1 day)
-
-	- Create sandbox/test accounts for chosen providers (Razorpay and/or PayU). Note required documents for production onboarding.
-	- Obtain test keys and webhook secrets for local testing.
-
-- [ ] 3.3 Server endpoints (implementation) (1-3 days)
-
-	- POST `/api/payments/create-order` — create provider order/session.
-		- Input: { phone, amountInPaise, currency: 'INR', metadata }
-		- Output: { orderId, keyId, amount } (provider-specific)
-
-	- POST `/api/payments/verify` — optional quick-verify endpoint called by client after Checkout completes (server validates provider signature or queries provider API).
-
-	- POST `/api/payments/webhook` — webhook handler to receive and verify provider events (`payment.captured` / `payment.succeeded`), mark payment persisted and set user paid flag.
-
-	- Persist minimal payment records: payments { id, phone, provider, providerOrderId, providerPaymentId, amount, currency, status, rawEvent, createdAt }
-
-- [ ] 3.4 Client-side queue & gating (implementation) (1-2 days)
-
-	- Add `pendingPremiumRequests` queue in `localStorage` and in-memory mirroring.
-	- When user attempts a premium request and is unpaid: enqueue the request, show a non-blocking payment banner/modal explaining the charge, and offer Pay Now / Continue (limited preview).
-	- On Pay Now: call `/api/payments/create-order`, then initialize provider Checkout (Razorpay or PayU) in a modal; keep chat state intact while checkout runs.
-	- After checkout success: client posts provider tokens to `/api/payments/verify` or waits for webhook confirmation and polls server status; once server confirms payment, flush queued premium requests.
-
-- [ ] 3.5 Provider-specific notes (Razorpay / PayU)
-
-	- Razorpay (recommended for India): server creates Orders via Razorpay Orders API; client loads Razorpay Checkout with `key_id` + `order_id`. Verify signature server-side and use webhooks for async confirmations (UPI might be asynchronous).
-	- PayU: similar flow — server creates transaction/order and client uses PayU's checkout. Read docs for signature verification and webhook events; handle asynchronous UPI statuses.
-
-- [ ] 3.6 Security, webhooks & verification (must-have)
-
-	- Verify webhook signatures using provider secrets; never trust client-reported payment success alone.
-	- Use idempotency keys and store raw events for audit and reconciliation.
-	- Minimize PII on server; store phone only with consent. Consider storing a hashed phone if you want to avoid cleartext PII in DB.
-
-- [ ] 3.7 UX & failure handling
-
-	- Do not block the chat during payment; allow non-premium interactions.
-	- Show spinner/confirmation while verifying payment; if webhooks are delayed, poll server `/api/payments/status?orderId=` with short backoff.
-	- On network/provider error: keep queued requests, allow retry, and present clear instructions.
-
-- [ ] 3.8 Testing & QA (0.5–1 day)
-
-	- Use provider sandbox keys and test cards/UPI ids. Use ngrok or provider CLI to forward webhooks to local server.
-	- Test happy path, canceled checkout, failed payments, delayed webhooks (simulate async UPI), and idempotent retry behavior.
-
-- [ ] 3.9 Acceptance criteria
-
-	- Payment modal/banner shows when user initiates a premium request.
-	- User can pay without leaving the chat (checkout modal or in-page flow), chat remains intact.
-	- Server receives and verifies provider webhook and marks user `paid`.
-	- Client detects paid status (via redirect + polling or webhook confirmation) and automatically submits queued premium requests.
-	- All payment secrets live only on server; webhooks verified.
-
-- Notes & next steps
-
-	- Implementation can start with Razorpay sandbox (or PayU if you prefer). I can scaffold a minimal Node/Express payment proxy with `/create-order`, `/verify`, and `/webhook` and a small in-memory payments store for local testing.
-	- When you're ready I will add the server scaffold and implement client wiring to queue/flush premium requests and to open provider Checkout in a modal.
-
- - [ ] 3.10 Product plans & credit mapping (implementation)
-
-	 - Offer the following purchasable plans in the UI:
-		 - `plan_5` : 5 premium questions — INR 300 (amountInPaise: 30000)
-		 - `plan_10`: 10 premium questions — INR 500 (amountInPaise: 50000)
-
-	 - Server-side mapping: when creating an order include `planId` and `credits` in order metadata. Example metadata: `{ phone, planId: 'plan_5', credits: 5 }`.
-
-	 - API contract additions:
-		 - POST `/api/payments/create-order` request body should accept `planId` (one of `plan_5`, `plan_10`) instead of raw amount in normal usage. Server resolves the amount and credits for the plan.
-		 - Payment verification / webhook handlers must credit the user's account by the `credits` value from metadata on confirmed payment.
-
-	 - Client UI tasks:
-		 - Add two purchase buttons/links in the Profile or Payments area: "Buy 5 questions — ₹300" and "Buy 10 questions — ₹500".
-		 - When clicked, call `/api/payments/create-order` with `{ phone, planId }`, then start checkout with returned order/session.
-		 - After server confirms payment, increment `creditsRemaining` for the user locally and persist to server if consented.
-
-	 - Credit accounting & usage:
-		 - Maintain server-side `userCredits` table: `{ phone, creditsRemaining, lastUpdated }` and update atomically on webhook processing.
-		 - Client should mirror credits in `localStorage` (`niyati_credits_remaining`) for quick UI updates but always validate server-side when performing a premium request.
-		 - When user sends a premium question and `creditsRemaining > 0`, decrement locally and persist to server via `POST /api/credits/consume` (or attach consume to the premium request flow). If the server rejects (race/double-consume), reconcile by fetching current credits.
-
-	 - Tests & QA additions:
-		 - Add an end-to-end test scenario: buy `plan_5`, webhook triggers, client polls and receives `creditsRemaining=5`, then send 5 premium questions and ensure credits decrement to 0 and requests succeed; any further premium question prompts purchase flow.
-		 - Test race conditions: two simultaneous consume attempts should not allow credits to go negative (server-side atomic decrement required).
-
+	- Allow editing profile with optimistic update of UI + save to `localStorage`
 
 ## Astrology API integration (server/client safe steps)
 
 - [ ] 4.1 Choose provider & test account (30-120m, Medium)
 	- Evaluate suggested providers ([FreeAstrologyAPI](https://freeastrologyapi.com/), [VedAstro](https://github.com/VedAstro/VedAstro), [Astrologer-API](https://github.com/g-battaglia/Astrologer-API)). Create a free/test account or read docs and capture example requests/responses.
 
-- [ ] 4.2 Add API config & env vars (10-20m, Low)
-	- Add `VITE_ASTRO_API_URL` and `VITE_ASTRO_API_KEY` (or similar) to local `.env` instructions in README. Keep keys out of source control.
-
-- [ ] 4.3 Implement astrology API wrapper (30-90m, Medium)
-	- Create `src/lib/astrology.js` (or `.ts`) with functions to call the provider, normalize responses, handle errors, and map to a consistent internal format.
-
-- [ ] 4.4 Fetch astrology data when DoB+Place available (15-60m, Medium)
-	- Trigger the wrapper when profile has DoB and Place. Persist a cached copy in `localStorage` keyed by profile (hash) to avoid duplicate calls.
-
+ [✅] 4.2 Add API config & env vars (10-20m, Low)
+ 	- Add `VITE_ASTRO_API_URL` and `VITE_ASTRO_API_KEY` (or similar) to local `.env` instructions in README. Keep keys out of source control.
+ [✅] 4.3 Implement astrology API wrapper (30-90m, Medium)
+ 	- Create `src/lib/astrology.js` (or `.ts`) with functions to call the provider, normalize responses, handle errors, and map to a consistent internal format.
+ [✅] 4.4 Fetch astrology data when DoB+Place available (15-60m, Medium)
+ 	- Trigger the wrapper when profile has DoB and Place. Persist a cached copy in `localStorage` keyed by profile (hash) to avoid duplicate calls.
 - [ ] 4.5 Display basic astrological summary component (30-90m, Medium)
 	- Create `AstrologySummary` component to show sun/moon/ascendant + short textual summary. Add unit/snapshot tests for rendering.
-
 - [ ] 4.6 Error handling & rate-limit/backoff (30-90m, Medium)
 	- Show friendly messages on failure, retry with exponential backoff, and use cached results when appropriate.
 
@@ -200,10 +98,10 @@
 ## Final QA, tests & docs
 
 - [ ] 6.1 Add unit & integration tests (60-180m, Medium)
-	- Tests for formatting, numerology, API wrapper; a smoke integration test for login -> profile -> payment unlock -> chat enabled.
+	- Tests for formatting, numerology, API wrapper; a smoke integration test for login -> profile -> premium unlock -> chat enabled.
 
 - [ ] 6.2 Dev docs & run steps (15-45m, Low)
-	- Update `README.md` with env key instructions, how to run dev server and configure payment/astrology keys.
+	- Update `README.md` with env key instructions, how to run dev server and configure astrology keys.
 
 
 - [✅] 6.3 Countries.json caching policy (20-60m, Low)
@@ -215,7 +113,7 @@
 ## Backend / Persisting Users (security-sensitive)
 
 - [ ] 8.1 Persist first-login details to MongoDB (40-120m, Medium)
-		- Description: When a user logs in for the first time, the client should persist whatever verified/tentative profile data we have (phone, country, name, dob, placeOfBirth, verified flags and explicit consent) into a server-side `users` collection in MongoDB. This allows recognizing returning users (avoid re-asking) and provides a central place for optional server-side features (caching astrology results, payment state, etc.). Do NOT store PII in the DB without explicit consent; the server must enforce consent checks.
+		- Description: When a user logs in for the first time, the client should persist whatever verified/tentative profile data we have (phone, country, name, dob, placeOfBirth, verified flags and explicit consent) into a server-side `users` collection in MongoDB. This allows recognizing returning users (avoid re-asking) and provides a central place for optional server-side features (caching astrology results, etc.). Do NOT store PII in the DB without explicit consent; the server must enforce consent checks.
 		- Subtasks:
 			- Design MongoDB schema for `users` collection: fields should include `phone` (E.164), `countryCode`, `dialCode`, `name`, `dob` (ISO), `placeOfBirth`, `verified` (object), `consentGiven` (boolean), `consentGivenAt` (timestamp), `profileHash`, `createdAt`, `updatedAt`.
 			- Add server endpoint `POST /api/users/upsert-firstlogin` (or similar) that accepts phone + profile and performs an idempotent upsert by `phone`. The endpoint must require `consentGiven=true` and validate inputs on the server before persisting.
@@ -232,7 +130,7 @@
 
 ## User details completion
 
-- [ ] 9.1 When the user provides place of birth look it up and find the country automatically. Use a geocoding API or a local database of cities to countries. Modify the place of birth field to store both city and country for accurate astrology calculations.
+- [✅] 9.1 When the user provides place of birth look it up and find the country automatically. Use a geocoding API or a local database of cities to countries. Modify the place of birth field to store both city and country for accurate astrology calculations.
 
 ### Details & implementation plan
 
@@ -326,110 +224,124 @@
 		 - Prefer storing `countryCode` (ISO2) in downstream calls and only include lat/lng where required by external astrology providers.
 		 - If you want, I can now draft the server-side proxy example (Node/Express + OpenCage) and a small client-side Fuse.js snippet and component for selection. 
 
-		## Payment Flow — Updated (2025-11-23)
-
-		This section consolidates the payment/gating design and provides concrete API contracts, plan mappings, security notes, and test guidance. Use this as the single source-of-truth for implementing payments and client-side gating.
-
-		- **Recommended provider (India):** Razorpay (recommended) — good sandbox, easy Checkout integration, UPI + cards, clear server-side verification. PayU is an alternative if you prefer.
-
-		- **Product plans (fixed mapping):**
-			- `plan_5`  — 5 premium questions — INR 300  (amountInPaise: 30000)
-			- `plan_10` — 10 premium questions — INR 500 (amountInPaise: 50000)
-
-		- **High-level flow:**
-			1. Client requests order for a `planId` via `POST /api/payments/create-order` with `{ phone, planId }`.
-			2. Server creates provider Order (Razorpay Orders API) and returns `{ orderId, keyId, amount, planId, metadata }` to client.
-			3. Client opens Checkout (provider modal) with returned data. Chat UI remains active while Checkout runs.
-			4. On Checkout completion, client calls `POST /api/payments/verify` (optional quick-verify) and server verifies signature or waits for webhook.
-			5. Server receives provider webhook (e.g., `payment.captured`), validates signature, credits user `credits` (from order metadata) and persists payment record.
-			6. Client polls `/api/payments/status?orderId=` (or receives push) and, once confirmed, flushes the queued premium requests.
-
-		- **Server API contracts (recommended):**
-			- `POST /api/payments/create-order`
-				- Input: `{ phone: string, planId: 'plan_5'|'plan_10', metadata?: object }`
-				- Behavior: server resolves plan -> amount/credits, creates provider Order (idempotent by client-supplied idempotency key if provided). Returns `{ orderId, keyId, amount, currency, planId, credits }`.
-
-			- `POST /api/payments/verify`
-				- Input: provider-specific response the client receives after checkout (e.g., `razorpay_payment_id`, `razorpay_order_id`, `razorpay_signature`).
-				- Behavior: server validates signature using provider secret and returns `{ status: 'ok'|'failed', orderId, creditsGranted?: number }`.
-
-			- `POST /api/payments/webhook`
-				- Behavior: provider webhook handler. Validate signature, persist raw event and parsed payment record `{ id, phone?, provider, providerOrderId, providerPaymentId, amount, currency, status }`, credit user `credits` based on order metadata, and respond 200. Use idempotency guards to avoid double-crediting.
-
-			- `GET /api/payments/status?orderId=`
-				- Returns current payment status and credited `creditsRemaining` for the phone/order.
-
-		- **Server-side data model (minimal):**
-			- `payments` table/collection: `{ id, phone, provider, providerOrderId, providerPaymentId, planId, credits, amount, currency, status, rawEvent, createdAt, updatedAt }`.
-			- `userCredits` table: `{ phone, creditsRemaining, lastUpdated }` — updated atomically on webhook processing.
-
-		- **Client-side gating & queue:**
-			- Maintain `pendingPremiumRequests` (in-memory + mirrored to `localStorage`) that stores pending premium question objects.
-			- When user attempts a premium action but lacks credits: enqueue the request and show a non-blocking purchase banner/modal with `Buy 5 questions — ₹300` and `Buy 10 questions — ₹500`.
-			- On purchase: call `POST /api/payments/create-order` with `{ phone, planId }`, open provider Checkout with returned `orderId` + `keyId`, then call `POST /api/payments/verify` (best-effort) and/or poll `/api/payments/status` until server confirms credit. Once credits are confirmed, flush queued requests.
-			- Always treat server confirmations as source-of-truth. Client-local `niyati_credits_remaining` is for quick UX updates only and must be revalidated server-side when performing premium requests.
-
-		- **Security & best practices:**
-			- Never trust client-reported payment success. Validate signatures server-side and use webhooks for final confirmation.
-			- Keep provider keys/secrets on server only (`RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`).
-			- Use idempotency keys when creating orders to avoid duplicate orders on retry.
-			- Minimize PII in server logs. Store `phone` only if user consent was provided. Consider hashing phone in logs for diagnostics.
-
-		- **Edge cases & asynchronous behaviour:**
-			- UPI payments may be asynchronous — do not block UX. Use webhooks + polling. Show a friendly message: "Payment processing — we'll confirm shortly".
-			- If webhooks are delayed, poll `/api/payments/status?orderId=` with exponential backoff for a short window (e.g., 30s). Keep queued requests until server confirms.
-			- On provider 4xx/5xx/429: surface error to user, keep queued requests, allow retry or alternate payment method.
-
-		- **Testing & QA:**
-			- Use Razorpay sandbox keys and test instruments. Use ngrok or local tunnel to forward webhooks to local dev server.
-			- Test scenarios:
-				- Buy `plan_5` happy path — webhook arrives, credits = 5, queued requests processed.
-				- Cancelled checkout — no credits, queued requests remain.
-				- Delayed webhook (simulate) — client polls and succeeds once webhook processed.
-				- Race: two simultaneous consume attempts should not permit credits to go negative — server atomic decrement required.
-
-		- **Acceptance criteria:**
-			- Payment modal/banner displays when a premium request is initiated without sufficient credits.
-			- User can complete payment without leaving the chat; chat remains intact.
-			- Server verifies provider signature and webhook, credits user `credits` accordingly.
-			- Client detects confirmed credits and automatically flushes queued premium requests.
-
-		- **Implementation increment (minimal scaffold):**
-			1. Server: implement `/api/payments/create-order`, `/api/payments/verify`, `/api/payments/webhook` with in-memory store for local testing and configurable provider adapter for Razorpay.
-			2. Client: `pendingPremiumRequests` queue, purchase modal for `plan_5`/`plan_10`, call to `/api/payments/create-order`, open Checkout with returned data, and poll `/api/payments/status` until credit confirmed.
-			3. Tests: simulate webhook events and ensure credits are granted and queued requests are flushed.
-
-		If you'd like, I can scaffold the Node/Express server with Razorpay sandbox wiring and a minimal client integration for the chat UI next.
-
-
-
-Replace the mocked astrology endpoint with a real provider adapter (if you have a provider/key)
-
-This is a local prototype: everything is in-memory. For production replace in-memory maps with a DB (Postgres/Mongo) and Redis for caching/atomic counters.
-
-Astrology is a mocked endpoint — I can add a provider adapter and caching when you pick a provider and provide API keys
-
-Wire the UI Checkout flow (client-side) to use these endpoints
-Add a small integration test and a client-side example wiring to the ui that uses /api/geocode to resolve placeOfBirth
-
-Add a small script to simulate webhooks and exercise the full flow locally
-
-Add Razorpay sandbox keys & webhook secret to be/bff/.env and test a full checkout flow.
-
-Wire the frontend to:
-Call /api/payments/create-order to get orderId and keyId.
-
-Open Razorpay Checkout (if providerOrderId / keyId returned).
-
-After checkout, call /api/payments/verify (best-effort) and poll /api/payments/status.
-
-Replace in-memory orders/credits with persistent DB or Redis for production-grade reliability.
 
 
 TODO:
-- When "Logout / Reset" button of app is clicked, should we also clear the localStorage keys?
-- Add the session x-request-id header to the external webhook call (N8N_WEBHOOK_URL) to help correlate webhook processing with BFF logs. This would add the same x-request-id header (from getSessionReqId()) to that POST.
-- Add an Express middleware to the BFF to ensure x-request-id exists (generate one server-side when missing) and echo it back in response headers — useful for robust correlation.
-- User said "I was born on 11th day of November 2005" the date was not resolved correctly. Add better date parsing / NLU to extract DoB from chat messages.
-- User said "I was born at Raghopur" and the placeOfBirth was not displayed in user details section on the app screen.
-- User said "I was born at Hamirpur", place of birth was not resolved by app.
+- User said "I was born on 11th day of November 2005" the date was not resolved correctly. Add better date parsing / NLU to extract DoB from chat messages
+
+
+
+
+
+
+
+
+# BFF (Backend-for-Frontend) Improvements
+1. Security & Production Readiness
+Add rate limiting to prevent abuse (especially for /api/geocode and /api/astrology endpoints)
+Remove or disable /api/astrology/probe in production - it's a debug endpoint that could expose implementation details
+Add request body size validation beyond the 500kb limit (validate actual payload structure)
+Add CORS origin whitelist instead of allowing all origins in production
+Add graceful shutdown handler to close connections properly
+2. Error Handling & Resilience
+Add global error handler middleware to catch unhandled errors and return consistent responses
+Add 404 handler for undefined routes
+Validate environment variables at startup and fail fast if critical ones are missing
+Add health check endpoint (/health) that checks cache, and optionally provider connectivity
+3. Performance & Monitoring
+Add response time logging middleware
+Add request/response compression (gzip/brotli)
+Consider adding Redis for distributed caching instead of in-memory node-cache (for horizontal scaling)
+Add metrics endpoint (optional) for Prometheus/similar
+4. Code Quality
+Extract magic numbers to constants (e.g., cache TTLs, retry counts)
+Add JSDoc comments to service methods for better IDE support
+Consider TypeScript for better type safety (optional, larger change)
+Consolidate duplicate sanitization logic - both logger.js and astrologyService.js have similar sanitize functions
+5. Dependencies
+Replace deprecated body-parser - Express has built-in body parsing now (express.json(), express.urlencoded())
+Add helmet CSP configuration for better security headers
+Consider adding express-validator for input validation
+UI (React App) Improvements
+1. Performance
+Memoize expensive computations using useMemo:
+filteredCountries recalculates on every render
+getUserCountry() is called multiple times
+Debounce country search input to reduce filtering operations
+Lazy load Privacy modal content only when first opened (already done partially)
+Split large App.jsx into smaller components (ProfileHeader, ChatMessage, LoginForm, etc.)
+2. State Management
+Consolidate localStorage operations into custom hooks (useLocalStorage)
+Consider React Context for shared state (profile, phone, countries) instead of prop drilling
+Add error boundaries to catch rendering errors gracefully
+Move complex extraction logic (extractProfileFields, normalizeDateString) to separate utility files
+3. User Experience
+Add loading states for long operations (geocoding, astrology calculations)
+Add optimistic updates when sending messages
+Add retry button for failed operations instead of just showing error messages
+Add input validation feedback (real-time validation messages)
+Add accessibility attributes (ARIA labels, roles, keyboard navigation)
+4. Code Quality
+Extract magic strings to constants (localStorage keys, API endpoints, cache TTLs)
+Add PropTypes or TypeScript for component props validation
+Reduce function complexity - some functions are 50-100+ lines (split into smaller helpers)
+Remove commented/dead code if any exists
+Add unit tests for utility functions (date parsing, hashing, extraction)
+5. Security
+Sanitize user input before displaying in chat (prevent XSS)
+Validate phone numbers more strictly using libphonenumber or similar
+Add CSP meta tags in index.html
+Review DOMPurify configuration to ensure it's strict enough
+6. Caching & Offline
+Add service worker for offline support (optional)
+Add cache versioning to invalidate old cached data when app updates
+Add cache size limits to prevent localStorage from filling up
+Consider IndexedDB for larger data instead of localStorage
+Shared / Cross-Cutting Improvements
+1. API Communication
+Add request timeout configuration (currently hardcoded in various places)
+Standardize error response format across all endpoints
+Add API versioning (/api/v1/geocode) for future compatibility
+Add request ID propagation from UI through to BFF logs (partially done)
+2. Configuration
+Add environment-specific configs (dev, staging, prod)
+Document all environment variables in README with examples
+Add config validation at app startup
+Consider feature flags for experimental features
+3. Testing
+Add integration tests for critical flows (login → profile → astrology)
+Add E2E tests using Playwright/Cypress
+Add API contract tests between UI and BFF
+Add load/stress tests for BFF endpoints
+4. Documentation
+Add API documentation (OpenAPI/Swagger for BFF)
+Add component documentation (Storybook for UI components - optional)
+Add architecture diagrams showing data flow
+Document cache strategy and TTL decisions
+5. DevOps
+Add Docker support for consistent development environments
+Add CI/CD pipeline (GitHub Actions)
+Add pre-commit hooks (lint, format, test)
+Add dependency vulnerability scanning
+Priority Recommendations (Quick Wins)
+If you want to implement improvements incrementally, I'd recommend this order:
+
+High Priority (Security & Stability):
+
+Replace body-parser with Express built-in parsers
+Add global error handler to BFF
+Add rate limiting to BFF endpoints
+Disable /api/astrology/probe in production
+Add environment variable validation at startup
+Medium Priority (Performance & UX):
+6. Memoize filteredCountries in UI
+7. Extract large App.jsx into smaller components
+8. Add loading states for async operations
+9. Add health check endpoint to BFF
+10. Consolidate duplicate sanitization logic
+
+Lower Priority (Nice to Have):
+11. Add TypeScript gradually
+12. Add unit/integration tests
+13. Add service worker for offline support
+14. Consider Redis for distributed caching

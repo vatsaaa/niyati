@@ -1,0 +1,73 @@
+# Docker Compose for Niyati - Development Environment
+# Usage: docker-compose up -d
+
+services:
+  # BFF Service (Backend for Frontend)
+  bff-service:
+    build:
+      context: ./be/bff
+      dockerfile: Dockerfile
+      target: development
+    container_name: niyati-bff-dev
+    ports:
+      - "3000:3000"
+    volumes:
+      # Source code for hot reload
+      - ./be/bff:/app
+      # Prevent node_modules from being overwritten by host
+      - /app/node_modules
+    env_file:
+      - .env.bff
+    environment:
+      - NODE_ENV=development
+      - LOG_PRETTY_PRINT=true
+    networks:
+      - niyati
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/api/v1/telemetry/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    depends_on: []
+
+  # UI Service (React Frontend)
+  ui-service:
+    build:
+      context: ./ui
+      dockerfile: Dockerfile
+      target: development
+    container_name: niyati-ui-dev
+    ports:
+      - "5173:5173"
+    volumes:
+      # Source code for hot reload
+      - ./ui:/app
+      # Prevent node_modules from being overwritten
+      - /app/node_modules
+    env_file:
+      - .env.ui
+    environment:
+      - NODE_ENV=development
+    networks:
+      - niyati
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5173"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    depends_on:
+      - bff-service
+
+networks:
+  niyati:
+    driver: bridge
+    name: niyati
+
+volumes:
+  # Named volumes for persistence (if needed in future)
+  bff-node-modules:
+  ui-node-modules:

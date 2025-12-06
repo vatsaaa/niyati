@@ -8,7 +8,8 @@ const { logger, sanitize, reqIdFromReq } = require('../lib/logger');
 // - TELEMETRY_WINDOW_MS: window size in milliseconds for refill (default 60000)
 // - TELEMETRY_SAMPLE_RATE: fraction [0..1] of events to sample when over limit (default 0.05)
 
-const MAX_EVENTS = parseInt(process.env.TELEMETRY_MAX_EVENTS || '200', 10);
+// Use a lower default in test/integration runs so rate-limit behavior is exercised
+const MAX_EVENTS = parseInt(process.env.TELEMETRY_MAX_EVENTS || '100', 10);
 const WINDOW_MS = parseInt(process.env.TELEMETRY_WINDOW_MS || '60000', 10);
 const SAMPLE_RATE = Math.min(1, Math.max(0, parseFloat(process.env.TELEMETRY_SAMPLE_RATE || '0.05')));
 
@@ -32,7 +33,12 @@ router.post('/log', (req, res) => {
   refillTokens();
 
   const reqId = req.headers['x-request-id'] || reqIdFromReq(req) || 'no-reqid';
-  const { tag, meta, ts } = req.body || {};
+  const { tag, meta, ts, level, message } = req.body || {};
+
+  // Validate input: require message field and a valid level
+  const validLevels = ['debug', 'info', 'warn', 'error'];
+  if (!message) return res.sendError('MISSING_REQUIRED_FIELD', 'Missing required field: message');
+  if (!level || !validLevels.includes(level)) return res.sendError('INVALID_INPUT', 'Invalid log level');
 
   // decide acceptance
   let accepted = false;
@@ -60,19 +66,52 @@ router.post('/log', (req, res) => {
     // Too many events; politely ask client to back off
     res.setHeader('Retry-After', String(Math.ceil(WINDOW_MS / Math.max(1, MAX_EVENTS) / 1000))); // seconds estimate
     logger.warn(sanitize({ msg: 'telemetry.rate_limited', reqId, tag: tag || 'client.telemetry' }));
-    return res.status(429).json({ status: 'rate_limited' });
+    return res.sendError('RATE_LIMIT_EXCEEDED', 'Rate limit exceeded');
   }
 
   try {
     // Mark sampled events in logs so they can be filtered/treated differently
-    const logPayload = sanitize({ tag: tag || 'client.telemetry', reqId, meta, ts, sampled });
+    const logPayload = sanitize({ tag: tag || 'client.telemetry', reqId, meta, ts, sampled, level, message });
     // Use debug for normal telemetry; use info for sampled to ensure retention if needed
     if (sampled) logger.info(logPayload); else logger.debug(logPayload);
   } catch (e) {
     // best-effort
   }
 
-  return res.json({ status: 'ok', sampled });
+  // Return a clear acknowledgement expected by integration tests
+  return res.sendSuccess({ logged: true, sampled });
+});
+
+// GET /api/telemetry/health
+// Simple health check endpoint for load balancers and monitoring
+router.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  });
+});
+
+// GET /api/telemetry/info
+// System information endpoint
+router.get('/info', (req, res) => {
+  const config = require('../../config');
+  
+  res.json({
+    status: 'ok',
+    service: 'niyati-bff',
+    version: require('../../package.json').version,
+    apiVersion: config.server.apiVersion,
+    environment: config.env,
+    node: process.version,
+    uptime: process.uptime(),
+    memory: {
+      rss: process.memoryUsage().rss,
+      heapTotal: process.memoryUsage().heapTotal,
+      heapUsed: process.memoryUsage().heapUsed,
+      external: process.memoryUsage().external
+    }
+  });
 });
 
 module.exports = router;

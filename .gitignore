@@ -13,9 +13,27 @@ node_modules/
 .env
 .env.local
 .env.*.local
-/ui/.env
 /ui/.env.local
 /ui/.env.*.local
+/be/bff/.env
+
+# Docker environment files (do NOT commit)
+.env.bff
+.env.bff.local
+.env.ui
+.env.ui.local
+
+# Allow environment templates (these should be committed)
+!.env.development
+!.env.staging
+!.env.production
+!.env.example
+!.env.bff.example
+!.env.ui.example
+!/ui/.env.development
+!/ui/.env.staging
+!/ui/.env.production
+!/be/bff/.env.example
 
 # Logs
 logs/

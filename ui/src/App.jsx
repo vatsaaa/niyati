@@ -1,107 +1,41 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Sparkles, Moon, Star, Trash2, Phone, ChevronDown } from 'lucide-react';
-
-// --- CONFIGURATION ---
-const N8N_WEBHOOK_URL = "https://nonexperientially-nonascetical-agnes.ngrok-free.dev/webhook/chat";
-const BFF_BASE_URL = window.location.hostname === 'localhost' ? 'http://localhost:3000' : '';
-
-// Default fallback countries (used until /countries.json is fetched)
-const DEFAULT_COUNTRIES = [
-  { code: 'US', name: 'United States', dialCode: '+1', flag: '🇺🇸', phoneLength: 10, phoneRegex: '^\\d{10}$' },
-  { code: 'IN', name: 'India', dialCode: '+91', flag: '🇮🇳', phoneLength: 10, phoneRegex: '^\\d{10}$' },
-  { code: 'UK', name: 'United Kingdom', dialCode: '+44', flag: '🇬🇧', phoneLength: 10, phoneRegex: '^\\d{10}$' }
-];
+import { buildApiUrl, N8N_WEBHOOK_URL, CACHE_CONFIG, RETRY_CONFIG } from './config';
+import { useAuth, useProfile, useMessages } from './hooks/useAppState';
+import LoginForm from './components/LoginForm';
+import ProfileHeader from './components/ProfileHeader';
+import MessageList from './components/MessageList';
+import ChatInput from './components/ChatInput';
+import BackgroundStars from './components/BackgroundStars';
+import PrivacyModal from './components/PrivacyModal';
+import { marked } from 'marked';
+import { parseNaturalDate, parseNaturalTime, normalizeDate } from './utils/dateParser';
 
 const NiyatiChat = () => {
-  // 1. STATE MANAGEMENT
-  // We store the phone number instead of a random session ID
-  // Use canonical keys: `niyati_user_phone_number`.
-  const [phoneNumber, setPhoneNumber] = useState(() => {
-    return localStorage.getItem('niyati_user_phone_number') || '';
-  });
+  // Custom hooks for state management
+  const auth = useAuth();
+  const { profile, updateProfile, resetProfile } = useProfile();
+  const { messages, addMessage, clearMessages, setMessages } = useMessages();
 
-  // Only show chat if we have a phone number (check both new and legacy keys)
-  const [isLoggedIn, setIsLoggedIn] = useState(() => {
-    return !!localStorage.getItem('niyati_user_phone_number');
-  });
-
-  const [tempPhone, setTempPhone] = useState('');
-  const [countries, setCountries] = useState(() => {
-    try {
-      const saved = localStorage.getItem('niyati_countries');
-      return saved ? JSON.parse(saved) : DEFAULT_COUNTRIES;
-    } catch (e) {
-      return DEFAULT_COUNTRIES;
-    }
-  });
-
-  // initialize selected country from localStorage or fallback
-  const [selectedCountry, setSelectedCountry] = useState(() => {
-    try {
-      const savedCode = localStorage.getItem('niyati_user_country_code');
-      if (savedCode) {
-        const found = (JSON.parse(localStorage.getItem('niyati_countries')) || DEFAULT_COUNTRIES).find(c => c.code === savedCode);
-        if (found) return found;
-      }
-    } catch (e) {}
-    return DEFAULT_COUNTRIES[0];
-  });
-  const [showDropdown, setShowDropdown] = useState(false);
-  const [countrySearch, setCountrySearch] = useState('');
-  const dropdownRef = useRef(null);
-
-  // 2. MESSAGE HISTORY
-  const [messages, setMessages] = useState(() => {
-    const savedMessages = localStorage.getItem('niyati_chat_history');
-    if (savedMessages) {
-      try {
-        const parsed = JSON.parse(savedMessages);
-        return parsed.map(msg => ({ ...msg, timestamp: new Date(msg.timestamp) }));
-      } catch (e) {
-        console.error("Failed to parse history", e);
-      }
-    }
-    // Default welcome message
-    return [{
-      id: 1,
-      text: "Hello! I am Niyati. I see you have returned. What is on your mind today?",
-      sender: 'bot',
-      timestamp: new Date()
-    }];
-  });
-
+  // UI state
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const messagesEndRef = useRef(null);
-
-  // Helper: load user profile from storage with migration from legacy keys
-  function loadUserProfileFromStorage() {
-    try {
-      const savedNew = localStorage.getItem('niyati_user_profile');
-      if (savedNew) return JSON.parse(savedNew);
-
-      // No legacy fallback: only read canonical `niyati_user_profile`
-
-      // Default canonical shape
-      return { user_name: '', user_dob: '', user_placeOfBirth: '', user_timeOfBirth: '', user_currentLocation: '', user_verified: {}, user_consentGiven: false };
-    } catch (e) {
-      return { user_name: '', user_dob: '', user_placeOfBirth: '', user_currentLocation: '', user_verified: {}, user_consentGiven: false };
-    }
-  }
-
-  // Profile state: canonical shape stored under `niyati_user_profile`
-  const [profile, setProfile] = useState(() => loadUserProfileFromStorage());
   const [consentChecked, setConsentChecked] = useState(() => {
     try {
-      const p = loadUserProfileFromStorage();
-      return !!p.user_consentGiven;
-    } catch (e) { return false; }
+      const savedProfile = localStorage.getItem('niyati_user_profile');
+      if (savedProfile) {
+        const parsed = JSON.parse(savedProfile);
+        return !!parsed.user_consentGiven;
+      }
+    } catch (e) {}
+    return false;
   });
-
-  // Privacy modal state (load markdown renderer at runtime from CDN to avoid bundler errors)
+  
+  // Privacy modal state
   const [showPrivacyModal, setShowPrivacyModal] = useState(false);
   const [privacyHtml, setPrivacyHtml] = useState('');
   const [privacyLoading, setPrivacyLoading] = useState(false);
+  
+  const messagesEndRef = useRef(null);
   const privacyInFlightRef = useRef(false);
 
   const openPrivacy = async () => {
@@ -145,61 +79,15 @@ const NiyatiChat = () => {
 
   // Auto-scroll
   useEffect(() => {
-    if (isLoggedIn) {
+    if (auth.isLoggedIn) {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-      localStorage.setItem('niyati_chat_history', JSON.stringify(messages));
     }
-  }, [messages, isLoggedIn]);
+  }, [messages, auth.isLoggedIn]);
 
   // Persist canonical profile whenever it changes
   useEffect(() => {
     try { localStorage.setItem('niyati_user_profile', JSON.stringify(profile)); } catch (e) {}
   }, [profile]);
-
-  // Close dropdown when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
-        setShowDropdown(false);
-        setCountrySearch('');
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  // Fetch countries.json at runtime and update list (cached in localStorage)
-  useEffect(() => {
-    let cancelled = false;
-    const load = async () => {
-      try {
-        const res = await fetch('/countries.json');
-        if (!res.ok) return;
-        const data = await res.json();
-        if (!data || !Array.isArray(data.countries)) return;
-        const mapped = data.countries.map(c => ({ ...c, flag: c.flagEmoji || c.flag || '' }));
-        if (cancelled) return;
-        setCountries(mapped);
-        try { localStorage.setItem('niyati_countries', JSON.stringify(mapped)); } catch (e) {}
-        // If user has previously selected a country code, update the selectedCountry reference
-        const savedCode = localStorage.getItem('niyati_user_country_code');
-        if (savedCode) {
-          const found = mapped.find(m => m.code === savedCode);
-          if (found) setSelectedCountry(found);
-        }
-      } catch (e) {
-        // fail silently and use fallback
-      }
-    };
-    load();
-    return () => { cancelled = true; };
-  }, []);
-
-  // Filter countries based on search
-  const filteredCountries = countries.filter(country => 
-    country.name.toLowerCase().includes(countrySearch.toLowerCase()) ||
-    country.code.toLowerCase().includes(countrySearch.toLowerCase())
-  );
 
   // 3. LOGIN HANDLER
   // Helper: create a UUIDv4 for request correlation and a wrapper to call BFF with `x-request-id` header
@@ -225,11 +113,15 @@ const NiyatiChat = () => {
     }
   }
 
-  // bffFetch: prefixes BFF_BASE_URL when needed and adds an `x-request-id` header (session-level)
+  // bffFetch: uses versioned API endpoint and adds x-request-id header for request tracing
   async function bffFetch(pathOrUrl, options = {}) {
-    const url = (typeof pathOrUrl === 'string' && (pathOrUrl.startsWith('http://') || pathOrUrl.startsWith('https://')))
-      ? pathOrUrl
-      : `${BFF_BASE_URL}${pathOrUrl}`;
+    // Determine final URL
+    let url;
+    if (typeof pathOrUrl === 'string' && (pathOrUrl.startsWith('http://') || pathOrUrl.startsWith('https://'))) {
+      url = pathOrUrl; // Absolute URL, use as-is
+    } else {
+      url = buildApiUrl(pathOrUrl); // Build versioned API URL
+    }
 
     const reqId = getSessionReqId();
 
@@ -237,7 +129,44 @@ const NiyatiChat = () => {
     headers.set('x-request-id', reqId);
 
     const merged = { ...options, headers };
+    console.log('[bffFetch] Calling:', url, 'with options:', merged);
     return fetch(url, merged);
+  }
+
+  // bffFetchWithRetry: wrapper that retries transient errors with exponential backoff
+  // Uses config values for retry parameters
+  async function bffFetchWithRetry(pathOrUrl, options = {}, opts = {}) {
+    const retries = typeof opts.retries === 'number' ? opts.retries : RETRY_CONFIG.maxRetries;
+    const baseDelay = typeof opts.baseDelayMs === 'number' ? opts.baseDelayMs : RETRY_CONFIG.baseDelayMs;
+    const retryOnStatus = Array.isArray(opts.retryOnStatus) ? opts.retryOnStatus : [502, 503, 504, 429];
+
+    let attempt = 0;
+    while (true) {
+      try {
+        const res = await bffFetch(pathOrUrl, options);
+        // If status is in retry list, throw to trigger retry
+        if (retryOnStatus.includes(res.status) && attempt < retries) {
+          throw new Error(`Transient status ${res.status}`);
+        }
+        return res;
+      } catch (err) {
+        attempt++;
+        if (attempt > retries) throw err;
+        const delay = baseDelay * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 100);
+        // small sleep
+        await new Promise(r => setTimeout(r, delay));
+      }
+    }
+  }
+
+  // Simple deterministic-ish hash for caching keys (not cryptographic)
+  function simpleHash(str) {
+    let h = 2166136261 >>> 0;
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 16777619) >>> 0;
+    }
+    return h.toString(16);
   }
 
   // Send a small, sanitized telemetry event to the BFF for central logging.
@@ -260,23 +189,11 @@ const NiyatiChat = () => {
       // best-effort, do not surface to user
     }
   }
-  const handleLogin = async (e) => {
-    e.preventDefault();
-    const requiredLen = selectedCountry?.phoneLength || 10;
-    if (!tempPhone.trim() || tempPhone.length !== requiredLen) {
-      alert(`Please enter a valid ${requiredLen}-digit phone number`);
-      return;
-    }
-    if (!consentChecked) {
-      alert('Please review and accept the Privacy Policy to continue.');
-      return;
-    }
-    // Combine country code with phone number (format: +1-5551234567)
-    const fullPhone = `${selectedCountry.dialCode}-${tempPhone.trim()}`;
+  const handleLogin = async (phone, country) => {
+    const fullPhone = `${country.dialCode}-${phone.trim()}`;
     
-    // Persist phone and country under canonical keys. Legacy writes removed (Phase A).
-    try { localStorage.setItem('niyati_user_phone_number', fullPhone); } catch (e) {}
-    try { localStorage.setItem('niyati_user_country_code', selectedCountry.code); } catch (e) {}
+    // Use auth hook to login
+    auth.login(phone, country);
 
     // Generate a fresh session-level request id for this login session
     try { localStorage.setItem('niyati_x_request_id', createUUIDv4()); } catch (e) {}
@@ -285,12 +202,11 @@ const NiyatiChat = () => {
     let currentLocationData = null;
     try {
       // Call the current location API (BFF) with request-id header
-      const locationResponse = await bffFetch('/api/geocode/current-location');
+      const locationResponse = await bffFetch('/geocode/current-location');
       if (locationResponse.ok) {
         const locationData = await locationResponse.json();
-        if (locationData.status === 'ok' && locationData.location) {
-          // Store only the location object as specified
-          currentLocationData = locationData.location;
+        if (locationData.status === 'ok' && locationData.data && locationData.data.location) {
+          currentLocationData = locationData.data.location;
         }
       }
     } catch (e) {
@@ -300,19 +216,12 @@ const NiyatiChat = () => {
 
     // Persist consent and current location in canonical profile shape
     try {
-      const existing = JSON.parse(localStorage.getItem('niyati_user_profile') || '{}');
-      const updatedProfile = { 
-        ...existing, 
+      const existing = profile;
+      updateProfile({ 
         user_consentGiven: true,
-        user_currentLocation: currentLocationData || existing.user_currentLocation || '',
+        user_currentLocation: currentLocationData || profile.user_currentLocation || '',
         updatedAt: new Date().toISOString() 
-      };
-      localStorage.setItem('niyati_user_profile', JSON.stringify(updatedProfile));
-      setProfile(prev => ({ 
-        ...prev, 
-        user_consentGiven: true,
-        user_currentLocation: currentLocationData || prev.user_currentLocation 
-      }));
+      });
       
       // Check if profile is complete after consent and process astrology
       const updatedProfileWithConsent = {
@@ -326,35 +235,22 @@ const NiyatiChat = () => {
         processCompleteProfile(updatedProfileWithConsent);
       }
     } catch (e) {}
-    setPhoneNumber(fullPhone);
-    setIsLoggedIn(true);
   };
 
   // Get country data for logged-in user
   const getUserCountry = () => {
     const savedCountryCode = localStorage.getItem('niyati_user_country_code') || 'US';
-    return countries.find(c => c.code === savedCountryCode) || countries[0] || DEFAULT_COUNTRIES[0];
+    return auth.countries.find(c => c.code === savedCountryCode) || auth.countries[0] || { code: 'US', name: 'United States', dialCode: '+1', flag: '🇺🇸', phoneLength: 10 };
   };
 
   // 4. LOGOUT / RESET HANDLER
   const handleReset = () => {
     if (window.confirm("This will clear your chat history on this device and log you out. Continue?")) {
-      localStorage.removeItem('niyati_chat_history');
-      // remove both canonical and legacy keys
-      // Remove only canonical keys. Legacy keys are no longer written by the app.
-      localStorage.removeItem('niyati_user_phone_number');
-      localStorage.removeItem('niyati_user_country_code');
-      localStorage.removeItem('niyati_user_profile');
+      auth.logout();
+      resetProfile();
+      clearMessages();
       // Clear session request id
       try { localStorage.removeItem('niyati_x_request_id'); } catch (e) {}
-      // Reset in-memory state as well
-      setIsLoggedIn(false);
-      setPhoneNumber('');
-      setTempPhone('');
-      setConsentChecked(false);
-      // reset profile state to canonical empty shape
-      setProfile({ user_name: '', user_dob: '', user_placeOfBirth: '', user_currentLocation: '', user_verified: {}, user_consentGiven: false });
-      setMessages([]);
       // reload to ensure all components pick up cleared storage
       window.location.reload();
     }
@@ -371,43 +267,56 @@ const NiyatiChat = () => {
       sender: 'user',
       timestamp: new Date()
     };
-    setMessages(prev => [...prev, userMessage]);
+    addMessage(userMessage);
     setInputText('');
     setIsLoading(true);
 
     // --- Chat-extraction (silent) ---
     // Run extraction heuristics on the user's message and silently persist values for later review.
     const extracted = extractProfileFields(userMessage.text);
+    console.log('Extracted profile fields:', extracted);
+    
+    // Prepare normalized message by replacing extracted values with normalized versions
+    let normalizedMessage = userMessage.text;
+    
     if (extracted.name || extracted.dob || extracted.placeOfBirth || extracted.timeOfBirth) {
-      setProfile(prev => ({
-        ...prev,
-        user_name: extracted.name || prev.user_name,
-        user_dob: extracted.dob ? (normalizeDateString(extracted.dob) || extracted.dob) : prev.user_dob,
-        user_placeOfBirth: extracted.placeOfBirth || prev.user_placeOfBirth,
-        user_timeOfBirth: extracted.timeOfBirth ? (normalizeTimeString(extracted.timeOfBirth) || extracted.timeOfBirth) : prev.user_timeOfBirth,
-        user_verified: {
-          ...(prev.user_verified || {}),
-          ...(extracted.name ? { name: false } : {}),
-          ...(extracted.dob ? { dob: false } : {}),
-          ...(extracted.placeOfBirth ? { placeOfBirth: false } : {}),
-          ...(extracted.timeOfBirth ? { timeOfBirth: false } : {})
-        }
-      }));
-      
-      // Check if profile is now complete and process astrology if so
-      const updatedProfile = {
+      const updated = {
         user_name: extracted.name || profile.user_name,
         user_dob: extracted.dob ? (normalizeDateString(extracted.dob) || extracted.dob) : profile.user_dob,
         user_placeOfBirth: extracted.placeOfBirth || profile.user_placeOfBirth,
         user_timeOfBirth: extracted.timeOfBirth ? (normalizeTimeString(extracted.timeOfBirth) || extracted.timeOfBirth) : profile.user_timeOfBirth,
         user_currentLocation: profile.user_currentLocation,
-        user_consentGiven: profile.user_consentGiven
+        user_consentGiven: profile.user_consentGiven,
+        user_verified: {
+          ...(profile.user_verified || {}),
+          ...(extracted.name ? { name: false } : {}),
+          ...(extracted.dob ? { dob: false } : {}),
+          ...(extracted.placeOfBirth ? { placeOfBirth: false } : {}),
+          ...(extracted.timeOfBirth ? { timeOfBirth: false } : {})
+        }
       };
+      console.log('Updated profile with extracted data:', updated);
+      
+      // Replace extracted values in the message with normalized versions
+      if (extracted.dob && updated.user_dob) {
+        const formattedDob = formatDobForDisplay(updated.user_dob, auth.countries);
+        if (formattedDob) {
+          normalizedMessage = normalizedMessage.replace(extracted.dob, formattedDob);
+          console.log('Replaced date in message:', extracted.dob, '->', formattedDob);
+        }
+      }
+      
+      if (extracted.timeOfBirth && updated.user_timeOfBirth) {
+        normalizedMessage = normalizedMessage.replace(extracted.timeOfBirth, updated.user_timeOfBirth);
+        console.log('Replaced time in message:', extracted.timeOfBirth, '->', updated.user_timeOfBirth);
+      }
+      
+      updateProfile(updated);
       
       // Process astrology in background if profile is complete
-      if (isProfileComplete(updatedProfile)) {
+      if (isProfileComplete(updated)) {
         console.log('Profile is complete, processing astrology...');
-        processCompleteProfile(updatedProfile);
+        processCompleteProfile(updated);
       }
       
       // Background: resolve the extracted placeOfBirth to a structured place (geocode)
@@ -417,26 +326,13 @@ const NiyatiChat = () => {
             const { location } = await resolveLocationAndTimezone(extracted.placeOfBirth);
             if (location) {
               const formatted = formatPlaceFromLocation(location);
-              const existing = JSON.parse(localStorage.getItem('niyati_user_profile') || '{}');
-              const updated = {
-                ...existing,
-                user_placeOfBirth: formatted || extracted.placeOfBirth,
-                // keep currentLocation untouched here (it's a separate value)
-                updatedAt: new Date().toISOString()
+              const candidate = {
+                ...profile,
+                user_placeOfBirth: formatted || extracted.placeOfBirth
               };
-              // Persist canonical profile
-              try { localStorage.setItem('niyati_user_profile', JSON.stringify(updated)); } catch (e) {}
-              // Update in-memory profile
-              setProfile(prev => ({ ...prev, user_placeOfBirth: formatted || extracted.placeOfBirth }));
+              updateProfile(candidate);
 
               // After resolving place, optionally trigger astrology if profile is now complete
-              const candidate = {
-                ...updated,
-                user_consentGiven: updated.user_consentGiven || profile.user_consentGiven,
-                user_timeOfBirth: profile.user_timeOfBirth || updated.user_timeOfBirth,
-                user_dob: profile.user_dob || updated.user_dob,
-                user_name: profile.user_name || updated.user_name
-              };
               if (isProfileComplete(candidate)) {
                 processCompleteProfile(candidate);
               }
@@ -452,14 +348,40 @@ const NiyatiChat = () => {
     }
 
     try {
+      // Use the session request id once so header and body match exactly
+      const webhookReqId = getSessionReqId();
+      // Log the webhook request id for quick local debugging and correlation
+      console.log('N8N webhook reqId:', webhookReqId);
+      console.log('N8N webhook URL:', N8N_WEBHOOK_URL);
+      
+      // Create AbortController for timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
+      
       const response = await fetch(N8N_WEBHOOK_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-request-id': webhookReqId,
+          'ngrok-skip-browser-warning': 'true'
+        },
         body: JSON.stringify({
-          message: userMessage.text, 
-          sessionId: phoneNumber // <--- KEY FIX: Send Phone Number as ID
+          message: normalizedMessage, // Use normalized message with replaced values
+          sessionId: auth.phoneNumber, // <--- KEY FIX: Send Phone Number as ID
+          metadata: { reqId: webhookReqId }
         }),
+        signal: controller.signal
       });
+
+      clearTimeout(timeoutId);
+
+      // Emit a small telemetry event so the server-side logs can correlate webhook sends.
+      try {
+        // fire-and-forget; sendClientLog respects consent and sanitizes payload
+        sendClientLog('webhook.sent', { reqId: webhookReqId, status: response && response.status });
+      } catch (e) {
+        // ignore telemetry errors
+      }
 
       let botResponseText = "The stars are clouded... I could not reach the server.";
 
@@ -478,17 +400,29 @@ const NiyatiChat = () => {
         sender: 'bot',
         timestamp: new Date()
       };
-      setMessages(prev => [...prev, botMessage]);
+      addMessage(botMessage);
 
     } catch (error) {
       console.error("Error:", error);
-      setMessages(prev => [...prev, {
+      console.error("Error name:", error.name);
+      console.error("Error message:", error.message);
+      console.error("Error stack:", error.stack);
+      
+      let errorMessage = "I cannot reach the server. Please check your connection.";
+      
+      if (error.name === 'AbortError') {
+        errorMessage = "The request took too long to respond. The AI might be processing your message. Please try again in a moment.";
+      } else if (error.name === 'TypeError' && error.message.includes('fetch')) {
+        errorMessage = "Network error: Unable to connect to the chat service. Please check if the service is running.";
+      }
+      
+      addMessage({
         id: Date.now() + 1,
-        text: "I cannot reach the server. Please check your connection.",
+        text: errorMessage,
         sender: 'bot',
         isError: true,
         timestamp: new Date()
-      }]);
+      });
     } finally {
       setIsLoading(false);
     }
@@ -513,6 +447,18 @@ const NiyatiChat = () => {
     else if (dobMatchDMY) result.dob = dobMatchDMY[1];
     else if (dobMatchText) result.dob = dobMatchText[1];
     else if (dobMatchTextSpace) result.dob = dobMatchTextSpace[1];
+    else {
+      // Try natural language parsing for formats like "the fifteenth of March, 1990"
+      try {
+        const chronoResult = parseNaturalDate(text);
+        if (chronoResult && chronoResult.confidence > 0.6) {
+          console.log('Extracted date using Chrono:', chronoResult);
+          result.dob = chronoResult.date; // Already in YYYY-MM-DD format
+        }
+      } catch (e) {
+        console.debug('Chrono date extraction failed:', e);
+      }
+    }
 
     // Place of birth patterns
     // Match common variants: "born in", "born at", "from", and forms like
@@ -537,14 +483,40 @@ const NiyatiChat = () => {
     else if (timeMatchMinAmPm) result.timeOfBirth = timeMatchMinAmPm[1].trim();
     else if (timeMatchMin24) result.timeOfBirth = timeMatchMin24[1].trim();
     else if (timeMatchHourAmPm) result.timeOfBirth = timeMatchHourAmPm[1].trim();
+    else {
+      // Try natural language parsing for formats like "half past two in the afternoon"
+      try {
+        const chronoResult = parseNaturalTime(text);
+        if (chronoResult && chronoResult.confidence > 0.6) {
+          console.log('Extracted time using Chrono:', chronoResult);
+          result.timeOfBirth = chronoResult.time; // Already in HH:MM:SS format
+        }
+      } catch (e) {
+        console.debug('Chrono time extraction failed:', e);
+      }
+    }
 
     return result;
   }
 
   // Normalize time strings to HH:MM (24-hour) when possible
+  // Normalize time string to HH:MM:SS format
+  // Now enhanced with Chrono for natural language time parsing
   function normalizeTimeString(s) {
     if (!s || typeof s !== 'string') return '';
     let t = s.trim();
+    
+    // Try natural language parsing first for complex formats like "half past two", "2:30 in the afternoon"
+    try {
+      const chronoResult = parseNaturalTime(t);
+      if (chronoResult && chronoResult.confidence > 0.7) {
+        return chronoResult.time;
+      }
+    } catch (e) {
+      // Chrono failed, continue with regex patterns
+      console.debug('Chrono time parsing failed, falling back to regex:', e);
+    }
+    
     // Handle AM/PM with optional seconds: hh:mm:ss am/pm or hh:mm am/pm or hh am/pm
     const ampmMatch = t.match(/^(\d{1,2})(?::(\d{2}))?(?::(\d{2}))?\s*(am|pm)$/i);
     if (ampmMatch) {
@@ -579,6 +551,18 @@ const NiyatiChat = () => {
       let h = parseInt(justH[1],10);
       if (h >=0 && h <=23) return `${String(h).padStart(2,'0')}:00:00`;
     }
+    
+    // Final fallback: try Chrono with lower confidence threshold
+    try {
+      const chronoResult = parseNaturalTime(t);
+      if (chronoResult && chronoResult.confidence > 0.5) {
+        console.debug('Using Chrono time result with confidence:', chronoResult.confidence);
+        return chronoResult.time;
+      }
+    } catch (e) {
+      // ignore
+    }
+    
     return '';
   }
 
@@ -600,14 +584,27 @@ const NiyatiChat = () => {
 
   // Very small date normalizer: tries to convert common forms to YYYY-MM-DD
   // countryHint: use country code (e.g., 'US') to disambiguate MM/DD vs DD/MM
+  // Now enhanced with Chrono for natural language parsing
   function normalizeDateString(s, countryHint = 'US') {
     if (!s || typeof s !== 'string') return null;
     s = s.trim();
+    
     // YYYY-MM-DD already
     const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
     if (iso) return s;
 
-    // Try textual parse first (e.g., '12 Jan 1990' or 'Jan 12 1990')
+    // Try natural language parsing with Chrono first for complex formats
+    try {
+      const chronoResult = parseNaturalDate(s);
+      if (chronoResult && chronoResult.confidence > 0.8) {
+        return chronoResult.date;
+      }
+    } catch (e) {
+      // Chrono failed, continue with regex patterns
+      console.debug('Chrono parsing failed, falling back to regex:', e);
+    }
+
+    // Try textual parse (e.g., '12 Jan 1990' or 'Jan 12 1990')
     const textDate = Date.parse(s);
     if (!isNaN(textDate)) {
       const dt = new Date(textDate);
@@ -637,6 +634,17 @@ const NiyatiChat = () => {
       if (parseInt(month, 10) < 1 || parseInt(month, 10) > 12) return null;
       if (parseInt(day, 10) < 1 || parseInt(day, 10) > 31) return null;
       return `${year}-${month}-${day}`;
+    }
+    
+    // Final fallback: try Chrono with lower confidence threshold
+    try {
+      const chronoResult = parseNaturalDate(s);
+      if (chronoResult && chronoResult.confidence > 0.5) {
+        console.debug('Using Chrono result with confidence:', chronoResult.confidence);
+        return chronoResult.date;
+      }
+    } catch (e) {
+      // ignore
     }
 
     return null;
@@ -788,6 +796,22 @@ const NiyatiChat = () => {
   // Call geocoding API and get timezone
   async function resolveLocationAndTimezone(placeOfBirth) {
     try {
+      // Try cache first (TTL from config)
+      const normalized = (placeOfBirth || '').trim().toLowerCase();
+      const geoCacheKey = `geocode:${simpleHash(normalized)}`;
+      try {
+        const rawCached = localStorage.getItem(geoCacheKey);
+        if (rawCached) {
+          const parsed = JSON.parse(rawCached);
+          const ageMs = Date.now() - (parsed.__ts || 0);
+          const TTL = 1000 * 60 * 60 * 24 * CACHE_CONFIG.geocodeTtlDays;
+          if (ageMs > 0 && ageMs < TTL && parsed.data) {
+            return parsed.data;
+          }
+        }
+      } catch (e) {
+        // ignore cache errors
+      }
       // Determine which geocoding API to use
       const geocodingConfig = determineGeocodingEndpoint(placeOfBirth);
       if (!geocodingConfig) {
@@ -795,11 +819,11 @@ const NiyatiChat = () => {
       }
 
       // Call geocoding API (via BFF) with request-id header
-      const geocodeResponse = await bffFetch(geocodingConfig.endpoint, {
+      const geocodeResponse = await bffFetchWithRetry(geocodingConfig.endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(geocodingConfig.payload)
-      });
+      }, { retries: 3, baseDelayMs: 400 });
 
       // Capture response headers and body for debugging/correlation
       const geoRespReqId = geocodeResponse && geocodeResponse.headers && geocodeResponse.headers.get
@@ -813,6 +837,8 @@ const NiyatiChat = () => {
         const text = await geocodeResponse.text().catch(() => '');
         console.error('Geocoding request failed', { status: geocodeResponse.status, reqId: geoRespReqId, bodyPreview: text.slice ? text.slice(0, 400) : text });
         try { sendClientLog('geocode.resolve_failed', { status: geocodeResponse.status, reqId: geoRespReqId }); } catch (e) {}
+        // Surface a friendly message to the user
+        setMessages(prev => [...prev, { id: Date.now(), text: 'Automatic location detection failed — please enter your place of birth manually.', sender: 'bot', timestamp: new Date() }]);
         throw new Error(`Geocoding failed: ${geocodeResponse.status}`);
       }
 
@@ -836,18 +862,22 @@ const NiyatiChat = () => {
       console.log('resolveLocationAndTimezone: geocode response', { status: geocodeResponse.status, reqId: geoRespReqId, contentType: geoRespContentType, bodyPreview: geoPreview });
       try { sendClientLog('geocode.resolve_response', { reqId: geoRespReqId, contentType: geoRespContentType }); } catch (e) {}
       
+      // Unwrap BFF response (BFF wraps in {status, data, reqId})
+      const actualData = geocodeData.data || geocodeData;
+      
       // Extract location data from geocoding response
       let locationData = null;
-      if (geocodeData.status === 'ok' && geocodeData.place) {
-        locationData = geocodeData.place;
-      } else if (geocodeData.status === 'ambiguous' && geocodeData.suggestions && geocodeData.suggestions.length > 0) {
+      if (actualData.status === 'ok' && actualData.place) {
+        locationData = actualData.place;
+      } else if (actualData.status === 'ambiguous' && actualData.suggestions && actualData.suggestions.length > 0) {
         // Use the first suggestion
-        locationData = geocodeData.suggestions[0];
+        locationData = actualData.suggestions[0];
       }
 
       if (!locationData) {
         console.error('No location data found after geocode. geocodeData:', geocodeData);
         try { sendClientLog('geocode.no_location_found', { geocodeData: (typeof geocodeData === 'string' ? geocodeData.slice(0,400) : (geocodeData ? JSON.stringify(geocodeData).slice(0,400) : null)), reqId: geoRespReqId }); } catch (e) {}
+        setMessages(prev => [...prev, { id: Date.now(), text: 'Could not find a matching place for your input — please refine the place name.', sender: 'bot', timestamp: new Date() }]);
         throw new Error('No location data found');
       }
 
@@ -860,7 +890,7 @@ const NiyatiChat = () => {
 
         // Map country code to English country name if available
         if (countryCode) {
-          const mapped = (countries || []).find(c => (c.code || '').toString().toUpperCase() === countryCode);
+          const mapped = (auth.countries || []).find(c => (c.code || '').toString().toUpperCase() === countryCode);
           if (mapped && mapped.name) out.country = mapped.name;
         }
 
@@ -926,6 +956,12 @@ const NiyatiChat = () => {
         // best-effort, do not block
       }
 
+      // Cache geocode result for future quick lookups
+      try {
+        const cacheObj = { __ts: Date.now(), data: { location: locationData, timezone } };
+        localStorage.setItem(geoCacheKey, JSON.stringify(cacheObj));
+      } catch (e) {}
+
       return {
         location: locationData,
         timezone: timezone
@@ -939,6 +975,24 @@ const NiyatiChat = () => {
   // Call astrology APIs (planets and horoscope SVG)
   async function calculateAstrology(profile, locationData, timezone) {
     try {
+      // Deterministic cache key for astrology results (TTL from config)
+      const profileKey = JSON.stringify({ name: profile.user_name, dob: profile.user_dob, place: profile.user_placeOfBirth, tob: profile.user_timeOfBirth });
+      const astroCacheKey = `astrology:${simpleHash(profileKey)}`;
+      try {
+        const raw = localStorage.getItem(astroCacheKey);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          const age = Date.now() - (parsed.__ts || 0);
+          const TTL = 1000 * 60 * 60 * 24 * CACHE_CONFIG.astrologyTtlDays;
+          if (age > 0 && age < TTL && parsed.results) {
+            // Use cached results and avoid provider calls
+            sendClientLog('calculateAstrology.cache_hit');
+            return parsed.results;
+          }
+        }
+      } catch (e) {
+        // ignore cache errors
+      }
       // Parse birth date and time
       const [year, month, date] = profile.user_dob.split('-').map(n => parseInt(n, 10));
       const timeParts = (profile.user_timeOfBirth || '00:00:00').split(':').map(n => parseInt(n, 10));
@@ -970,7 +1024,7 @@ const NiyatiChat = () => {
       try {
         console.log('calculateAstrology: calling /api/astrology/planets');
         sendClientLog('calculateAstrology.planets.call');
-        const planetsResponse = await bffFetch('/api/astrology/planets', {
+          const planetsResponse = await bffFetchWithRetry('/api/astrology/planets', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(astrologyPayload)
@@ -986,7 +1040,7 @@ const NiyatiChat = () => {
 
           console.log('calculateAstrology: calling /api/astrology/horoscope-svg');
           sendClientLog('calculateAstrology.horoscope.call');
-          const horoscopeResponse = await bffFetch('/api/astrology/horoscope-svg', {
+          const horoscopeResponse = await bffFetchWithRetry('/api/astrology/horoscope-svg', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1038,6 +1092,12 @@ const NiyatiChat = () => {
         try { sendClientLog('calculateAstrology.error', { message: err && err.message }); } catch (e) {}
       }
 
+      // Persist deterministic cache for astrology results
+      try {
+        const cacheObj = { __ts: Date.now(), results };
+        localStorage.setItem(astroCacheKey, JSON.stringify(cacheObj));
+      } catch (e) {}
+
       return results;
     } catch (error) {
       console.error('Error calculating astrology:', error);
@@ -1062,7 +1122,7 @@ const NiyatiChat = () => {
       console.log('Astrology calculations complete:', astrologyResults);
       
       // Store the results in localStorage for later use
-      const cacheKey = `astrology_${phoneNumber}_${Date.now()}`;
+      const cacheKey = `astrology_${auth.phoneNumber}_${Date.now()}`;
       try {
         localStorage.setItem(cacheKey, JSON.stringify({
           profile,
@@ -1086,205 +1146,59 @@ const NiyatiChat = () => {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200 font-sans flex items-center justify-center p-4 relative overflow-hidden">
       {/* Background Stars */}
-      <div className="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none z-0">
-        <div className="absolute top-10 left-10 text-purple-500/20 animate-pulse"><Moon size={120} /></div>
-        <div className="absolute bottom-20 right-20 text-amber-500/20 animate-pulse duration-1000"><Star size={80} /></div>
-      </div>
+      <BackgroundStars />
 
-      {!isLoggedIn ? (
+      {!auth.isLoggedIn ? (
         // --- LOGIN SCREEN ---
-        <div className="w-full max-w-md bg-slate-900/80 backdrop-blur-md border border-slate-700 rounded-2xl shadow-2xl p-8 z-10 text-center">
-          <div className="w-16 h-16 rounded-full bg-gradient-to-tr from-purple-600 to-amber-500 flex items-center justify-center shadow-lg mx-auto mb-6">
-            <Sparkles className="text-white w-8 h-8" />
-          </div>
-          <h1 className="font-serif text-2xl text-slate-100 mb-2">Welcome to Niyati</h1>
-          <p className="text-slate-400 mb-6 text-sm">Enter your phone number to reveal what destiny has in store for you.</p>
-          
-          <form onSubmit={handleLogin} className="space-y-4">
-            <div className="flex gap-2">
-              {/* Country Selector */}
-              <div className="relative" ref={dropdownRef}>
-                <button
-                  type="button"
-                  onClick={() => setShowDropdown(!showDropdown)}
-                  className="bg-slate-950 border border-slate-700 rounded-xl px-3 py-3 text-slate-200 focus:outline-none focus:border-purple-500 transition-colors flex items-center gap-2 hover:bg-slate-900"
-                >
-                  <span className="text-2xl">{selectedCountry.flag}</span>
-                  <ChevronDown size={16} className="text-slate-400" />
-                </button>
-                
-                {showDropdown && (
-                  <div className="absolute top-full mt-2 left-0 w-64 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-50 overflow-hidden">
-                    <input
-                      type="text"
-                      placeholder="Search country..."
-                      value={countrySearch}
-                      onChange={(e) => setCountrySearch(e.target.value)}
-                      className="w-full bg-slate-950 border-b border-slate-700 px-4 py-2 text-slate-200 focus:outline-none text-sm"
-                      autoFocus
-                    />
-                    <div className="max-h-48 overflow-y-auto">
-                      {filteredCountries.map((country) => (
-                        <button
-                          key={country.code}
-                          type="button"
-                          onClick={() => {
-                            setSelectedCountry(country);
-                            setShowDropdown(false);
-                            setCountrySearch('');
-                          }}
-                          className={`w-full px-4 py-3 text-left hover:bg-slate-800 transition-colors flex items-center gap-3 ${
-                            selectedCountry.code === country.code ? 'bg-slate-800' : ''
-                          }`}
-                        >
-                          <span className="text-2xl">{country.flag}</span>
-                          <div className="flex-1">
-                            <div className="text-slate-200 text-sm">{country.name}</div>
-                            <div className="text-slate-500 text-xs">{country.dialCode}</div>
-                          </div>
-                        </button>
-                      ))}
-                      {filteredCountries.length === 0 && (
-                        <div className="px-4 py-3 text-slate-500 text-sm text-center">No countries found</div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Phone Number Input */}
-              <div className="relative flex-1">
-                <Phone className="absolute left-4 top-3.5 text-slate-500 w-5 h-5" />
-                <input 
-                  type="tel" 
-                  placeholder={selectedCountry ? `${selectedCountry.phoneLength}-digit number` : 'Phone number'} 
-                  value={tempPhone}
-                  onChange={(e) => {
-                    const max = selectedCountry?.phoneLength || 10;
-                    const value = e.target.value.replace(/\D/g, '').slice(0, max);
-                    setTempPhone(value);
-                  }}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-12 pr-4 py-3 text-slate-200 focus:outline-none focus:border-purple-500 transition-colors"
-                  maxLength={selectedCountry?.phoneLength || 10}
-                />
-              </div>
-            </div>
-            <div className="flex items-start gap-2">
-              <label className="flex items-center gap-2 text-xs text-slate-200">
-                <input
-                  type="checkbox"
-                  checked={consentChecked}
-                  onChange={(e) => setConsentChecked(e.target.checked)}
-                  className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-purple-600 focus:ring-0"
-                />
-                <span>I agree to the</span>
-              </label>
-              <div className="text-xs text-slate-200">
-                <button type="button" onClick={openPrivacy} className="underline text-inherit p-0">Privacy Policy</button>
-                <span className="ml-1">and consent to usage of my data.</span>
-              </div>
-            </div>
-            <button type="submit" disabled={tempPhone.length !== (selectedCountry?.phoneLength || 10) || !consentChecked} className="w-full bg-purple-600 hover:bg-purple-500 text-white font-medium p-3 rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-              Begin Chat
-            </button>
-            <p className="text-xs text-slate-300 mt-2 leading-tight" align="left">
-              Your data is processed and stored on our machines, and used only to provide personalized astrological insights. We will not sell, rent, or share your personal data with third parties. This service is provided for informational and entertainment purposes only and does not constitute professional advice. You acknowledge and accept that the app's content may be interpretive and that you are solely responsible for any decisions made based on it. By checking the box above and continuing, you consent to processing and storage of your data for the operation of this service.
-            </p>
-          </form>
-        </div>
+        <LoginForm
+          onLogin={handleLogin}
+          countries={auth.countries}
+          selectedCountry={auth.selectedCountry}
+          setSelectedCountry={auth.setSelectedCountry}
+          consentChecked={consentChecked}
+          setConsentChecked={setConsentChecked}
+          onShowPrivacy={openPrivacy}
+        />
       ) : (
         // --- CHAT SCREEN ---
         <div className="w-full max-w-md bg-slate-900/80 backdrop-blur-md border border-slate-700 rounded-2xl shadow-2xl flex flex-col h-[85vh] z-10 relative">
           
           {/* Header */}
-          <div className="p-4 border-b border-slate-700 flex items-center justify-between bg-slate-900/90 rounded-t-2xl">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-purple-600 to-amber-500 flex items-center justify-center shadow-lg">
-                <Sparkles className="text-white w-5 h-5" />
-              </div>
-              <div>
-                <h1 className="font-serif text-xl text-slate-100">Niyati</h1>
-                  <div className="flex items-center gap-2">
-                    <div aria-live="polite" className="bg-purple-300/40 text-white px-2 py-2 rounded-md w-94 max-w-full min-w-0 overflow-hidden">
-                      <div className="min-w-0 text-[clamp(11px,1.1vw,13px)]">
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5 items-start">
-                          {/* Row 1 */}
-                          <div className="flex items-center gap-1.5">
-                            <div className="flex-shrink-0 mr-1.5 flex items-center gap-1.5">
-                              <span className="text-base">{getUserCountry().flag}</span>
-                              <span>{phoneNumber.split('-')[1] || phoneNumber}</span>
-                            </div>
-                          </div>
-                          <div className="min-w-0 truncate ">{profile.user_name || '—'}</div>
-                          <div className="min-w-0 truncate">{formatDobForDisplay(profile.user_dob, getUserCountry().code) || '—'}</div>
-                          
-                          {/* Row 2: place directly under flag/phone (col 1), optional center column left blank, time under DOB (col 3) */}
-                          <div title={profile.user_placeOfBirth || profile.placeOfBirth_raw || ''} className="min-w-0 truncate sm:col-span-2">{getDisplayPlace(profile)}</div>
-                          <div className="min-w-0 truncate">{formatTimeForDisplay(profile.user_timeOfBirth) || '—'}</div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-              </div>
-            </div>
-            <button onClick={handleReset} className="text-slate-500 hover:text-red-400 self-start relative right-4 top-1" title="Logout / Reset">
-              <Trash2 size={18} />
-            </button>
-          </div>
-
-          {/* Privacy modal was moved to top-level so it can open from the login screen too */}
+          <ProfileHeader
+            profile={profile}
+            phoneNumber={auth.phoneNumber}
+            getUserCountry={getUserCountry}
+            formatDobForDisplay={formatDobForDisplay}
+            formatTimeForDisplay={formatTimeForDisplay}
+            getDisplayPlace={getDisplayPlace}
+            onReset={handleReset}
+          />
 
           {/* Messages Area */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            {messages.map((msg) => (
-              <div key={msg.id} className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[85%] p-3 rounded-2xl text-sm leading-relaxed shadow-md ${
-                    msg.sender === 'user' ? 'bg-purple-600 text-white rounded-br-none' : 
-                    msg.isError ? 'bg-red-900/50 text-red-200' : 'bg-slate-800 border border-slate-700 text-slate-200 rounded-bl-none'
-                  }`}>
-                  {msg.text}
-                </div>
-              </div>
-            ))}
-            {isLoading && <div className="text-slate-500 text-xs p-4 animate-pulse">Niyati is consulting the stars...</div>}
-            <div ref={messagesEndRef} />
-          </div>
+          <MessageList
+            messages={messages}
+            isLoading={isLoading}
+            messagesEndRef={messagesEndRef}
+          />
 
           {/* Input Area */}
-          <div className="p-4 bg-slate-900/90 border-t border-slate-700 rounded-b-2xl">
-            <form onSubmit={handleSend} className="flex gap-2">
-              <input
-                type="text"
-                value={inputText}
-                onChange={(e) => setInputText(e.target.value)}
-                placeholder="Ask something..."
-                className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-slate-200 focus:outline-none focus:border-purple-500"
-                disabled={isLoading}
-              />
-              <button type="submit" disabled={!inputText.trim() || isLoading} className="bg-purple-600 hover:bg-purple-500 text-white p-3 rounded-xl transition-colors disabled:opacity-50">
-                <Send size={20} />
-              </button>
-            </form>
-          </div>
+          <ChatInput
+            value={inputText}
+            onChange={setInputText}
+            onSubmit={handleSend}
+            isLoading={isLoading}
+            placeholder="Ask something..."
+          />
         </div>
       )}
+      
       {/* Global Privacy modal (renders sanitized HTML converted from markdown) */}
-      {showPrivacyModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/50" onClick={closePrivacy} />
-          <div className="relative bg-slate-900 text-slate-200 rounded-2xl w-[min(92%,720px)] max-h-[80vh] overflow-auto p-6 z-50">
-            <div className="flex justify-between items-start mb-4">
-              <h2 className="font-semibold text-lg">Privacy Policy</h2>
-              <button onClick={closePrivacy} className="text-slate-400 hover:text-white">Close</button>
-            </div>
-            {privacyLoading ? (
-              <div className="text-sm text-slate-400">Loading...</div>
-            ) : (
-              <div className="prose prose-invert max-w-none" dangerouslySetInnerHTML={{ __html: privacyHtml }} />
-            )}
-          </div>
-        </div>
-      )}
+      <PrivacyModal
+        isOpen={showPrivacyModal}
+        onClose={closePrivacy}
+        content={privacyHtml}
+        isLoading={privacyLoading}
+      />
     </div>
   );
 };

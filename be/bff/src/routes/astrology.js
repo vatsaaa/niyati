@@ -3,6 +3,7 @@ const router = express.Router();
 const astrologyService = require('../services/astrologyService');
 const axios = require('axios');
 const { logger, sanitize, reqIdFromReq } = require('../lib/logger');
+const config = require('../../config');
 
 // POST /api/astrology/compute
 // Accepts { profile: { name, dob, timeOfBirth, placeOfBirth: { city, countryCode, lat, lng } } }
@@ -120,7 +121,13 @@ router.post('/horoscope-svg', async (req, res) => {
 // Temporary debug endpoint: POST /api/astrology/probe
 // Body: { payload?: object, paths?: string[] }
 // Tries a list of candidate paths against ASTRO_API_URL base and returns provider responses.
+// DISABLED in production for security
 router.post('/probe', async (req, res) => {
+  // Disable based on feature flag
+  if (!config.features.probeEndpoint) {
+    return res.status(404).json({ status: 'error', reason: 'not_found' });
+  }
+
   const base = (process.env.ASTRO_API_URL || 'https://json.freeastrologyapi.com').replace(/\/$/, '');
   const key = process.env.ASTRO_API_KEY;
   

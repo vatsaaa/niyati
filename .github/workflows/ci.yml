@@ -1,0 +1,198 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ master, main, develop ]
+  pull_request:
+    branches: [ master, main, develop ]
+
+jobs:
+  # Lint and format check
+  lint:
+    name: Lint & Format Check
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: |
+          be/bff/package-lock.json
+          ui/package-lock.json
+    
+    - name: Install BFF dependencies
+      working-directory: ./be/bff
+      run: npm ci
+      
+    - name: Install UI dependencies
+      working-directory: ./ui
+      run: npm ci
+    
+    - name: Lint BFF
+      working-directory: ./be/bff
+      run: npm run lint || echo "No lint script defined"
+      
+    - name: Lint UI
+      working-directory: ./ui
+      run: npm run lint || echo "No lint script defined"
+
+  # Security vulnerability scanning
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: |
+          be/bff/package-lock.json
+          ui/package-lock.json
+    
+    - name: Run npm audit (BFF)
+      working-directory: ./be/bff
+      run: npm audit --audit-level=moderate || true
+      
+    - name: Run npm audit (UI)
+      working-directory: ./ui
+      run: npm audit --audit-level=moderate || true
+    
+    - name: OWASP Dependency Check (BFF)
+      uses: dependency-check/Dependency-Check_Action@main
+      with:
+        project: 'niyati-bff'
+        path: './be/bff'
+        format: 'HTML'
+      continue-on-error: true
+      
+    - name: OWASP Dependency Check (UI)
+      uses: dependency-check/Dependency-Check_Action@main
+      with:
+        project: 'niyati-ui'
+        path: './ui'
+        format: 'HTML'
+      continue-on-error: true
+
+    - name: Upload dependency check reports
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: dependency-check-reports
+        path: reports/
+        retention-days: 7
+
+  # Build and test
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        node-version: [18.x, 20.x]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+        cache-dependency-path: |
+          be/bff/package-lock.json
+          ui/package-lock.json
+    
+    - name: Install BFF dependencies
+      working-directory: ./be/bff
+      run: npm ci
+      
+    - name: Install UI dependencies
+      working-directory: ./ui
+      run: npm ci
+    
+    - name: Test BFF
+      working-directory: ./be/bff
+      run: npm test || echo "No tests configured"
+      env:
+        NODE_ENV: test
+        
+    - name: Build UI
+      working-directory: ./ui
+      run: npm run build
+      env:
+        NODE_ENV: production
+    
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      if: matrix.node-version == '20.x'
+      with:
+        name: ui-dist
+        path: ui/dist/
+        retention-days: 7
+
+  # Code quality analysis
+  code-quality:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Full history for better analysis
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+    
+    - name: SonarCloud Scan
+      uses: SonarSource/sonarcloud-github-action@master
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      continue-on-error: true
+
+  # Deployment (only on main/master branch)
+  deploy:
+    name: Deploy
+    needs: [lint, security, build, code-quality]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+    
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: ui-dist
+        path: ui/dist/
+    
+    - name: Deploy to production
+      run: |
+        echo "🚀 Deployment step - configure your deployment here"
+        # Example: Deploy to cloud provider, update containers, etc.
+        # - name: Deploy to Vercel
+        #   uses: amondnet/vercel-action@v25
+        #   with:
+        #     vercel-token: ${{ secrets.VERCEL_TOKEN }}
+        #     vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+        #     vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}

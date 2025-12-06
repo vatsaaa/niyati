@@ -1,0 +1,39 @@
+# UI-specific Docker ignore
+
+# Dependencies (installed in container)
+node_modules
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Build outputs
+dist
+build
+
+# Logs
+*.log
+npm-debug.log*
+
+# IDE
+.vscode
+.idea
+*.swp
+
+# OS
+.DS_Store
+
+# Git
+.git
+.gitignore
+
+# Documentation
+README.md
+public/PRIVACY.md
+
+# ESLint and config
+eslint.config.js
+
+# Development only
+vite.config.js.timestamp-*

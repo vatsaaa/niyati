@@ -1,0 +1,6 @@
+{
+  "event": "dev.event",
+  "ts": "2025-11-30T00:00:00.000Z",
+  "meta": { "note": "sample webhook event for local testing" },
+  "payload": { "message": "hello from simulator" }
+}
