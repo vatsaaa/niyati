@@ -1,78 +1,25 @@
 # Work breakdown
 
-## Phone / Login (small, fast wins)
+## Production Readiness Checklist
 
+### Optional Enhancements (post-launch)
+- [ ] **Monitoring & logging** — Add Sentry for errors, Prometheus/Grafana for metrics
+- [ ] **Orchestration (K8s)** — Plan migration when scaling/HA is required
 
-- [✅] 1.1 Format phone for display (5-15m, Low)
-	- Implement `formatSubscriberNumber(fullPhone)` to strip the country code and return the subscriber number.
-	- Add unit tests for formatting.
+### Pre-Deployment Checklist
+- [ ] Create production secrets in `/etc/niyati/secrets/` on server
+- [ ] Set `DOMAIN` and `CADDY_EMAIL` environment variables
+- [ ] Configure DNS A record pointing to server IP
+- [ ] Test backup restore workflow
+- [ ] Run migrations in staging environment
+- [ ] Update CORS origins in production config
+- [ ] Run security audit (`npm audit`)
+- [ ] Verify all health checks pass
 
-
-- [✅] 1.2 Show flag in header (10-30m, Low)
-	- Read selected country from `localStorage`/state and render `flagEmoji` in header next to number.
-
-
-- [✅] 1.3 Enforce per-country length on input (15-45m, Low)
-	- Use `selectedCountry.phoneLength` to set input `maxLength`, placeholder and validation.
-
-
-- [✅] 1.4 Input sanitization & helper (10-20m, Low)
-	- Strip non-digits as user types; show remaining digits count.
-
-## Profile & Progressive Discovery (small UI+storage tasks)
-
- - [ ] 2.1 Small profile form component (30-90m, Medium)
- 	- Collect Name, DoB, Place of Birth, Current Location from the chat with the user.
- 
- 	- Option A (Chat-first / Hybrid - Recommended):
- 		- Behavior: prefer low-friction chat extraction first, confirm via short chat prompts, and provide a lightweight Profile form/modal for review and editing.
- 		- Flow:
- 			1. Extract candidate fields from chat messages using simple heuristics (regex + date parsing) or light NLU when the user mentions them.
- 			2. Save extracted values as `tentative` in-memory and to `localStorage` under `niyati_profile` with a `verified` flag per field (default false).
- 			3. Immediately send a confirmation chat message for ambiguous/parsed fields, e.g. "I detected your DoB as 1990-11-12 — is that correct?" — on confirmation mark field `verified=true`.
- 			4. Provide a small `Profile` button/modal where users can review and edit all fields (this is the explicit form for task 2.1). The modal shows which fields are verified and which are tentative.
- 			5. Require explicit consent (toggle/checkbox) in the modal before using fields for astrology computations; store `consentGiven: boolean` in `niyati_profile`.
- 		- Data shape (suggested `localStorage` key `niyati_profile`):
- 			```
- 			{
- 			  name: "...",
- 			  dob: "YYYY-MM-DD",
- 			  placeOfBirth: "City, Country",
- 			  currentLocation: "...",
- 			  verified: { name: true, dob: false, placeOfBirth: false },
- 			  consentGiven: false,
- 			}
- 			```
- 		- Validation & UX notes:
- 			- Use a date-picker / ISO date normalization to avoid ambiguous input.
- 			- For place-of-birth, accept free text initially; mark as `needs-geocode` if later lat/lon is required by the astrology provider.
- 			- Do not auto-use unverified fields for API calls until `consentGiven` is true.
- 		- Acceptance criteria for this subtask:
- 			- Chat extraction stores tentative values and prompts the user to confirm.
- 			- Profile modal shows extracted values, allows editing, and persists verified values to `localStorage`.
- 			- Consent toggle is visible and persisted.
-
-
-- [✅] 2.2 Persist profile fields (10-30m, Low)
-	- Save to `localStorage` under `niyati_profile` and load on start.
-
-- [✅] 2.3 Display compact profile summary (20-45m, Low)
-	- Show Name and masked phone/DoB/place in header or side panel.
-
-- [ ] 2.4 Edit flow & immediate update (20-60m, Medium)
-	- Allow editing profile with optimistic update of UI + save to `localStorage`
+---
 
 ## Astrology API integration (server/client safe steps)
 
-- [ ] 4.1 Choose provider & test account (30-120m, Medium)
-	- Evaluate suggested providers ([FreeAstrologyAPI](https://freeastrologyapi.com/), [VedAstro](https://github.com/VedAstro/VedAstro), [Astrologer-API](https://github.com/g-battaglia/Astrologer-API)). Create a free/test account or read docs and capture example requests/responses.
-
- [✅] 4.2 Add API config & env vars (10-20m, Low)
- 	- Add `VITE_ASTRO_API_URL` and `VITE_ASTRO_API_KEY` (or similar) to local `.env` instructions in README. Keep keys out of source control.
- [✅] 4.3 Implement astrology API wrapper (30-90m, Medium)
- 	- Create `src/lib/astrology.js` (or `.ts`) with functions to call the provider, normalize responses, handle errors, and map to a consistent internal format.
- [✅] 4.4 Fetch astrology data when DoB+Place available (15-60m, Medium)
- 	- Trigger the wrapper when profile has DoB and Place. Persist a cached copy in `localStorage` keyed by profile (hash) to avoid duplicate calls.
 - [ ] 4.5 Display basic astrological summary component (30-90m, Medium)
 	- Create `AstrologySummary` component to show sun/moon/ascendant + short textual summary. Add unit/snapshot tests for rendering.
 - [ ] 4.6 Error handling & rate-limit/backoff (30-90m, Medium)
@@ -95,21 +42,6 @@
 - [ ] 5.4 Hook numerology into profile flow (15-45m, Low)
 	- When profile data is present or updated, compute numerology and display in profile/astrology area.
 
-## Final QA, tests & docs
-
-- [ ] 6.1 Add unit & integration tests (60-180m, Medium)
-	- Tests for formatting, numerology, API wrapper; a smoke integration test for login -> profile -> premium unlock -> chat enabled.
-
-- [ ] 6.2 Dev docs & run steps (15-45m, Low)
-	- Update `README.md` with env key instructions, how to run dev server and configure astrology keys.
-
-
-- [✅] 6.3 Countries.json caching policy (20-60m, Low)
-	- Implement stale-while-revalidate: read cached countries from `localStorage`, fetch `/countries.json` and update state if changed.
-
-## Consent & privacy note (10-20m, Low)
-- [✅] 7.1 On the first screen, when the user enters their phone number, display a small note about data usage and privacy. Example text: "Your data is stored locally on our device and used only to provide personalized astrological insights. We do not share your information with third parties." Include all kind of indemnity language. Ensure this is clear but unobtrusive.
-
 ## Backend / Persisting Users (security-sensitive)
 
 - [ ] 8.1 Persist first-login details to MongoDB (40-120m, Medium)
@@ -130,111 +62,10 @@
 
 ## User details completion
 
-- [✅] 9.1 When the user provides place of birth look it up and find the country automatically. Use a geocoding API or a local database of cities to countries. Modify the place of birth field to store both city and country for accurate astrology calculations.
-
-### Details & implementation plan
-
-	 - Goal: given a user's free-text place-of-birth (e.g. "Pune" or "Pune, Maharashtra"), resolve the city and its country (ISO2 code), and where available lat/lng. Store a canonical structured `placeOfBirth` in the profile so astrology calculations can use a deterministic location.
-
-	 - Recommended providers & tradeoffs
-		 - OpenCage (recommended): aggregates OSM and other sources, good international coverage, simple REST API, reasonable free tier. Requires API key; good privacy/price balance.
-		 - Google Geocoding API: best disambiguation and address components, paid by usage; excellent accuracy but higher cost and Google TOS/privacy considerations.
-		 - Nominatim (OpenStreetMap): free and privacy-friendly; public instance rate-limited and not recommended for production without self-hosting.
-		 - Local DB (GeoNames / worldcities CSV): no external calls, best privacy, deterministically fast. May miss obscure places and requires fuzzy matching on the client or server.
-
-	 - Recommendation: implement a hybrid approach
-		 1. Local DB fuzzy-match (client-side or server-side) as first pass for privacy & speed.
-		 2. If local match is low-confidence or ambiguous, call a server-side proxy that queries OpenCage (or Google if you prefer accuracy) and returns suggestions. Keep API keys on the server.
-
-	 - Why a server-side proxy
-		 - Keeps API keys secret (do not embed keys in client bundles).
-		 - Centralized caching, rate-limiting, and retry/backoff control.
-		 - Easier to fallback to local DB or return structured errors to the client so UI can prompt for manual selection.
-
-	 - Canonical storage shape (example to add under `niyati_user_profile.placeOfBirth`)
-
-		 ```json
-		 placeOfBirth: {
-			 raw: "Pune, Maharashtra",        // original user input
-			 city: "Pune",                    // parsed/normalized city (or empty)
-			 country: "India",                // full country name
-			 countryCode: "IN",               // ISO 3166-1 alpha-2
-			 lat: 18.5204,                      // optional
-			 lng: 73.8567,                      // optional
-			 geocodeSource: "localDB|openCage|google", // resolution source
-			 verified: false,                   // user confirmed correctness
-			 needsGeocode: false,               // true when unresolved/ambiguous
-			 updatedAt: "2025-11-23T12:34:56Z"
-		 }
-		 ```
-
-	 - Client UX & flow
-		 1. Save `placeOfBirth.raw` immediately when user types or the chat extractor suggests a place.
-		 2. If user has not given consent for external calls, set `needsGeocode=true` and surface a compact manual country selector or an editable suggestion list (do NOT call third-party geocoders).</li>
-		 3. If consent is present: run a local fuzzy lookup (Fuse.js against a small `worldcities` subset) to find high-confidence matches. If confidence >= threshold (e.g., 0.85), accept the match and populate `city`, `country`, `countryCode`, set `geocodeSource='localDB'`, `needsGeocode=false`.
-		 4. If local lookup is ambiguous or no good match: call the server proxy `/api/geocode?place=...` which queries OpenCage/Google. The server returns either a single unambiguous place or `ambiguous` with a short list of suggestions. Show suggestions to the user for explicit selection.
-		 5. Always allow manual override (user can pick country from drop-down). Only mark `verified=true` when user explicitly confirms.
-
-	 - Failure handling (detailed)
-		 - Failure types: network timeout, provider 4xx/5xx, 429 rate-limit, no results, ambiguous results.
-		 - Client-side strategy:
-			 - Debounce input (300–800ms) before attempting lookups.
-			 - Show immediate UI fallback: a manual country selector and optionally a short list of local suggestions (if local DB exists).
-			 - If provider returns error or 429: show a gentle inline message "Auto-detect failed — please select your country manually" and set `needsGeocode=true`.
-			 - Retry: attempt one quick retry for transient network errors (500ms -> 1500ms), but do not block the UI or force the user to wait.
-		 - Server-side strategy:
-			 - Cache geocode results (keyed by normalized query) with TTL (e.g., 30 days) to avoid repeated provider cost and rate-limits.
-			 - On provider 429/5xx, return a structured error to client instructing fallback.
-			 - Do not log raw PII unless the user has consented; if logging is necessary for debugging, strip or hash identifying fields.
-
-	 - Caching & offline options
-		 - Client: cache resolved place objects in `localStorage` keyed by normalized `raw` input so repeated lookups are instant.
-		 - Server: use Redis or in-memory cache with TTL; implement stale-while-revalidate to return cached immediately and refresh in background.
-		 - For strict privacy/offline mode: ship a compact `worldcities` subset and use `Fuse.js` client-side to match user input without any external calls.
-
-	 - API response shapes (server -> client)
-		 - success unambiguous:
-			 ```json
-			 { "status": "ok", "source": "openCage", "place": { /* city/country/countryCode/lat/lng */ } }
-			 ```
-		 - ambiguous:
-			 ```json
-			 { "status": "ambiguous", "suggestions": [ {"display":"Pune, Maharashtra, India","city":"Pune","country":"India","countryCode":"IN","lat":..,"lng":..}, ... ] }
-			 ```
-		 - error:
-			 ```json
-			 { "status": "error", "reason": "rate_limited|provider_error|network" }
-			 ```
-
-	 - Acceptance criteria
-		 - The client saves `placeOfBirth.raw` immediately and later stores a structured place (city + countryCode) when resolved.
-		 - If geocoding is successful, `needsGeocode=false` and the record includes `countryCode` (ISO2) and optional lat/lng.
-		 - If geocoding fails or is blocked (no consent), `needsGeocode=true` and UI offers a manual country selector.
-		 - User can confirm the resolved place, which sets `verified=true` before it is used for astrology computations.
-
-	 - Incremental implementation plan
-		 1. Add the `placeOfBirth` canonical shape to the profile object and persist it to `localStorage` (store `raw` immediately).
-		 2. Add a small client-side local DB (compressed `worldcities` subset) and Fuse.js fuzzy-match; attempt local resolution first.
-		 3. Create a simple server proxy `/api/geocode` that calls OpenCage (using `OPENCAGE_KEY` env var), returns structured responses, and caches results.
-		 4. Wire the client to call `/api/geocode` only when local DB fails or returns ambiguous results; present suggestions and manual selector fallbacks.
-		 5. Update `PRIVACY.md` to mention geocoding and require consent for external calls; ensure consent gating is enforced on the client before calling the proxy.
-
-	 - Notes
-		 - Keep the UX lightweight: do not block the user; default to manual selection when in doubt.
-		 - Prefer storing `countryCode` (ISO2) in downstream calls and only include lat/lng where required by external astrology providers.
-		 - If you want, I can now draft the server-side proxy example (Node/Express + OpenCage) and a small client-side Fuse.js snippet and component for selection. 
-
-
-
 TODO:
 - User said "I was born on 11th day of November 2005" the date was not resolved correctly. Add better date parsing / NLU to extract DoB from chat messages
 
-
-
-
-
-
-
+---
 
 # BFF (Backend-for-Frontend) Improvements
 1. Security & Production Readiness
@@ -345,3 +176,184 @@ Lower Priority (Nice to Have):
 12. Add unit/integration tests
 13. Add service worker for offline support
 14. Consider Redis for distributed caching
+
+---
+
+# 🚀 Development Roadmap & Enhancement Guide
+
+This guide outlines strategic enhancements, feature additions, and technical improvements to evolve Niyati into a comprehensive astrology platform.
+
+## 📋 Table of Contents
+
+1. [Immediate Priorities](#immediate-priorities)
+2. [Testing Infrastructure](#testing-infrastructure)
+3. [User Authentication & Accounts](#user-authentication--accounts)
+4. [Chat History & Persistence](#chat-history--persistence)
+5. [Advanced Astrology Features](#advanced-astrology-features)
+6. [UI/UX Enhancements](#uiux-enhancements)
+7. [AI/ML Integration](#aiml-integration)
+8. [Social & Community Features](#social--community-features)
+9. [Monetization Features](#monetization-features)
+10. [Technical Debt & Refactoring](#technical-debt--refactoring)
+
+---
+
+## Immediate Priorities
+
+- [ ] Increase test coverage to meet goals (80%+ services, 90%+ routes, 95%+ utilities)
+- [ ] Add more edge case and error scenario tests
+- [ ] Set up continuous integration pipeline
+
+---
+
+## User Authentication & Accounts
+
+**Available Services:**
+- Auth BFF: http://localhost:3001 (see README.md for API endpoints)
+- PostgreSQL: Running with migrations applied
+- Complete documentation in `/docs/auth/README.md`
+
+**Future Enhancements:**
+- [ ] Connect UI to auth endpoints (currently uses phone-only localStorage auth)
+- [ ] Add user profile sync between localStorage and server
+- [ ] Implement multi-device session management
+
+---
+
+## Chat History & Persistence
+
+### Current State
+- Messages stored only in component state
+- Lost on page refresh
+- No history across sessions
+
+### Implementation Plan
+
+**Database Schema:**
+```sql
+CREATE TABLE conversations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  title VARCHAR(255),
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE messages (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
+  role VARCHAR(20) NOT NULL,
+  content TEXT NOT NULL,
+  metadata JSONB,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+---
+
+## Advanced Astrology Features
+
+### Feature Set
+
+1. **Detailed Birth Chart Analysis** - Planets, houses, aspects
+2. **Daily Horoscope** - Cached daily readings per sign
+3. **Compatibility Matching** - Compare two birth charts
+4. **Transit Predictions** - Current planetary transits
+5. **Vedic Astrology Support** - Sidereal zodiac calculations
+
+---
+
+## UI/UX Enhancements
+
+1. **Conversation Sidebar** - History and navigation
+2. **Rich Astrology Visualizations** - Birth chart wheels using D3.js
+3. **Dark/Light Theme Toggle** - User preference
+4. **Accessibility Improvements** - ARIA labels, keyboard navigation
+5. **Voice Input/Output** - Speech recognition and TTS
+
+---
+
+## AI/ML Integration
+
+1. **Custom AI Model Fine-Tuning** - Train on astrology-specific datasets
+2. **Sentiment Analysis** - Personalize responses based on user mood
+3. **Recommendation Engine** - Suggest topics based on chart and history
+4. **Voice Input/Output** - Natural conversation interface
+
+---
+
+## Social & Community Features
+
+1. **User Profiles (Public)** - Shareable profiles with sun/moon signs
+2. **Share Readings** - Generate shareable links
+3. **Community Forum** - Discussion boards by topic
+4. **Follow System** - Connect with other users
+
+---
+
+## Monetization Features
+
+### 1. Subscription Tiers
+
+**Tier Structure:**
+- **Free:** 10 messages/month, basic daily horoscope
+- **Premium ($9.99/mo):** Unlimited messages, detailed birth chart, transit notifications
+- **Professional ($29.99/mo):** All premium + compatibility readings, expert consultations
+
+### 2. Credit System
+- Purchase credits
+- Pay-per-reading model
+
+### 3. One-on-One Consultations
+- Marketplace for professional astrologers
+- Scheduling and payment integration
+
+---
+
+## Technical Debt & Refactoring
+
+1. **Migrate to TypeScript** - Type safety and better DX
+2. **Add GraphQL API** - Flexible data fetching
+3. **Implement Caching Strategy** - Multi-layer (memory + Redis)
+4. **Add Request Validation** - Schema validation with Joi
+5. **Improve Error Handling** - Structured error classes
+6. **API Documentation** - Swagger/OpenAPI
+7. **Database Migrations** - Version-controlled schema changes
+8. **Feature Flags** - Gradual rollout capability
+
+---
+
+## Priority Roadmap
+
+### Q1 2026 (Jan-Mar)
+- [ ] Increase test coverage to goals
+- [ ] Implement user authentication & accounts
+- [ ] Add chat history persistence
+- [ ] Set up staging environment
+
+### Q2 2026 (Apr-Jun)
+- [ ] Advanced astrology features (birth chart, daily horoscope)
+- [ ] UI/UX enhancements (sidebar, visualizations)
+- [ ] API documentation (Swagger)
+
+### Q3 2026 (Jul-Sep)
+- [ ] Subscription system with Stripe
+- [ ] Credit-based messaging
+- [ ] Social features (sharing, profiles)
+- [ ] Migration to TypeScript
+
+### Q4 2026 (Oct-Dec)
+- [ ] Community forum
+- [ ] One-on-one consultations marketplace
+- [ ] Mobile apps (React Native)
+- [ ] Scale to 10,000+ users
+
+---
+
+## Next Immediate Steps
+
+1. **Run tests to establish baseline coverage** (this week)
+2. **Implement basic authentication** (2 weeks)
+3. **Add chat persistence** (1 week)
+4. **Deploy to staging** (1 week)
+5. **Gather user feedback and iterate**

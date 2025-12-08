@@ -1,0 +1,12 @@
+{
+  "name": "@niyati/commons",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.js",
+  "description": "Shared utilities and configuration for Niyati BFF services",
+  "dependencies": {
+    "pino": "^8.17.0",
+    "express-rate-limit": "^7.1.5",
+    "node-cache": "^5.1.2"
+  }
+}

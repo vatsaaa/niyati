@@ -2,30 +2,313 @@
 # Usage: docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 
 services:
-  bff-service:
-    build:
-      target: production
-    container_name: niyati-bff-prod
+  # PostgreSQL - Production Configuration
+  postgres:
+    container_name: niyati-postgres-prod
+    secrets:
+      - postgres_password
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-niyati_prod}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_DB: ${POSTGRES_DB:-niyati_prod}
+    ports:
+      # Don't expose to host in production (internal only)
+      - "127.0.0.1:5432:5432"
     volumes:
-      # No source code mounting in production
-      # Only environment file if needed (use secrets in real prod)
-      - ./.env.bff:/app/.env:ro
+      # Use named volume for production (can be backed up)
+      - postgres-data-prod:/var/lib/postgresql/data
+    command:
+      # Production-optimized PostgreSQL settings
+      - "postgres"
+      - "-c"
+      - "max_connections=200"
+      - "-c"
+      - "shared_buffers=1GB"
+      - "-c"
+      - "effective_cache_size=3GB"
+      - "-c"
+      - "maintenance_work_mem=256MB"
+      - "-c"
+      - "checkpoint_completion_target=0.9"
+      - "-c"
+      - "wal_buffers=16MB"
+      - "-c"
+      - "default_statistics_target=100"
+      - "-c"
+      - "random_page_cost=1.1"
+      - "-c"
+      - "effective_io_concurrency=200"
+      - "-c"
+      - "work_mem=8MB"
+      - "-c"
+      - "min_wal_size=2GB"
+      - "-c"
+      - "max_wal_size=8GB"
+      - "-c"
+      - "max_worker_processes=4"
+      - "-c"
+      - "max_parallel_workers_per_gather=2"
+      - "-c"
+      - "max_parallel_workers=4"
+      - "-c"
+      - "max_parallel_maintenance_workers=2"
+      - "-c"
+      - "log_min_duration_statement=1000"
+      - "-c"
+      - "log_line_prefix=%m [%p] %q%u@%d "
+      - "-c"
+      - "log_timezone=UTC"
+    restart: always
+
+  # BFF Auth Service - Production Configuration
+  bff-auth:
+    build:
+      context: ./be
+      dockerfile: bff-auth/Dockerfile
+      target: production
+    container_name: niyati-bff-auth-prod
+    # Ports exposed only to internal network (accessed via Caddy)
+    expose:
+      - "3001"
+    secrets:
+      - postgres_password
+      - jwt_secret
+      - smtp_user
+      - smtp_password
+    env_file:
+      - .env.bff.auth
     environment:
       - NODE_ENV=production
       - LOG_PRETTY_PRINT=false
       - LOG_LEVEL=info
+      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
+      - JWT_SECRET_FILE=/run/secrets/jwt_secret
+      - SMTP_USER_FILE=/run/secrets/smtp_user
+      - SMTP_PASSWORD_FILE=/run/secrets/smtp_password
+    networks:
+      - niyati
     restart: always
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001/api/v1/telemetry/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    depends_on:
+      postgres:
+        condition: service_healthy
 
-  ui-service:
+  # BFF Platform Service - Production Configuration
+  bff-platform:
     build:
+      context: ./be
+      dockerfile: bff-platform/Dockerfile
       target: production
-    container_name: niyati-ui-prod
-    ports:
-      - "80:80"
-    volumes:
-      # No source code mounting
-      # Nginx config is baked into image
-      []
+    container_name: niyati-bff-platform-prod
+    # Ports exposed only to internal network (accessed via Caddy)
+    expose:
+      - "3000"
+    secrets:
+      - postgres_password
+    env_file:
+      - .env.bff.platform
     environment:
       - NODE_ENV=production
+      - LOG_PRETTY_PRINT=false
+      - LOG_LEVEL=info
+      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
+    networks:
+      - niyati
     restart: always
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/api/v1/telemetry/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # UI Service - Production Configuration
+  ui-service:
+    build:
+      context: ./ui
+      dockerfile: Dockerfile
+      target: production
+    container_name: niyati-ui-prod
+    # Ports exposed only to internal network (accessed via Caddy)
+    expose:
+      - "80"
+    env_file:
+      - .env.ui
+    environment:
+      - NODE_ENV=production
+    networks:
+      - niyati
+    restart: always
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    depends_on:
+      - bff-auth
+      - bff-platform
+
+  # One-shot migration runner - applies SQL migrations then exits
+  migrate:
+    image: postgres:15-alpine
+    container_name: niyati-migrate-prod
+    # Do not restart automatically; migrations should run once and exit
+    restart: "no"
+    secrets:
+      - postgres_password
+    # Make sure postgres is healthy before attempting migrations
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Provide the same DATABASE_URL expansion used across services
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-niyati_prod}
+      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
+      - POSTGRES_DB=${POSTGRES_DB:-niyati_prod}
+      - PGHOST=postgres
+      - PGPORT=5432
+    networks:
+      - niyati
+    # Mount migrations and the runner script into the container
+    volumes:
+      - ./be/migrations:/migrations:ro
+      - ./be/scripts/run_migrations.sh:/scripts/run_migrations.sh:ro
+    command: ["sh", "/scripts/run_migrations.sh"]
+
+  # Redis - production cache/session store
+  redis:
+    image: redis:7-alpine
+    container_name: niyati-redis-prod
+    volumes:
+      - redis-data-prod:/data
+    networks:
+      - niyati
+    restart: always
+
+  # Database backup worker - periodic backups and optional S3 uploads
+  db-backup:
+    build:
+      context: ./be/scripts/backup
+      dockerfile: Dockerfile
+    image: niyati-db-backup-prod
+    container_name: niyati-db-backup-prod
+    restart: always
+    secrets:
+      - postgres_password
+      - aws_access_key_id
+      - aws_secret_access_key
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - PGHOST=postgres
+      - PGPORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-niyati_prod}
+      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
+      - POSTGRES_DB=${POSTGRES_DB:-niyati_prod}
+      - BACKUP_INTERVAL=${BACKUP_INTERVAL_SECONDS:-86400}
+      - S3_BUCKET=${S3_BUCKET}
+      - S3_PREFIX=${S3_PREFIX:-backups}
+      - AWS_ACCESS_KEY_ID_FILE=/run/secrets/aws_access_key_id
+      - AWS_SECRET_ACCESS_KEY_FILE=/run/secrets/aws_secret_access_key
+      - AWS_REGION=${AWS_REGION}
+    networks:
+      - niyati
+
+  # Caddy reverse proxy - handles HTTPS termination and routing
+  caddy:
+    image: caddy:2-alpine
+    container_name: niyati-caddy-prod
+    restart: always
+    ports:
+      - "80:80"     # HTTP (redirects to HTTPS)
+      - "443:443"   # HTTPS
+      - "443:443/udp" # HTTP/3
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+      - CADDY_EMAIL=${CADDY_EMAIL:-admin@example.com}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data-prod:/data
+      - caddy-config-prod:/config
+    networks:
+      - niyati
+    depends_on:
+      - ui-service
+      - bff-auth
+      - bff-platform
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Background worker processing queued jobs (email, webhooks, long tasks)
+  worker:
+    build:
+      context: ./be/worker
+      dockerfile: Dockerfile
+    image: niyati-worker-prod
+    container_name: niyati-worker-prod
+    restart: always
+    secrets:
+      - smtp_user
+      - smtp_password
+      - worker_token
+    depends_on:
+      - redis
+    environment:
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT}
+      - SMTP_USER_FILE=/run/secrets/smtp_user
+      - SMTP_PASSWORD_FILE=/run/secrets/smtp_password
+      - SMTP_SECURE=${SMTP_SECURE}
+      - EMAIL_FROM=${EMAIL_FROM}
+      - WORKER_TOKEN_FILE=/run/secrets/worker_token
+    networks:
+      - niyati
+
+networks:
+  niyati:
+    driver: bridge
+
+volumes:
+  postgres-data-prod:
+    driver: local
+  redis-data-prod:
+    driver: local
+  caddy-data-prod:
+    driver: local
+  caddy-config-prod:
+    driver: local
+
+# Secrets - stored in ./secrets/ directory (gitignored)
+# On production server, use /etc/niyati/secrets/ or secure vault
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password.txt
+  smtp_user:
+    file: ./secrets/smtp_user.txt
+  smtp_password:
+    file: ./secrets/smtp_password.txt
+  aws_access_key_id:
+    file: ./secrets/aws_access_key_id.txt
+  aws_secret_access_key:
+    file: ./secrets/aws_secret_access_key.txt
+  worker_token:
+    file: ./secrets/worker_token.txt
+  jwt_secret:
+    file: ./secrets/jwt_secret.txt

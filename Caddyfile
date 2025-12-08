@@ -1,0 +1,103 @@
+# Caddyfile - Production reverse proxy with automatic HTTPS
+# Caddy automatically obtains and renews Let's Encrypt certificates
+
+{
+    # Global options
+    email {$CADDY_EMAIL}
+    # Use staging for testing, remove 'acme_ca' for production Let's Encrypt
+    # acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+
+# Main domain - replace with your actual domain
+{$DOMAIN:localhost} {
+    # Enable automatic HTTPS (Let's Encrypt)
+    # For local development without a domain, Caddy will use self-signed certs
+
+    # Enable gzip compression
+    encode gzip
+
+    # Security headers
+    header {
+        # Enable HSTS
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        # Prevent clickjacking
+        X-Frame-Options "SAMEORIGIN"
+        # Prevent MIME sniffing
+        X-Content-Type-Options "nosniff"
+        # XSS protection
+        X-XSS-Protection "1; mode=block"
+        # Referrer policy
+        Referrer-Policy "strict-origin-when-cross-origin"
+        # Remove server header
+        -Server
+    }
+
+    # Health check endpoint
+    handle /health {
+        respond "healthy" 200
+    }
+
+    # BFF Auth API routes
+    handle /api/v1/auth/* {
+        reverse_proxy bff-auth:3001 {
+            # Health check
+            health_uri /api/v1/telemetry/health
+            health_interval 30s
+            health_timeout 10s
+            
+            # Headers
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # BFF Platform API routes
+    handle /api/v1/platform/* {
+        reverse_proxy bff-platform:3000 {
+            # Health check
+            health_uri /api/v1/telemetry/health
+            health_interval 30s
+            health_timeout 10s
+            
+            # Headers
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # UI - serve everything else
+    handle /* {
+        reverse_proxy ui-service:80 {
+            # Health check
+            health_uri /health
+            health_interval 30s
+            health_timeout 10s
+            
+            # Headers
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # Error pages
+    handle_errors {
+        @5xx expression `{err.status_code} >= 500 && {err.status_code} < 600`
+        respond @5xx "Service temporarily unavailable" 503
+
+        @4xx expression `{err.status_code} >= 400 && {err.status_code} < 500`
+        respond @4xx "Not found" 404
+    }
+
+    # Access log (optional, can be disabled for performance)
+    log {
+        output stdout
+        format json
+        level INFO
+    }
+}

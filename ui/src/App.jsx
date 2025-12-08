@@ -7,6 +7,9 @@ import MessageList from './components/MessageList';
 import ChatInput from './components/ChatInput';
 import BackgroundStars from './components/BackgroundStars';
 import PrivacyModal from './components/PrivacyModal';
+import InstallPrompt from './components/InstallPrompt';
+import UpdateNotification from './components/UpdateNotification';
+import NetworkStatus from './components/NetworkStatus';
 import { marked } from 'marked';
 import { parseNaturalDate, parseNaturalTime, normalizeDate } from './utils/dateParser';
 
@@ -180,7 +183,7 @@ const NiyatiChat = () => {
       delete safe.user_name; delete safe.user_dob; delete safe.user_placeOfBirth; delete safe.user_timeOfBirth; delete safe.phoneNumber;
 
       // fire-and-forget to BFF telemetry endpoint (bffFetch attaches x-request-id)
-      await bffFetch('/api/telemetry/log', {
+      await bffFetch('/telemetry/log', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tag, meta: safe, ts: Date.now() })
@@ -764,7 +767,7 @@ const NiyatiChat = () => {
     if (hasStreetIndicators || parts.length >= 4) {
       // Use structured API
       return {
-        endpoint: '/api/geocode/structured',
+        endpoint: '/geocode/structured',
         payload: {
           street: parts[0] || '',
           city: parts[1] || '',
@@ -775,19 +778,19 @@ const NiyatiChat = () => {
     } else if (parts.length === 3) {
       // Format: "City, State, Country" - use search API
       return {
-        endpoint: '/api/geocode/search',
+        endpoint: '/geocode/search',
         payload: { q: cleaned, limit: 5 }
       };
     } else if (parts.length === 2) {
       // Format: "City, Country" - use basic geocode API
       return {
-        endpoint: '/api/geocode',
+        endpoint: '/geocode',
         payload: { q: cleaned, limit: 5 }
       };
     } else {
       // Single location - use basic geocode API
       return {
-        endpoint: '/api/geocode',
+        endpoint: '/geocode',
         payload: { q: cleaned, limit: 5 }
       };
     }
@@ -837,8 +840,17 @@ const NiyatiChat = () => {
         const text = await geocodeResponse.text().catch(() => '');
         console.error('Geocoding request failed', { status: geocodeResponse.status, reqId: geoRespReqId, bodyPreview: text.slice ? text.slice(0, 400) : text });
         try { sendClientLog('geocode.resolve_failed', { status: geocodeResponse.status, reqId: geoRespReqId }); } catch (e) {}
-        // Surface a friendly message to the user
-        setMessages(prev => [...prev, { id: Date.now(), text: 'Automatic location detection failed — please enter your place of birth manually.', sender: 'bot', timestamp: new Date() }]);
+        // Surface a friendly message to the user (avoid duplicate messages)
+        {
+          const errorText = 'Automatic location detection failed — please enter your place of birth manually.';
+          setMessages(prev => {
+            // If a recent identical bot message exists (last 3), don't add again
+            const recent = prev.slice(-3);
+            const dup = recent.some(m => m && m.sender === 'bot' && m.text === errorText);
+            if (dup) return prev;
+            return [...prev, { id: Date.now(), text: errorText, sender: 'bot', timestamp: new Date() }];
+          });
+        }
         throw new Error(`Geocoding failed: ${geocodeResponse.status}`);
       }
 
@@ -864,11 +876,12 @@ const NiyatiChat = () => {
       
       // Unwrap BFF response (BFF wraps in {status, data, reqId})
       const actualData = geocodeData.data || geocodeData;
-      
+
       // Extract location data from geocoding response
+      // Accept both `place` (search/reverse responses) and `location` (current-location endpoint)
       let locationData = null;
-      if (actualData.status === 'ok' && actualData.place) {
-        locationData = actualData.place;
+      if (actualData.status === 'ok' && (actualData.place || actualData.location)) {
+        locationData = actualData.place || actualData.location;
       } else if (actualData.status === 'ambiguous' && actualData.suggestions && actualData.suggestions.length > 0) {
         // Use the first suggestion
         locationData = actualData.suggestions[0];
@@ -877,7 +890,16 @@ const NiyatiChat = () => {
       if (!locationData) {
         console.error('No location data found after geocode. geocodeData:', geocodeData);
         try { sendClientLog('geocode.no_location_found', { geocodeData: (typeof geocodeData === 'string' ? geocodeData.slice(0,400) : (geocodeData ? JSON.stringify(geocodeData).slice(0,400) : null)), reqId: geoRespReqId }); } catch (e) {}
-        setMessages(prev => [...prev, { id: Date.now(), text: 'Could not find a matching place for your input — please refine the place name.', sender: 'bot', timestamp: new Date() }]);
+        // Avoid spamming the same suggestion if it's already visible
+        {
+          const suggestText = 'Could not find a matching place for your input — please refine the place name.';
+          setMessages(prev => {
+            const recent = prev.slice(-3);
+            const dup = recent.some(m => m && m.sender === 'bot' && m.text === suggestText);
+            if (dup) return prev;
+            return [...prev, { id: Date.now(), text: suggestText, sender: 'bot', timestamp: new Date() }];
+          });
+        }
         throw new Error('No location data found');
       }
 
@@ -920,7 +942,7 @@ const NiyatiChat = () => {
         lon: locationData.lon
       };
 
-      const timezoneResponse = await bffFetch('/api/astrology/geo-details', {
+      const timezoneResponse = await bffFetch('/astrology/geo-details', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(timezonePayload)
@@ -951,7 +973,7 @@ const NiyatiChat = () => {
         };
         localStorage.setItem('niyati_user_profile', JSON.stringify(updatedProfile));
         // Update in-memory profile for immediate UI reflection
-        try { setProfile(prev => ({ ...prev, user_placeOfBirth: formattedPlace })); } catch (e) {}
+        try { updateProfile({ user_placeOfBirth: formattedPlace, placeOfBirth_raw: locationData.display_name || '' }); } catch (e) {}
       } catch (e) {
         // best-effort, do not block
       }
@@ -1024,7 +1046,7 @@ const NiyatiChat = () => {
       try {
         console.log('calculateAstrology: calling /api/astrology/planets');
         sendClientLog('calculateAstrology.planets.call');
-          const planetsResponse = await bffFetchWithRetry('/api/astrology/planets', {
+          const planetsResponse = await bffFetchWithRetry('/astrology/planets', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(astrologyPayload)
@@ -1039,8 +1061,14 @@ const NiyatiChat = () => {
           await new Promise((r) => setTimeout(r, 1000));
 
           console.log('calculateAstrology: calling /api/astrology/horoscope-svg');
-          sendClientLog('calculateAstrology.horoscope.call');
-          const horoscopeResponse = await bffFetchWithRetry('/api/astrology/horoscope-svg', {
+          try {
+            const fullHoroscopeUrl = buildApiUrl('/astrology/horoscope-svg');
+            console.log('calculateAstrology: full horoscope URL ->', fullHoroscopeUrl);
+            sendClientLog('calculateAstrology.horoscope.call', { url: fullHoroscopeUrl });
+          } catch (e) {
+            console.debug('calculateAstrology: failed to build horoscope URL', e);
+          }
+          const horoscopeResponse = await bffFetchWithRetry('/astrology/horoscope-svg', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1142,11 +1170,13 @@ const NiyatiChat = () => {
       // Don't throw - let the app continue functioning
     }
   }
-
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200 font-sans flex items-center justify-center p-4 relative overflow-hidden">
       {/* Background Stars */}
       <BackgroundStars />
+
+      {/* Network Status Banner */}
+      <NetworkStatus />
 
       {!auth.isLoggedIn ? (
         // --- LOGIN SCREEN ---
@@ -1199,6 +1229,10 @@ const NiyatiChat = () => {
         content={privacyHtml}
         isLoading={privacyLoading}
       />
+      
+      {/* PWA Features */}
+      <InstallPrompt />
+      <UpdateNotification />
     </div>
   );
 };
