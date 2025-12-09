@@ -1,5 +1,12 @@
 name: Security Vulnerability Scan
 
+# Note: GitHub runs workflows from forked repositories with reduced permissions.
+# In particular, runs triggered by pull requests from forks do NOT grant
+# the `GITHUB_TOKEN` permission to write security events or upload SARIF.
+# To avoid noisy failures when uploading SARIF results, the Trivy job skips
+# forked PRs and a `manual-trivy-scan` (workflow_dispatch) job is provided
+# so maintainers can run scans and upload results from the main repository.
+
 on:
   schedule:
     # Run daily at 2 AM UTC
@@ -25,7 +32,7 @@ jobs:
         node-version: '20'
     
     - name: Audit BFF dependencies
-      working-directory: ./be/bff
+      working-directory: ./be/bff-platform
       run: |
         echo "=== BFF Audit Report ===" >> $GITHUB_STEP_SUMMARY
         npm audit --json > audit-bff.json || true
@@ -43,7 +50,7 @@ jobs:
       with:
         name: npm-audit-results
         path: |
-          be/bff/audit-bff.json
+          be/bff-platform/audit-bff.json
           ui/audit-ui.json
         retention-days: 30
 
@@ -81,6 +88,10 @@ jobs:
   trivy-scan:
     name: Trivy Security Scan
     runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    # Run unless this is a pull_request coming from a fork (fork runs lack permission to upload SARIF)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     
     steps:
     - name: Checkout code
@@ -96,7 +107,34 @@ jobs:
         severity: 'CRITICAL,HIGH,MEDIUM'
       
     - name: Upload Trivy results to GitHub Security
-      uses: github/codeql-action/upload-sarif@v3
+      uses: github/codeql-action/upload-sarif@v4
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+  manual-trivy-scan:
+    name: Manual Trivy Scan (maintainers)
+    # Only run when triggered manually via workflow_dispatch
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+        severity: 'CRITICAL,HIGH,MEDIUM'
+      
+    - name: Upload Trivy results to GitHub Security
+      uses: github/codeql-action/upload-sarif@v4
       if: always()
       with:
         sarif_file: 'trivy-results.sarif'
