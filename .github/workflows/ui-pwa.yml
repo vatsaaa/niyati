@@ -21,6 +21,7 @@ jobs:
         with:
           node-version: '18'
           cache: 'npm'
+          cache-dependency-path: ui/package-lock.json
 
       - name: Install UI deps
         working-directory: ui
