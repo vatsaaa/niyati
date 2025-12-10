@@ -52,8 +52,13 @@ jobs:
           ./scripts/precompress-and-upload.sh "${{ secrets.UI_S3_BUCKET }}" dist
 
       - name: Invalidate CloudFront (optional)
-        if: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID != '' }}
         env:
           CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}
         run: |
+          # Skip invalidation when the distribution ID secret is not set
+          if [ -z "${CLOUDFRONT_DISTRIBUTION_ID:-}" ]; then
+            echo "CLOUDFRONT_DISTRIBUTION_ID not set; skipping CloudFront invalidation"
+            exit 0
+          fi
+
           aws cloudfront create-invalidation --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" --paths "/*"
