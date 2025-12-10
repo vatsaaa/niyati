@@ -46,6 +46,12 @@ export default defineConfig({
     command: 'npm run dev',
     url: 'http://localhost:5173',
     reuseExistingServer: !process.env.CI,
+    // Pass the external ngrok WEBHOOK_URL into the Vite app as VITE_N8N_WEBHOOK_URL.
+    // If WEBHOOK_URL isn't set (local dev), fall back to localhost where n8n
+    // commonly runs in development.
+    env: {
+      VITE_N8N_WEBHOOK_URL: process.env.WEBHOOK_URL || 'http://localhost:5678',
+    },
     timeout: 120000,
   },
 });

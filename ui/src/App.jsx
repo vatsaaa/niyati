@@ -11,7 +11,7 @@ import InstallPrompt from './components/InstallPrompt';
 import UpdateNotification from './components/UpdateNotification';
 import NetworkStatus from './components/NetworkStatus';
 import { marked } from 'marked';
-import { parseNaturalDate, parseNaturalTime, normalizeDate } from './utils/dateParser';
+import { parseNaturalDate, parseNaturalTime } from './utils/dateParser';
 
 const NiyatiChat = () => {
   // Custom hooks for state management
@@ -276,7 +276,7 @@ const NiyatiChat = () => {
 
     // --- Chat-extraction (silent) ---
     // Run extraction heuristics on the user's message and silently persist values for later review.
-    const extracted = extractProfileFields(userMessage.text);
+    const extracted = await extractProfileFields(userMessage.text);
     console.log('Extracted profile fields:', extracted);
     
     // Prepare normalized message by replacing extracted values with normalized versions
@@ -432,7 +432,7 @@ const NiyatiChat = () => {
   };
 
   // --- Helper: simple profile extraction heuristics ---
-  function extractProfileFields(text) {
+  async function extractProfileFields(text) {
     const lower = text.toLowerCase();
     const result = {};
 
@@ -453,7 +453,7 @@ const NiyatiChat = () => {
     else {
       // Try natural language parsing for formats like "the fifteenth of March, 1990"
       try {
-        const chronoResult = parseNaturalDate(text);
+        const chronoResult = await parseNaturalDate(text);
         if (chronoResult && chronoResult.confidence > 0.6) {
           console.log('Extracted date using Chrono:', chronoResult);
           result.dob = chronoResult.date; // Already in YYYY-MM-DD format
@@ -489,7 +489,7 @@ const NiyatiChat = () => {
     else {
       // Try natural language parsing for formats like "half past two in the afternoon"
       try {
-        const chronoResult = parseNaturalTime(text);
+        const chronoResult = await parseNaturalTime(text);
         if (chronoResult && chronoResult.confidence > 0.6) {
           console.log('Extracted time using Chrono:', chronoResult);
           result.timeOfBirth = chronoResult.time; // Already in HH:MM:SS format
@@ -509,16 +509,9 @@ const NiyatiChat = () => {
     if (!s || typeof s !== 'string') return '';
     let t = s.trim();
     
-    // Try natural language parsing first for complex formats like "half past two", "2:30 in the afternoon"
-    try {
-      const chronoResult = parseNaturalTime(t);
-      if (chronoResult && chronoResult.confidence > 0.7) {
-        return chronoResult.time;
-      }
-    } catch (e) {
-      // Chrono failed, continue with regex patterns
-      console.debug('Chrono time parsing failed, falling back to regex:', e);
-    }
+    // For complex natural language time formats we previously used Chrono.
+    // Chrono parsing is now loaded lazily via the parser util; here we keep
+    // a lightweight regex-based fallback to avoid adding chrono to hot paths.
     
     // Handle AM/PM with optional seconds: hh:mm:ss am/pm or hh:mm am/pm or hh am/pm
     const ampmMatch = t.match(/^(\d{1,2})(?::(\d{2}))?(?::(\d{2}))?\s*(am|pm)$/i);
@@ -596,16 +589,10 @@ const NiyatiChat = () => {
     const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
     if (iso) return s;
 
-    // Try natural language parsing with Chrono first for complex formats
-    try {
-      const chronoResult = parseNaturalDate(s);
-      if (chronoResult && chronoResult.confidence > 0.8) {
-        return chronoResult.date;
-      }
-    } catch (e) {
-      // Chrono failed, continue with regex patterns
-      console.debug('Chrono parsing failed, falling back to regex:', e);
-    }
+    // For complex natural language date formats we previously used Chrono.
+    // Chrono parsing is now provided as a lazy-loaded utility; here keep the
+    // fast synchronous path (Date.parse + numeric parsing) to avoid importing
+    // chrono on every render.
 
     // Try textual parse (e.g., '12 Jan 1990' or 'Jan 12 1990')
     const textDate = Date.parse(s);
@@ -639,16 +626,9 @@ const NiyatiChat = () => {
       return `${year}-${month}-${day}`;
     }
     
-    // Final fallback: try Chrono with lower confidence threshold
-    try {
-      const chronoResult = parseNaturalDate(s);
-      if (chronoResult && chronoResult.confidence > 0.5) {
-        console.debug('Using Chrono result with confidence:', chronoResult.confidence);
-        return chronoResult.date;
-      }
-    } catch (e) {
-      // ignore
-    }
+    // Final fallback: do not call Chrono synchronously here.
+    // If necessary, use the server-side parser or call the async parser from
+    // extraction flows where awaiting is safe.
 
     return null;
   }

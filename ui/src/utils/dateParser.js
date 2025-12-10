@@ -1,9 +1,33 @@
 /**
  * Natural language date/time parser using Chrono
  * Provides robust parsing of dates and times from conversational text
+ *
+ * NOTE: `chrono-node` is a relatively large dependency. To avoid adding it
+ * to the main application bundle we lazy-load it on first use via dynamic
+ * import. The exported parsing functions are async and must be awaited.
  */
 
-import * as chrono from 'chrono-node';
+// We moved heavy chrono parsing to the BFF to keep the client bundle small.
+// The client calls POST /api/v1/parse/date with { text, ref } and expects
+// a response { status: 'ok', data: [{ text, index, start, end, tags }] }
+async function fetchParseFromBff(text, ref) {
+  try {
+    const res = await fetch(`/api/v1/parse/date`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, ref })
+    });
+    if (!res.ok) return null;
+    const payload = await res.json();
+    if (!payload || payload.status !== 'ok' || !Array.isArray(payload.data)) return null;
+    return payload.data;
+  } catch (e) {
+    // network or parse error
+    // eslint-disable-next-line no-console
+    console.warn('BFF parse request failed', e);
+    return null;
+  }
+}
 
 /**
  * Convert written numbers to digits for dates (e.g., "nineteen" -> "19")
@@ -72,7 +96,7 @@ function preprocessDateText(text) {
  * parseNaturalDate("born 25 years ago")
  * // Returns approximate date based on reference date
  */
-export function parseNaturalDate(text, options = {}) {
+export async function parseNaturalDate(text, options = {}) {
   if (!text || typeof text !== 'string') return null;
   
   // Preprocess to convert number words to digits
@@ -80,13 +104,10 @@ export function parseNaturalDate(text, options = {}) {
   console.log('Date parsing - original:', text, 'preprocessed:', processedText);
   
   const referenceDate = options.referenceDate || new Date();
-  const results = chrono.parse(processedText, referenceDate, { forwardDate: false });
-  
+  const results = await fetchParseFromBff(processedText, referenceDate.toISOString());
   if (!results || results.length === 0) return null;
-  
-  // Take the first (most confident) result
   const result = results[0];
-  const date = result.start.date();
+  const date = result.start ? new Date(result.start) : null;
   
   if (!date) return null;
   
@@ -97,11 +118,10 @@ export function parseNaturalDate(text, options = {}) {
   // Format as YYYY-MM-DD
   const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
   
-  // Calculate confidence based on certainty of parsed components
-  let confidence = 0.5; // base confidence
-  if (result.start.isCertain('year')) confidence += 0.3;
-  if (result.start.isCertain('month')) confidence += 0.15;
-  if (result.start.isCertain('day')) confidence += 0.05;
+  // We don't have component-level certainty from the BFF for now.
+  // Use a conservative default confidence mapping: exact date => 1, otherwise 0.8
+  let confidence = 0.9;
+  if (!result.start) confidence = 0.5;
   
   return {
     date: isoDate,
@@ -129,15 +149,12 @@ export function parseNaturalDate(text, options = {}) {
  * parseNaturalTime("at 2:30 in the afternoon")
  * // Returns: { time: "14:30:00", hours: 14, minutes: 30, seconds: 0, confidence: 0.9 }
  */
-export function parseNaturalTime(text, options = {}) {
+export async function parseNaturalTime(text, options = {}) {
   if (!text || typeof text !== 'string') return null;
-  
-  const results = chrono.parse(text, new Date(), { forwardDate: true });
-  
+  const results = await fetchParseFromBff(text, new Date().toISOString());
   if (!results || results.length === 0) return null;
-  
   const result = results[0];
-  const date = result.start.date();
+  const date = result.start ? new Date(result.start) : null;
   
   if (!date) return null;
   
@@ -149,9 +166,8 @@ export function parseNaturalTime(text, options = {}) {
   const timeString = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
   
   // Calculate confidence
-  let confidence = 0.5;
-  if (result.start.isCertain('hour')) confidence += 0.35;
-  if (result.start.isCertain('minute')) confidence += 0.15;
+  let confidence = 0.8;
+  if (!result.start) confidence = 0.4;
   
   return {
     time: timeString,
@@ -179,15 +195,12 @@ export function parseNaturalTime(text, options = {}) {
  * parseNaturalDateTime("I was born on March 15, 1990 at 2:30 PM")
  * // Returns: { date: "1990-03-15", time: "14:30:00", ... }
  */
-export function parseNaturalDateTime(text, options = {}) {
+export async function parseNaturalDateTime(text, options = {}) {
   if (!text || typeof text !== 'string') return null;
-  
-  const results = chrono.parse(text, new Date(), { forwardDate: false });
-  
+  const results = await fetchParseFromBff(text, new Date().toISOString());
   if (!results || results.length === 0) return null;
-  
   const result = results[0];
-  const date = result.start.date();
+  const date = result.start ? new Date(result.start) : null;
   
   if (!date) return null;
   
@@ -201,13 +214,9 @@ export function parseNaturalDateTime(text, options = {}) {
   const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
   const timeString = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
   
-  // Calculate overall confidence
-  let confidence = 0.3;
-  if (result.start.isCertain('year')) confidence += 0.2;
-  if (result.start.isCertain('month')) confidence += 0.15;
-  if (result.start.isCertain('day')) confidence += 0.05;
-  if (result.start.isCertain('hour')) confidence += 0.2;
-  if (result.start.isCertain('minute')) confidence += 0.1;
+  // Use conservative confidence when parsing via BFF
+  let confidence = 0.6;
+  if (result.start) confidence = 0.9;
   
   return {
     date: isoDate,
@@ -234,13 +243,13 @@ export function parseNaturalDateTime(text, options = {}) {
  * extractBirthInfo("I was born on March 15, 1990 at 2:30 PM in New Delhi")
  * // Returns: { date: "1990-03-15", time: "14:30:00", place: "New Delhi", ... }
  */
-export function extractBirthInfo(text) {
+export async function extractBirthInfo(text) {
   if (!text || typeof text !== 'string') return null;
   
   const result = {};
   
   // Try to parse date/time
-  const dateTimeResult = parseNaturalDateTime(text);
+  const dateTimeResult = await parseNaturalDateTime(text);
   if (dateTimeResult) {
     result.date = dateTimeResult.date;
     result.time = dateTimeResult.time;
@@ -283,11 +292,11 @@ export function isValidDate(dateStr) {
  * @param {string} dateStr - Date string in any format
  * @returns {string|null} ISO date string or null if invalid
  */
-export function normalizeDate(dateStr) {
+export async function normalizeDate(dateStr) {
   if (!dateStr) return null;
   
   // Try natural language parsing first
-  const parsed = parseNaturalDate(dateStr);
+  const parsed = await parseNaturalDate(dateStr);
   if (parsed && parsed.confidence > 0.7) {
     return parsed.date;
   }

@@ -69,7 +69,8 @@ services:
       # Source code for hot reload
       - ./ui:/app
       # Prevent node_modules from being overwritten
-      - /app/node_modules
+      # Mount host node_modules to preserve installed dependencies inside container
+      - ui-node-modules:/app/node_modules
     env_file:
       - .env.ui
     environment:

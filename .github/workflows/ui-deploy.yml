@@ -1,0 +1,59 @@
+name: UI Deploy (S3 + CloudFront via OIDC)
+
+on:
+  push:
+    # Trigger on repository default branches (master) and main if used
+    branches: [ master, main ]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-and-deploy:
+    name: Build and deploy UI
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        working-directory: ui
+        run: npm ci
+
+      - name: Build (production)
+        working-directory: ui
+        run: npm run build --if-present
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }} # set this in repo secrets to the niyati-deployer role ARN
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Precompress and upload to S3
+        working-directory: ui
+        env:
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          # Fail early if the required S3 bucket secret is not configured
+          if [ -z "${{ secrets.UI_S3_BUCKET }}" ]; then
+            echo "ERROR: UI_S3_BUCKET secret is not set. Set the repo secret 'UI_S3_BUCKET' to your S3 bucket name." >&2
+            exit 1
+          fi
+
+          chmod +x ./scripts/precompress-and-upload.sh
+          ./scripts/precompress-and-upload.sh "${{ secrets.UI_S3_BUCKET }}" dist
+
+      - name: Invalidate CloudFront (optional)
+        if: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID != '' }}
+        env:
+          CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}
+        run: |
+          aws cloudfront create-invalidation --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" --paths "/*"

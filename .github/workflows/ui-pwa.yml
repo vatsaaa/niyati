@@ -24,17 +24,14 @@ jobs:
           cache-dependency-path: ui/package-lock.json
 
       - name: Install UI deps
-        working-directory: ui
         run: |
           npm ci
 
       - name: Build UI
-        working-directory: ui
         run: |
           npm run build:ci
 
       - name: Serve built UI in background
-        working-directory: ui
         run: |
           npx serve -s dist -l 4173 &
           # wait for server
@@ -46,14 +43,12 @@ jobs:
           done
 
       - name: Lighthouse PWA check
-        working-directory: ui
         env:
           PWA_URL: 'http://localhost:4173'
         run: |
           npm run pwa:check
 
       - name: Run Playwright PWA tests
-        working-directory: ui
         env:
           PWA_URL: 'http://localhost:4173'
         run: |

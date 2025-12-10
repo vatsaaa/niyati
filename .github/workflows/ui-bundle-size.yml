@@ -1,0 +1,62 @@
+name: UI Bundle Size Check
+
+on:
+  push:
+    branches: [ '**' ]
+  pull_request:
+    branches: [ '**' ]
+  workflow_dispatch:
+    inputs:
+      per_file_limit:
+        description: 'Per-file gzip limit (e.g. 150KB, 200KB, 1MB)'
+        required: false
+        default: '150KB'
+      total_js_limit:
+        description: 'Total JS gzip limit (e.g. 250KB, 350KB)'
+        required: false
+        default: '250KB'
+
+jobs:
+  build_and_check:
+    name: Build UI and Check Bundle Size
+    runs-on: ubuntu-latest
+    env:
+      PER_FILE_LIMIT: ${{ github.event.inputs.per_file_limit || '150KB' }}
+      TOTAL_JS_LIMIT: ${{ github.event.inputs.total_js_limit || '250KB' }}
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache node modules
+        uses: actions/cache@v4
+        with:
+          path: ui/node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('ui/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Run bundle size check
+        run: npm run check-size
+
+      - name: Upload bundle-stats and dist
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-bundle-stats
+          path: |
+            ui/bundle-stats.html
+            ui/dist
