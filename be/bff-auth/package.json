@@ -5,7 +5,8 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "NODE_ENV=development node src/index.js"
+    "dev": "NODE_ENV=development node src/index.js",
+    "test": "jest --runInBand"
   },
   "dependencies": {
     "express": "^4.18.2",
@@ -24,5 +25,17 @@
     "axios": "^1.5.0",
     "express-rate-limit": "^7.1.5",
     "node-cache": "^5.1.2"
+  },
+  "devDependencies": {
+    "jest": "^29.6.0",
+    "supertest": "^6.3.3",
+    "testcontainers": "^9.2.0"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testTimeout": 120000,
+    "globalSetup": "<rootDir>/tests/setup/jestGlobalSetup.js",
+    "globalTeardown": "<rootDir>/tests/setup/jestGlobalTeardown.js",
+    "setupFilesAfterEnv": ["<rootDir>/tests/setup/jestSetupEnv.js"]
   }
 }

@@ -16,10 +16,12 @@ const DEFAULT_DATABASE_URL = 'postgresql://postgres:postgres@localhost:5432/niya
 const DATABASE_URL = process.env.DATABASE_URL || DEFAULT_DATABASE_URL;
 const MIGRATIONS_DIR = path.join(__dirname, '..', 'migrations');
 
-async function waitForDb(client, attempts = 30, delayMs = 1000) {
+async function waitForDb(connectionString, attempts = 30, delayMs = 1000) {
   for (let i = 0; i < attempts; i++) {
+    const tryClient = new Client({ connectionString });
     try {
-      await client.connect();
+      await tryClient.connect();
+      await tryClient.end();
       return;
     } catch (err) {
       if (i === attempts - 1) throw err;
@@ -70,7 +72,9 @@ async function run() {
 
   try {
     console.log('Waiting for database to be ready...');
-    await waitForDb(client);
+    await waitForDb(DATABASE_URL);
+    // connect the primary client we'll use for migrations
+    await client.connect();
     console.log('Connected to database');
 
     // ensure migrations table exists and use client for queries
@@ -80,7 +84,7 @@ async function run() {
     if (files.length === 0) {
       console.log('No migration files found in', MIGRATIONS_DIR);
       await client.end();
-      process.exit(0);
+      return { applied: 0 };
     }
 
     for (const file of files) {
@@ -97,7 +101,7 @@ async function run() {
 
     console.log('Migrations complete');
     await client.end();
-    process.exit(0);
+    return { applied: files.length };
   } catch (err) {
     console.error('Migration failed:', err && err.message ? err.message : err);
     try {
@@ -105,10 +109,15 @@ async function run() {
     } catch (e) {
       // ignore
     }
-    process.exit(1);
+    throw err;
   }
 }
 
 if (require.main === module) {
-  run();
+  run()
+    .then(() => process.exit(0))
+    .catch(() => process.exit(1));
 }
+
+// Export runner so other tools (jest global setup) can invoke migrations
+module.exports = { run };
