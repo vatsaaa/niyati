@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  e2e:
+    build:
+      context: .
+      dockerfile: be/e2e/Dockerfile
+    image: niyati-e2e:latest
+    environment:
+      # Default BFF_BASE points to bff-platform service in compose network
+      BFF_BASE: ${BFF_BASE:-http://bff-platform:3000/api/v1}
+      # Point the test runner at the Compose Postgres instance so jestGlobalSetup
+      # uses an existing DB instead of starting testcontainers.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-niyati}:${POSTGRES_PASSWORD:-niyati_dev_pass}@postgres:5432/${POSTGRES_DB:-niyati_dev}
+    depends_on:
+      - postgres
+      - bff-auth
+      - bff-platform
+      - redis
+      - mailhog
+    networks:
+      - niyati
+
+networks:
+  niyati:
+    external: true

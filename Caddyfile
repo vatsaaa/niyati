@@ -37,9 +37,9 @@
         respond "healthy" 200
     }
 
-    # BFF Auth API routes
+    # BFF Auth API routes (specific auth endpoints)
     handle /api/v1/auth/* {
-        reverse_proxy bff-auth:3001 {
+        reverse_proxy bff-auth:{$BFF_AUTH_PORT:3001} {
             # Health check
             health_uri /api/v1/telemetry/health
             health_interval 30s
@@ -53,9 +53,9 @@
         }
     }
 
-    # BFF Platform API routes
-    handle /api/v1/platform/* {
-        reverse_proxy bff-platform:3000 {
+    # BFF Platform API routes (platform-specific endpoints and general API catch-all)
+    handle /api/* {
+        reverse_proxy bff-platform:{$BFF_PLATFORM_PORT:3000} {
             # Health check
             health_uri /api/v1/telemetry/health
             health_interval 30s
@@ -71,7 +71,7 @@
 
     # UI - serve everything else
     handle /* {
-        reverse_proxy ui-service:80 {
+        reverse_proxy ui-service:{$UI_PROD_PORT:80} {
             # Health check
             health_uri /health
             health_interval 30s

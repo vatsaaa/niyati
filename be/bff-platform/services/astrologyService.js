@@ -1,7 +1,10 @@
 const axios = require('axios');
 const NodeCache = require('node-cache');
 const crypto = require('crypto');
-const { logger, sanitize } = require('../commons');
+const { logger, sanitize, config } = require('../commons');
+
+// Centralized astrology API URL from config (can be overridden via ASTRO_API_URL env var)
+const ASTRO_API_BASE_URL = config.astrology.baseUrl;
 
 const cache = new NodeCache({ stdTTL: 60 * 60 * 24, checkperiod: 120 }); // 24h cache
 
@@ -64,7 +67,7 @@ function logError(tag, payload) {
  * @private
  */
 async function callProvider(profile) {
-  const configured = process.env.ASTRO_API_URL || 'https://json.freeastrologyapi.com';
+  const configured = ASTRO_API_BASE_URL;
   const key = process.env.ASTRO_API_KEY;
   if (!configured) throw new Error('no_provider_configured');
 
@@ -229,7 +232,7 @@ async function compute(profile) {
   const cached = cache.get(cacheKey);
   if (cached) return cached;
 
-  const url = process.env.ASTRO_API_URL;
+  const url = ASTRO_API_BASE_URL;
   if (!url) {
     const mock = makeMockResponse(profile);
     cache.set(cacheKey, mock);
@@ -278,7 +281,7 @@ module.exports = { compute, _cache: cache };
  */
 async function geoDetails(query) {
   // query can be { q: 'Pune, India' } or { lat, lon } or a placeOfBirth object
-  const configured = process.env.ASTRO_API_URL || 'https://json.freeastrologyapi.com';
+  const configured = ASTRO_API_BASE_URL;
   const key = process.env.ASTRO_API_KEY;
   const base = configured.replace(/\/$/, '');
   if (!configured) {
@@ -436,7 +439,7 @@ async function planets(payloadOrProfile) {
   }
   // generate or accept a request-level correlation id to include in logs
   const _reqId = (payloadOrProfile && payloadOrProfile._reqId) || genReqId();
-  const configured = process.env.ASTRO_API_URL || 'https://json.freeastrologyapi.com';
+  const configured = ASTRO_API_BASE_URL;
   const key = process.env.ASTRO_API_KEY;
   const base = configured.replace(/\/$/, '');
   if (!configured) throw new Error('no_provider_configured');
@@ -518,9 +521,9 @@ async function planets(payloadOrProfile) {
     // ignore cache failures
   }
 
-  // Retry/backoff configuration
-  const MAX_RETRIES = parseInt(process.env.ASTRO_RETRY_MAX || '2', 10); // number of retry attempts on 429/5xx
-  const RETRY_BASE_MS = parseInt(process.env.ASTRO_RETRY_BASE_MS || '500', 10);
+  // Retry/backoff configuration from centralized config
+  const MAX_RETRIES = config.astrology.retryMax;
+  const RETRY_BASE_MS = config.astrology.retryBaseMs;
   const jitter = (ms) => Math.floor(ms * (0.5 + Math.random() * 0.5));
   const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
@@ -621,7 +624,7 @@ module.exports = { compute, _cache: cache, geoDetails, planets };
  * });
  */
 async function navamsa(payloadOrProfile) {
-  const configured = process.env.ASTRO_API_URL || 'https://json.freeastrologyapi.com';
+  const configured = ASTRO_API_BASE_URL;
   const key = process.env.ASTRO_API_KEY;
   const base = configured.replace(/\/$/, '');
   if (!configured) throw new Error('no_provider_configured');
@@ -729,7 +732,7 @@ async function divisional(n, payloadOrProfile) {
     err.code = 'invalid_divisional';
     throw err;
   }
-  const configured = process.env.ASTRO_API_URL || 'https://json.freeastrologyapi.com';
+  const configured = ASTRO_API_BASE_URL;
   const key = process.env.ASTRO_API_KEY;
   const base = configured.replace(/\/$/, '');
   if (!configured) throw new Error('no_provider_configured');
@@ -774,7 +777,7 @@ async function divisional(n, payloadOrProfile) {
   // Try the configured base, then fallback bases commonly used by providers
   const fallbackBases = [
     base,
-    'https://json.freeastrologyapi.com',
+    ASTRO_API_BASE_URL,
     'https://json.apiastro.com'
   ].filter((b, idx, arr) => b && arr.indexOf(b) === idx);
 
@@ -835,7 +838,7 @@ async function divisional(n, payloadOrProfile) {
  * // chart.data contains SVG code for rendering
  */
 async function horoscopeSvg(payloadOrProfile) {
-  const configured = process.env.ASTRO_API_URL || 'https://json.freeastrologyapi.com';
+  const configured = ASTRO_API_BASE_URL;
   const key = process.env.ASTRO_API_KEY;
   const base = configured.replace(/\/$/, '');
   if (!configured) throw new Error('no_provider_configured');

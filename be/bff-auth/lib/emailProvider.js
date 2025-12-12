@@ -27,7 +27,13 @@ async function sendMail({ to, subject, text, html }) {
     return { accepted: [to], messageId: `dev-${Date.now()}` };
   }
 
-  const info = await transport.sendMail({ from: process.env.EMAIL_FROM || 'no-reply@example.com', to, subject, text, html });
+  const from = process.env.EMAIL_FROM;
+  if (!from) {
+    logger.error({ msg: 'EMAIL_FROM not configured' });
+    throw new Error('EMAIL_FROM environment variable is required');
+  }
+
+  const info = await transport.sendMail({ from, to, subject, text, html });
   logger.info({ msg: 'email_sent', to, subject, messageId: info.messageId });
   return info;
 }

@@ -30,16 +30,18 @@ log_error() {
 check_env_files() {
     log_info "Checking environment files..."
     
-    if [ ! -f ".env.bff" ]; then
-        log_warn ".env.bff not found. Creating from example..."
-        if [ -f "be/bff/.env.example" ]; then
-            cp be/bff/.env.example .env.bff
-            log_info "Created .env.bff - please update with your API keys"
-        else
-            log_error ".env.example not found!"
-            exit 1
+    # Check service-specific env files
+    for svc in auth platform pthru; do
+        if [ ! -f ".env.bff.${svc}" ]; then
+            if [ -f ".env.bff.${svc}.example" ]; then
+                log_warn ".env.bff.${svc} not found. Creating from example..."
+                cp ".env.bff.${svc}.example" ".env.bff.${svc}"
+                log_info "Created .env.bff.${svc} - please update with your API keys"
+            else
+                log_warn ".env.bff.${svc}.example not found - skipping"
+            fi
         fi
-    fi
+    done
     
     if [ ! -f ".env.ui" ]; then
         log_warn ".env.ui not found. Creating with defaults..."
@@ -82,14 +84,24 @@ EOF
 }
 
 # Main script
+
+# Load port configuration from .env
+if [ -f ".env" ]; then
+    export $(grep -E '^(BFF_PLATFORM_PORT|BFF_AUTH_PORT|UI_DEV_PORT)=' .env | xargs)
+fi
+BFF_PLATFORM_PORT=${BFF_PLATFORM_PORT:-3000}
+BFF_AUTH_PORT=${BFF_AUTH_PORT:-3001}
+UI_DEV_PORT=${UI_DEV_PORT:-5173}
+
 case "$1" in
     up)
         check_env_files
         log_info "Starting development services..."
         docker-compose up -d
         log_info "Services started. Use 'docker-compose logs -f' to view logs"
-        log_info "BFF: http://localhost:3000"
-        log_info "UI: http://localhost:5173"
+        log_info "BFF Platform: http://localhost:${BFF_PLATFORM_PORT}"
+        log_info "BFF Auth: http://localhost:${BFF_AUTH_PORT}"
+        log_info "UI: http://localhost:${UI_DEV_PORT}"
         ;;
     down)
         log_info "Stopping services..."
@@ -140,11 +152,14 @@ case "$1" in
     health)
         log_info "Checking service health..."
         echo ""
-        echo "BFF Service:"
-        curl -s http://localhost:3000/api/v1/telemetry/health | jq . || log_error "BFF unhealthy"
+        echo "BFF Platform Service:"
+        curl -s http://localhost:${BFF_PLATFORM_PORT}/api/v1/telemetry/health | jq . || log_error "BFF Platform unhealthy"
+        echo ""
+        echo "BFF Auth Service:"
+        curl -s http://localhost:${BFF_AUTH_PORT}/api/v1/telemetry/health | jq . || log_error "BFF Auth unhealthy"
         echo ""
         echo "UI Service:"
-        curl -s http://localhost:5173 > /dev/null && log_info "UI healthy" || log_error "UI unhealthy"
+        curl -s http://localhost:${UI_DEV_PORT} > /dev/null && log_info "UI healthy" || log_error "UI unhealthy"
         ;;
     help|--help|-h|"")
         show_help

@@ -1,13 +1,16 @@
 version: '3.8'
 services:
   bff-pthru:
-    build: .
+    build:
+      context: ..
+      dockerfile: bff-pthru/Dockerfile
     image: niyati/bff-pthru:latest
     ports:
-      - "3003:3003"
+      - "${BFF_PTHRU_PORT:-3003}:${BFF_PTHRU_PORT:-3003}"
     environment:
+      PORT: "${BFF_PTHRU_PORT:-3003}"
       # Use the same webhook URL variable the UI uses at build/runtime
-      N8N_WEBHOOK_URL: "${VITE_N8N_WEBHOOK_URL}"
+      N8N_WEBHOOK_URL: "${N8N_WEBHOOK_URL}"
       # Keep token variable name generic so it can be the same as used elsewhere
       N8N_TOKEN: "${N8N_TOKEN}"
     restart: unless-stopped

@@ -30,15 +30,18 @@ fi
 
 echo -e "${GREEN}✓ Docker is installed and running${NC}"
 
-# Create .env.bff if it doesn't exist
-if [ ! -f ".env.bff" ]; then
-    echo -e "${YELLOW}→ Creating .env.bff from example...${NC}"
-    cp .env.bff.example .env.bff
-    echo -e "${GREEN}✓ Created .env.bff${NC}"
-    echo -e "${YELLOW}⚠️  Please edit .env.bff and add your API keys!${NC}"
-else
-    echo -e "${GREEN}✓ .env.bff already exists${NC}"
-fi
+# Create service-specific .env files if they don't exist
+for svc in auth platform pthru; do
+    if [ ! -f ".env.bff.${svc}" ]; then
+        if [ -f ".env.bff.${svc}.example" ]; then
+            echo -e "${YELLOW}→ Creating .env.bff.${svc} from example...${NC}"
+            cp ".env.bff.${svc}.example" ".env.bff.${svc}"
+            echo -e "${GREEN}✓ Created .env.bff.${svc}${NC}"
+        fi
+    else
+        echo -e "${GREEN}✓ .env.bff.${svc} already exists${NC}"
+    fi
+done
 
 # Create .env.ui if it doesn't exist
 if [ ! -f ".env.ui" ]; then
@@ -62,15 +65,17 @@ echo -e "${BLUE}╚════════════════════�
 echo ""
 echo -e "${GREEN}Next steps:${NC}"
 echo ""
-echo "1. Edit .env.bff and add your API keys:"
-echo "   ${YELLOW}nano .env.bff${NC}"
+echo "1. Edit .env files and add your API keys:"
+echo "   ${YELLOW}nano .env.bff.auth${NC}"
+echo "   ${YELLOW}nano .env.bff.platform${NC}"
 echo ""
 echo "2. Start the services:"
 echo "   ${YELLOW}./scripts/docker-dev.sh up${NC}"
 echo ""
-echo "3. Access the application:"
-echo "   UI:  ${BLUE}http://localhost:5173${NC}"
-echo "   BFF: ${BLUE}http://localhost:3000${NC}"
+echo "3. Access the application (ports configured in .env):"
+echo "   UI:           ${BLUE}http://localhost:\${UI_DEV_PORT:-5173}${NC}"
+echo "   BFF Platform: ${BLUE}http://localhost:\${BFF_PLATFORM_PORT:-3000}${NC}"
+echo "   BFF Auth:     ${BLUE}http://localhost:\${BFF_AUTH_PORT:-3001}${NC}"
 echo ""
 echo "4. View logs:"
 echo "   ${YELLOW}./scripts/docker-dev.sh logs${NC}"

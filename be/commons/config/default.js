@@ -64,6 +64,19 @@ module.exports = {
   },
   
   astrology: {
+    // Default base URL - override with ASTRO_API_URL env var
+    baseUrl: 'https://json.freeastrologyapi.com',
     timeout: 10000 // 10 seconds for astrology calculations
+  },
+  
+  // bff-pthru specific config
+  bffPthru: {
+    requestTimeoutMs: 60000 // 60 seconds for n8n webhook calls
+  },
+  
+  // n8n webhook configuration
+  n8n: {
+    webhookUrl: '', // Must be set via N8N_WEBHOOK_URL env var
+    token: ''       // Optional, set via N8N_TOKEN env var
   }
 };

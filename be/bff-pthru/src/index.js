@@ -4,13 +4,15 @@ const axios = require('axios');
 const morgan = require('morgan');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
+const { config, logger } = require('commons');
 
 const app = express();
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: config.server.bodyLimit || '1mb' }));
 app.use(morgan('tiny'));
 
-const PORT = process.env.PORT || 3003;
-const REQUEST_TIMEOUT_MS = () => parseInt(process.env.BFF_REQUEST_TIMEOUT_MS || '60000', 10);
+// Use centralized port configuration
+const PORT = config.server.port;
+const REQUEST_TIMEOUT_MS = () => config.get('bffPthru.requestTimeoutMs', 'BFF_REQUEST_TIMEOUT_MS', 60000);
 
 
 // Configure optional CORS origins for the health endpoint.
@@ -40,7 +42,7 @@ if (healthCorsOrigins) {
 app.get('/health', healthCors || ((req, res, next) => next()), (req, res) => {
   const uptime = process.uptime();
   const supportsChat = true;
-  const n8nConfigured = Boolean(process.env.N8N_WEBHOOK_URL);
+  const n8nConfigured = Boolean(config.get('n8n.webhookUrl', 'N8N_WEBHOOK_URL', ''));
   return res.json({
     status: 'ok',
     service: 'bff-pthru',
@@ -53,10 +55,11 @@ app.get('/health', healthCors || ((req, res, next) => next()), (req, res) => {
 });
 
 app.post('/api/v1/chat', async (req, res) => {
-  const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL;
-  const N8N_TOKEN = process.env.N8N_TOKEN;
+  const N8N_WEBHOOK_URL = config.get('n8n.webhookUrl', 'N8N_WEBHOOK_URL', '');
+  const N8N_TOKEN = config.get('n8n.token', 'N8N_TOKEN', '');
 
   if (!N8N_WEBHOOK_URL) {
+    logger.error({ msg: 'n8n webhook not configured' });
     return res.status(502).json({ error: 'n8n webhook not configured' });
   }
 

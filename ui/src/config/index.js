@@ -9,7 +9,7 @@ const configs = {
     // API endpoints
     bffBaseUrl: import.meta.env.VITE_BFF_BASE_URL || 'http://localhost:3000',
     bffApiVersion: 'v1', // API version
-    n8nWebhookUrl: import.meta.env.VITE_N8N_WEBHOOK_URL || 'https://nonexperientially-nonascetical-agnes.ngrok-free.dev/webhook/chat',
+    n8nWebhookUrl: import.meta.env.VITE_N8N_WEBHOOK_URL,
     // bff-pthru discovery URL
     bffPthruUrl: import.meta.env.VITE_BFF_PTHRU_URL || 'http://localhost:3003',
     
@@ -40,10 +40,10 @@ const configs = {
   },
   
   staging: {
-    // API endpoints
-    bffBaseUrl: 'https://staging-api.niyati.example.com',
+    // API endpoints - use env vars, no hardcoded placeholders
+    bffBaseUrl: import.meta.env.VITE_BFF_BASE_URL || '',
     bffApiVersion: 'v1',
-    n8nWebhookUrl: 'https://staging-webhook.niyati.example.com/webhook/chat',
+    n8nWebhookUrl: import.meta.env.VITE_N8N_WEBHOOK_URL,
     
     // Feature flags
     features: {
@@ -73,9 +73,9 @@ const configs = {
   
   production: {
     // API endpoints - relative URLs in production (same origin)
-    bffBaseUrl: '',
+    bffBaseUrl: import.meta.env.VITE_BFF_BASE_URL || '',
     bffApiVersion: 'v1',
-    n8nWebhookUrl: 'https://webhook.niyati.example.com/webhook/chat',
+    n8nWebhookUrl: import.meta.env.VITE_N8N_WEBHOOK_URL,
     
     // Feature flags
     features: {
@@ -106,6 +106,14 @@ const configs = {
 
 // Get current environment config
 const currentConfig = configs[ENV] || configs.development;
+
+// Validate critical configuration
+if (!currentConfig.n8nWebhookUrl) {
+  throw new Error(
+    `VITE_N8N_WEBHOOK_URL is not configured for environment: ${ENV}. ` +
+    'Please set this environment variable in .env.ui or pass it as a build arg.'
+  );
+}
 
 // Export configuration with environment detection
 export const config = {
@@ -155,6 +163,7 @@ export function buildApiUrl(endpoint) {
 export const BFF_BASE_URL = currentConfig.bffBaseUrl;
 export const BFF_API_VERSION = currentConfig.bffApiVersion;
 export const N8N_WEBHOOK_URL = currentConfig.n8nWebhookUrl;
+export const N8N_WEBHOOK_FALLBACK_URL = import.meta.env.VITE_N8N_WEBHOOK_FALLBACK_URL || 'http://localhost:5678/webhook/chat';
 export const BFF_PTHRU_URL = currentConfig.bffPthruUrl;
 export const FEATURES = currentConfig.features;
 export const CACHE_CONFIG = currentConfig.cache;

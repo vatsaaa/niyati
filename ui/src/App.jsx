@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { buildApiUrl, N8N_WEBHOOK_URL, CACHE_CONFIG, RETRY_CONFIG } from './config';
+import { buildApiUrl, N8N_WEBHOOK_URL, N8N_WEBHOOK_FALLBACK_URL, CACHE_CONFIG, RETRY_CONFIG } from './config';
 import { useAuth, useProfile, useMessages } from './hooks/useAppState';
 import LoginForm from './components/LoginForm';
 import ProfileHeader from './components/ProfileHeader';
@@ -29,15 +29,15 @@ const NiyatiChat = () => {
         const parsed = JSON.parse(savedProfile);
         return !!parsed.user_consentGiven;
       }
-    } catch (e) {}
+    } catch (e) { }
     return false;
   });
-  
+
   // Privacy modal state
   const [showPrivacyModal, setShowPrivacyModal] = useState(false);
   const [privacyHtml, setPrivacyHtml] = useState('');
   const [privacyLoading, setPrivacyLoading] = useState(false);
-  
+
   const messagesEndRef = useRef(null);
   const privacyInFlightRef = useRef(false);
 
@@ -66,7 +66,7 @@ const NiyatiChat = () => {
         console.error('openPrivacy: markdown render/import failed', e);
         // Fallback: render plain text into paragraphs, escaping HTML
         const escaped = (md || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        const html = escaped.split(/\n\s*\n/).map(p => `<p>${p.replace(/\n/g,'<br/>')}</p>`).join('');
+        const html = escaped.split(/\n\s*\n/).map(p => `<p>${p.replace(/\n/g, '<br/>')}</p>`).join('');
         setPrivacyHtml(html || '<p>Unable to load Privacy Policy.</p>');
       }
     } catch (e) {
@@ -89,13 +89,13 @@ const NiyatiChat = () => {
 
   // Persist canonical profile whenever it changes
   useEffect(() => {
-    try { localStorage.setItem('niyati_user_profile', JSON.stringify(profile)); } catch (e) {}
+    try { localStorage.setItem('niyati_user_profile', JSON.stringify(profile)); } catch (e) { }
   }, [profile]);
 
   // 3. LOGIN HANDLER
   // Helper: create a UUIDv4 for request correlation and a wrapper to call BFF with `x-request-id` header
   function createUUIDv4() {
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
       const r = (Math.random() * 16) | 0;
       const v = c === 'x' ? r : (r & 0x3) | 0x8;
       return v.toString(16);
@@ -108,7 +108,7 @@ const NiyatiChat = () => {
       let id = localStorage.getItem('niyati_x_request_id');
       if (!id) {
         id = createUUIDv4();
-        try { localStorage.setItem('niyati_x_request_id', id); } catch (e) {}
+        try { localStorage.setItem('niyati_x_request_id', id); } catch (e) { }
       }
       return id;
     } catch (e) {
@@ -194,12 +194,12 @@ const NiyatiChat = () => {
   }
   const handleLogin = async (phone, country) => {
     const fullPhone = `${country.dialCode}-${phone.trim()}`;
-    
+
     // Use auth hook to login
     auth.login(phone, country);
 
     // Generate a fresh session-level request id for this login session
-    try { localStorage.setItem('niyati_x_request_id', createUUIDv4()); } catch (e) {}
+    try { localStorage.setItem('niyati_x_request_id', createUUIDv4()); } catch (e) { }
 
     // Get current location and persist along with consent
     let currentLocationData = null;
@@ -220,24 +220,24 @@ const NiyatiChat = () => {
     // Persist consent and current location in canonical profile shape
     try {
       const existing = profile;
-      updateProfile({ 
+      updateProfile({
         user_consentGiven: true,
         user_currentLocation: currentLocationData || profile.user_currentLocation || '',
-        updatedAt: new Date().toISOString() 
+        updatedAt: new Date().toISOString()
       });
-      
+
       // Check if profile is complete after consent and process astrology
       const updatedProfileWithConsent = {
         ...existing,
         user_consentGiven: true,
         user_currentLocation: currentLocationData || existing.user_currentLocation || ''
       };
-      
+
       if (isProfileComplete(updatedProfileWithConsent)) {
         console.log('Profile complete after login, processing astrology...');
         processCompleteProfile(updatedProfileWithConsent);
       }
-    } catch (e) {}
+    } catch (e) { }
   };
 
   // Get country data for logged-in user
@@ -253,7 +253,7 @@ const NiyatiChat = () => {
       resetProfile();
       clearMessages();
       // Clear session request id
-      try { localStorage.removeItem('niyati_x_request_id'); } catch (e) {}
+      try { localStorage.removeItem('niyati_x_request_id'); } catch (e) { }
       // reload to ensure all components pick up cleared storage
       window.location.reload();
     }
@@ -278,10 +278,10 @@ const NiyatiChat = () => {
     // Run extraction heuristics on the user's message and silently persist values for later review.
     const extracted = await extractProfileFields(userMessage.text);
     console.log('Extracted profile fields:', extracted);
-    
+
     // Prepare normalized message by replacing extracted values with normalized versions
     let normalizedMessage = userMessage.text;
-    
+
     if (extracted.name || extracted.dob || extracted.placeOfBirth || extracted.timeOfBirth) {
       const updated = {
         user_name: extracted.name || profile.user_name,
@@ -299,7 +299,7 @@ const NiyatiChat = () => {
         }
       };
       console.log('Updated profile with extracted data:', updated);
-      
+
       // Replace extracted values in the message with normalized versions
       if (extracted.dob && updated.user_dob) {
         const formattedDob = formatDobForDisplay(updated.user_dob, auth.countries);
@@ -308,20 +308,20 @@ const NiyatiChat = () => {
           console.log('Replaced date in message:', extracted.dob, '->', formattedDob);
         }
       }
-      
+
       if (extracted.timeOfBirth && updated.user_timeOfBirth) {
         normalizedMessage = normalizedMessage.replace(extracted.timeOfBirth, updated.user_timeOfBirth);
         console.log('Replaced time in message:', extracted.timeOfBirth, '->', updated.user_timeOfBirth);
       }
-      
+
       updateProfile(updated);
-      
+
       // Process astrology in background if profile is complete
       if (isProfileComplete(updated)) {
         console.log('Profile is complete, processing astrology...');
         processCompleteProfile(updated);
       }
-      
+
       // Background: resolve the extracted placeOfBirth to a structured place (geocode)
       if (extracted.placeOfBirth) {
         (async () => {
@@ -350,38 +350,71 @@ const NiyatiChat = () => {
       // No chat confirmation message — the UI header will surface extracted details for manual review.
     }
 
+    // Helper function to call webhook with retry on fallback URL
+    const callWebhook = async (webhookUrl, reqId) => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
+
+      try {
+        const response = await fetch(webhookUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-request-id': reqId,
+            'ngrok-skip-browser-warning': 'true'
+          },
+          body: JSON.stringify({
+            message: normalizedMessage,
+            sessionId: auth.phoneNumber,
+            metadata: { reqId: reqId }
+          }),
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+        return response;
+      } catch (err) {
+        clearTimeout(timeoutId);
+        throw err;
+      }
+    };
+
     try {
       // Use the session request id once so header and body match exactly
       const webhookReqId = getSessionReqId();
-      // Log the webhook request id for quick local debugging and correlation
       console.log('N8N webhook reqId:', webhookReqId);
       console.log('N8N webhook URL:', N8N_WEBHOOK_URL);
-      
-      // Create AbortController for timeout
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
-      
-      const response = await fetch(N8N_WEBHOOK_URL, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'x-request-id': webhookReqId,
-          'ngrok-skip-browser-warning': 'true'
-        },
-        body: JSON.stringify({
-          message: normalizedMessage, // Use normalized message with replaced values
-          sessionId: auth.phoneNumber, // <--- KEY FIX: Send Phone Number as ID
-          metadata: { reqId: webhookReqId }
-        }),
-        signal: controller.signal
-      });
+      console.log('N8N webhook fallback URL:', N8N_WEBHOOK_FALLBACK_URL);
 
-      clearTimeout(timeoutId);
+      let response = null;
+      let usedFallback = false;
 
-      // Emit a small telemetry event so the server-side logs can correlate webhook sends.
+      // Try primary URL first
       try {
-        // fire-and-forget; sendClientLog respects consent and sanitizes payload
-        sendClientLog('webhook.sent', { reqId: webhookReqId, status: response && response.status });
+        response = await callWebhook(N8N_WEBHOOK_URL, webhookReqId);
+        // If we got a server error (5xx), try fallback
+        if (response.status >= 500) {
+          console.warn('Primary webhook returned server error, trying fallback...');
+          throw new Error(`Server error: ${response.status}`);
+        }
+      } catch (primaryError) {
+        console.warn('Primary webhook failed:', primaryError.message);
+        // Try fallback URL if primary fails
+        if (N8N_WEBHOOK_FALLBACK_URL && N8N_WEBHOOK_FALLBACK_URL !== N8N_WEBHOOK_URL) {
+          console.log('Attempting fallback webhook URL:', N8N_WEBHOOK_FALLBACK_URL);
+          usedFallback = true;
+          response = await callWebhook(N8N_WEBHOOK_FALLBACK_URL, webhookReqId);
+        } else {
+          throw primaryError; // No fallback available, rethrow
+        }
+      }
+
+      // Emit telemetry
+      try {
+        sendClientLog('webhook.sent', {
+          reqId: webhookReqId,
+          status: response && response.status,
+          usedFallback
+        });
       } catch (e) {
         // ignore telemetry errors
       }
@@ -391,11 +424,11 @@ const NiyatiChat = () => {
       if (response.ok) {
         const data = await response.json();
         botResponseText = data.output || data.text || JSON.stringify(data);
-        
+
         if (typeof botResponseText === 'string' && botResponseText.startsWith('"') && botResponseText.endsWith('"')) {
           botResponseText = botResponseText.slice(1, -1);
         }
-      } 
+      }
 
       const botMessage = {
         id: Date.now() + 1,
@@ -410,15 +443,15 @@ const NiyatiChat = () => {
       console.error("Error name:", error.name);
       console.error("Error message:", error.message);
       console.error("Error stack:", error.stack);
-      
+
       let errorMessage = "I cannot reach the server. Please check your connection.";
-      
+
       if (error.name === 'AbortError') {
         errorMessage = "The request took too long to respond. The AI might be processing your message. Please try again in a moment.";
       } else if (error.name === 'TypeError' && error.message.includes('fetch')) {
-        errorMessage = "Network error: Unable to connect to the chat service. Please check if the service is running.";
+        errorMessage = "Network error: Unable to connect to the chat service. Please check if n8n is running on localhost:5678.";
       }
-      
+
       addMessage({
         id: Date.now() + 1,
         text: errorMessage,
@@ -452,14 +485,26 @@ const NiyatiChat = () => {
     else if (dobMatchTextSpace) result.dob = dobMatchTextSpace[1];
     else {
       // Try natural language parsing for formats like "the fifteenth of March, 1990"
-      try {
-        const chronoResult = await parseNaturalDate(text);
-        if (chronoResult && chronoResult.confidence > 0.6) {
-          console.log('Extracted date using Chrono:', chronoResult);
-          result.dob = chronoResult.date; // Already in YYYY-MM-DD format
+      // BUT skip if input looks like just a time (to avoid extracting today's date)
+      const looksLikeTimeOnly = /^\s*(I was born at|born at|at)?\s*\d{1,2}(:\d{2})?\s*(am|pm|AM|PM)?\s*$/i.test(text);
+      const hasDateKeywords = /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec|\d{4})\b/i.test(text);
+
+      if (!looksLikeTimeOnly && hasDateKeywords) {
+        try {
+          const chronoResult = await parseNaturalDate(text);
+          if (chronoResult && chronoResult.confidence > 0.6) {
+            // Validate: don't accept today's date as DOB (likely a false positive)
+            const today = new Date().toISOString().split('T')[0];
+            if (chronoResult.date !== today) {
+              console.log('Extracted date using Chrono:', chronoResult);
+              result.dob = chronoResult.date; // Already in YYYY-MM-DD format
+            } else {
+              console.log('Chrono extracted today\'s date - ignoring as likely false positive');
+            }
+          }
+        } catch (e) {
+          console.debug('Chrono date extraction failed:', e);
         }
-      } catch (e) {
-        console.debug('Chrono date extraction failed:', e);
       }
     }
 
@@ -467,7 +512,8 @@ const NiyatiChat = () => {
     // Match common variants: "born in", "born at", "from", and forms like
     // "place of my birth is", "place of birth is", "my place of birth is",
     // as well as "birth place", "birthplace", and variants that include 'was'/'is'.
-    const placeMatch = text.match(/(?:born in|born at|from|i was born in|place of my birth(?: is| was)?|place of birth(?: is| was|[:\s]*)|my place of birth(?: is| was)?|birthplace(?: is| was|[:\s]*)|birth\s*place(?: is| was|[:\s]*)|my birth place(?: is| was|[:\s]*))\s*([A-Za-z0-9 ,.\-']{2,100})/i);
+    // IMPORTANT: Require the captured place to start with a letter to avoid matching time patterns like "born at 07:31"
+    const placeMatch = text.match(/(?:born in|born at|from|i was born in|place of my birth(?: is| was)?|place of birth(?: is| was|[:\s]*)|my place of birth(?: is| was)?|birthplace(?: is| was|[:\s]*)|birth\s*place(?: is| was|[:\s]*)|my birth place(?: is| was)?)\s+([A-Za-z][A-Za-z0-9 ,.\-']{1,99})/i);
     if (placeMatch) {
       // Trim and defensively strip common leading verbs/articles that may be captured
       let p = placeMatch[1].trim();
@@ -488,14 +534,21 @@ const NiyatiChat = () => {
     else if (timeMatchHourAmPm) result.timeOfBirth = timeMatchHourAmPm[1].trim();
     else {
       // Try natural language parsing for formats like "half past two in the afternoon"
-      try {
-        const chronoResult = await parseNaturalTime(text);
-        if (chronoResult && chronoResult.confidence > 0.6) {
-          console.log('Extracted time using Chrono:', chronoResult);
-          result.timeOfBirth = chronoResult.time; // Already in HH:MM:SS format
+      // BUT only if we didn't already extract a date from the same text (to avoid
+      // misinterpreting date components as time - e.g., "19-May-1979" returning 5:30 PM)
+      // Also require explicit time-related keywords to avoid false positives
+      const hasTimeKeywords = /\b(at|around|approximately|about|AM|PM|a\.m\.|p\.m\.|o'clock|morning|afternoon|evening|night|noon|midnight)\b/i.test(text);
+
+      if (!result.dob && hasTimeKeywords) {
+        try {
+          const chronoResult = await parseNaturalTime(text);
+          if (chronoResult && chronoResult.confidence > 0.6) {
+            console.log('Extracted time using Chrono:', chronoResult);
+            result.timeOfBirth = chronoResult.time; // Already in HH:MM:SS format
+          }
+        } catch (e) {
+          console.debug('Chrono time extraction failed:', e);
         }
-      } catch (e) {
-        console.debug('Chrono time extraction failed:', e);
       }
     }
 
@@ -508,11 +561,11 @@ const NiyatiChat = () => {
   function normalizeTimeString(s) {
     if (!s || typeof s !== 'string') return '';
     let t = s.trim();
-    
+
     // For complex natural language time formats we previously used Chrono.
     // Chrono parsing is now loaded lazily via the parser util; here we keep
     // a lightweight regex-based fallback to avoid adding chrono to hot paths.
-    
+
     // Handle AM/PM with optional seconds: hh:mm:ss am/pm or hh:mm am/pm or hh am/pm
     const ampmMatch = t.match(/^(\d{1,2})(?::(\d{2}))?(?::(\d{2}))?\s*(am|pm)$/i);
     if (ampmMatch) {
@@ -523,31 +576,31 @@ const NiyatiChat = () => {
       if (ampm === 'pm' && h < 12) h += 12;
       if (ampm === 'am' && h === 12) h = 0;
       if (isNaN(h) || isNaN(m) || isNaN(s)) return '';
-      return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+      return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
     }
     // Handle 24-hour hh:mm:ss or hh:mm
     const mmss = t.match(/^(\d{1,2}):(\d{2}):(\d{2})$/);
     if (mmss) {
-      let h = parseInt(mmss[1],10);
-      let m = parseInt(mmss[2],10);
-      let s = parseInt(mmss[3],10);
+      let h = parseInt(mmss[1], 10);
+      let m = parseInt(mmss[2], 10);
+      let s = parseInt(mmss[3], 10);
       if (h < 0 || h > 23 || m < 0 || m > 59 || s < 0 || s > 59) return '';
-      return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+      return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
     }
     const mm = t.match(/^(\d{1,2}):(\d{2})$/);
     if (mm) {
-      let h = parseInt(mm[1],10);
-      let m = parseInt(mm[2],10);
+      let h = parseInt(mm[1], 10);
+      let m = parseInt(mm[2], 10);
       if (h < 0 || h > 23 || m < 0 || m > 59) return '';
-      return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:00`;
+      return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`;
     }
     // Plain hour like '7' -> 07:00:00
     const justH = t.match(/^(\d{1,2})$/);
     if (justH) {
-      let h = parseInt(justH[1],10);
-      if (h >=0 && h <=23) return `${String(h).padStart(2,'0')}:00:00`;
+      let h = parseInt(justH[1], 10);
+      if (h >= 0 && h <= 23) return `${String(h).padStart(2, '0')}:00:00`;
     }
-    
+
     // Final fallback: try Chrono with lower confidence threshold
     try {
       const chronoResult = parseNaturalTime(t);
@@ -558,7 +611,7 @@ const NiyatiChat = () => {
     } catch (e) {
       // ignore
     }
-    
+
     return '';
   }
 
@@ -569,13 +622,13 @@ const NiyatiChat = () => {
     // Expect HH:MM:SS or HH:MM
     const m = t.match(/^(\d{2}):(\d{2})(?::(\d{2}))?$/);
     if (!m) return null;
-    let h = parseInt(m[1],10);
+    let h = parseInt(m[1], 10);
     const min = m[2];
     const sec = m[3] || '00';
     const ampm = h >= 12 ? 'PM' : 'AM';
     let dispH = h % 12;
     if (dispH === 0) dispH = 12;
-    return `${String(dispH).padStart(2,'0')}:${min}:${sec} ${ampm}`;
+    return `${String(dispH).padStart(2, '0')}:${min}:${sec} ${ampm}`;
   }
 
   // Very small date normalizer: tries to convert common forms to YYYY-MM-DD
@@ -584,7 +637,7 @@ const NiyatiChat = () => {
   function normalizeDateString(s, countryHint = 'US') {
     if (!s || typeof s !== 'string') return null;
     s = s.trim();
-    
+
     // YYYY-MM-DD already
     const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
     if (iso) return s;
@@ -625,7 +678,7 @@ const NiyatiChat = () => {
       if (parseInt(day, 10) < 1 || parseInt(day, 10) > 31) return null;
       return `${year}-${month}-${day}`;
     }
-    
+
     // Final fallback: do not call Chrono synchronously here.
     // If necessary, use the server-side parser or call the async parser from
     // extraction flows where awaiting is safe.
@@ -643,8 +696,8 @@ const NiyatiChat = () => {
     if (!iso) return null;
     const [y, m, d] = iso.split('-').map(part => parseInt(part, 10));
     if (!y || !m || !d) return null;
-    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    return `${String(d).padStart(2, '0')}-${months[m-1]}-${y}`;
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return `${String(d).padStart(2, '0')}-${months[m - 1]}-${y}`;
   }
 
   // Format current location object for display
@@ -678,72 +731,75 @@ const NiyatiChat = () => {
   // Format a geocoding location object into a single place string for display
   function formatPlaceFromLocation(location) {
     if (!location) return '';
-    // location may have different shapes depending on provider: try common keys
-    const city = location.city || location.town || location.village || location.name || '';
-    const state = location.state || location.region || location.county || '';
 
-    // try multiple possible country fields and country code
-    let country = location.country || location.country_name || '';
-    let countryCode = (location.countryCode || location.country_code || (location.address && (location.address.country_code || location.address.countryCode)) || '').toString();
-    country = country || (location.address && (location.address.country || location.address.country_name)) || '';
+    console.log('formatPlaceFromLocation input:', JSON.stringify(location, null, 2).slice(0, 500));
 
-    // If the returned country is non-ASCII (localized), but we have a country code, map it to our countries list (English name)
+    // Get raw.address which contains detailed address components
+    const rawAddress = location.raw?.address || location.address || {};
+
+    // Extract city - try multiple fields
+    let city = location.city || location.town || location.village || location.name ||
+      rawAddress.city || rawAddress.town || rawAddress.village || '';
+
+    // Extract state from raw.address (top-level state is usually null)
+    let state = rawAddress.state || location.state || location.region || '';
+
+    // Extract country
+    let country = location.country || rawAddress.country || '';
+
+    console.log('formatPlaceFromLocation extracted:', { city, state, country });
+
+    // Handle non-ASCII city names - prefer ASCII from display_name
     const hasNonAscii = (str) => /[^\u0000-\u007F]/.test(str || '');
-    if ((!country || hasNonAscii(country)) && countryCode) {
-      try {
-        const code = countryCode.toString().toUpperCase();
-        const mapped = (countries || []).find(c => (c.code || '').toString().toUpperCase() === code);
-        if (mapped && mapped.name) country = mapped.name;
-      } catch (e) {
-        // ignore mapping errors
+    if (city && hasNonAscii(city) && location.display_name) {
+      const parts = location.display_name.split(',').map(s => s.trim()).filter(Boolean);
+      const asciiCity = parts.find(p => /^[A-Za-z\s]+$/.test(p));
+      if (asciiCity) city = asciiCity;
+    }
+
+    // If state is still empty, try to extract from display_name
+    // display_name format: "City, District, State, Postcode, Country" or "City, State, Country"
+    if (!state && location.display_name) {
+      const parts = location.display_name.split(',').map(s => s.trim()).filter(Boolean);
+      // Filter out postcodes (pure numbers) and the country (last element)
+      const nonPostcodeParts = parts.filter(p => !/^\d+$/.test(p));
+      // State is typically second-to-last (before country)
+      if (nonPostcodeParts.length >= 3) {
+        state = nonPostcodeParts[nonPostcodeParts.length - 2];
+      } else if (nonPostcodeParts.length === 2) {
+        // For "City, Country" format, no state
+        state = '';
       }
     }
 
-    // For city: if it contains non-ASCII characters, try to extract an ASCII fragment from display_name
-    let cityToUse = city || '';
-    if (hasNonAscii(cityToUse) && location.display_name && typeof location.display_name === 'string') {
-      const partsFromDisplay = location.display_name.split(',').map(s => s.trim()).filter(Boolean);
-      // prefer the first segment that contains ASCII letters
-      const asciiCandidate = partsFromDisplay.find(p => /[A-Za-z]/.test(p));
-      if (asciiCandidate) cityToUse = asciiCandidate;
-    }
+    // Build the result
+    const parts = [city, state, country].map(p => (p || '').trim()).filter(p => p.length > 0);
+    const result = parts.length > 0 ? parts.join(', ') : (location.display_name || '');
 
-    // If state or country are missing, try to extract them from display_name
-    let stateToUse = state || '';
-    let countryToUse = country || '';
-    if ((!stateToUse || !countryToUse) && location.display_name && typeof location.display_name === 'string') {
-      const partsFromDisplay = location.display_name.split(',').map(s => s.trim()).filter(Boolean);
-      if (!cityToUse && partsFromDisplay[0]) cityToUse = partsFromDisplay[0];
-      if (!stateToUse && partsFromDisplay[1]) stateToUse = partsFromDisplay[1];
-      if (!countryToUse && partsFromDisplay.length > 0) countryToUse = partsFromDisplay[partsFromDisplay.length - 1];
-    }
-
-    const parts = [cityToUse, stateToUse, countryToUse].map(p => (p || '').trim()).filter(p => p.length > 0);
-    if (parts.length > 0) return parts.join(', ');
-    // final fallbacks: try to use display_name or formatted if available
-    return location.display_name || location.formatted || '';
+    console.log('formatPlaceFromLocation result:', result);
+    return result;
   }
 
   // Check if user profile is complete for astrology calculations
   function isProfileComplete(profile) {
-    return !!(profile.user_name && 
-             profile.user_dob && 
-             profile.user_placeOfBirth && 
-             profile.user_timeOfBirth && 
-             profile.user_consentGiven);
+    return !!(profile.user_name &&
+      profile.user_dob &&
+      profile.user_placeOfBirth &&
+      profile.user_timeOfBirth &&
+      profile.user_consentGiven);
   }
 
   // Determine the appropriate geocoding API based on location format
   function determineGeocodingEndpoint(location) {
     if (!location) return null;
-    
+
     // Clean the location string and split by common separators
     const cleaned = location.trim();
     const parts = cleaned.split(/[,;|]/g).map(p => p.trim()).filter(p => p.length > 0);
-    
+
     // Check if it looks like structured address (street, city, state, country)
     const hasStreetIndicators = /\b(\d+\s+\w+|road|street|avenue|lane|drive|blvd|ave|rd|st|ln|dr)\b/i.test(cleaned);
-    
+
     if (hasStreetIndicators || parts.length >= 4) {
       // Use structured API
       return {
@@ -819,7 +875,7 @@ const NiyatiChat = () => {
       if (!geocodeResponse.ok) {
         const text = await geocodeResponse.text().catch(() => '');
         console.error('Geocoding request failed', { status: geocodeResponse.status, reqId: geoRespReqId, bodyPreview: text.slice ? text.slice(0, 400) : text });
-        try { sendClientLog('geocode.resolve_failed', { status: geocodeResponse.status, reqId: geoRespReqId }); } catch (e) {}
+        try { sendClientLog('geocode.resolve_failed', { status: geocodeResponse.status, reqId: geoRespReqId }); } catch (e) { }
         // Surface a friendly message to the user (avoid duplicate messages)
         {
           const errorText = 'Automatic location detection failed — please enter your place of birth manually.';
@@ -845,15 +901,15 @@ const NiyatiChat = () => {
         }
       } catch (e) {
         console.error('Failed to parse geocode response body', e);
-        try { sendClientLog('geocode.resolve_parse_error', { message: e && e.message, reqId: geoRespReqId }); } catch (ee) {}
+        try { sendClientLog('geocode.resolve_parse_error', { message: e && e.message, reqId: geoRespReqId }); } catch (ee) { }
         throw e;
       }
 
       // Log a short preview for debugging and correlation with BFF logs
       const geoPreview = typeof geocodeData === 'string' ? geocodeData.slice(0, 400) : (geocodeData ? JSON.stringify(geocodeData).slice(0, 400) : '');
       console.log('resolveLocationAndTimezone: geocode response', { status: geocodeResponse.status, reqId: geoRespReqId, contentType: geoRespContentType, bodyPreview: geoPreview });
-      try { sendClientLog('geocode.resolve_response', { reqId: geoRespReqId, contentType: geoRespContentType }); } catch (e) {}
-      
+      try { sendClientLog('geocode.resolve_response', { reqId: geoRespReqId, contentType: geoRespContentType }); } catch (e) { }
+
       // Unwrap BFF response (BFF wraps in {status, data, reqId})
       const actualData = geocodeData.data || geocodeData;
 
@@ -869,7 +925,7 @@ const NiyatiChat = () => {
 
       if (!locationData) {
         console.error('No location data found after geocode. geocodeData:', geocodeData);
-        try { sendClientLog('geocode.no_location_found', { geocodeData: (typeof geocodeData === 'string' ? geocodeData.slice(0,400) : (geocodeData ? JSON.stringify(geocodeData).slice(0,400) : null)), reqId: geoRespReqId }); } catch (e) {}
+        try { sendClientLog('geocode.no_location_found', { geocodeData: (typeof geocodeData === 'string' ? geocodeData.slice(0, 400) : (geocodeData ? JSON.stringify(geocodeData).slice(0, 400) : null)), reqId: geoRespReqId }); } catch (e) { }
         // Avoid spamming the same suggestion if it's already visible
         {
           const suggestText = 'Could not find a matching place for your input — please refine the place name.';
@@ -916,28 +972,30 @@ const NiyatiChat = () => {
 
       locationData = normalizeLocation(locationData);
 
-      // Get timezone using astrology geo-details API
+      // Get timezone using astrology geo-details API (non-blocking - don't fail if timezone lookup fails)
       const timezonePayload = {
         lat: locationData.lat,
         lon: locationData.lon
       };
 
-      const timezoneResponse = await bffFetch('/astrology/geo-details', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(timezonePayload)
-      });
-
-      if (!timezoneResponse.ok) {
-        throw new Error(`Timezone lookup failed: ${timezoneResponse.status}`);
-      }
-
-      const timezoneData = await timezoneResponse.json();
       let timezone = 0; // Default to UTC
-      
-      if (timezoneData.status === 'ok' && timezoneData.data) {
-        // Extract timezone from the response
-        timezone = timezoneData.data.timezone || timezoneData.data.utc_offset || 0;
+      try {
+        const timezoneResponse = await bffFetch('/astrology/geo-details', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(timezonePayload)
+        });
+
+        if (timezoneResponse.ok) {
+          const timezoneData = await timezoneResponse.json();
+          if (timezoneData.status === 'ok' && timezoneData.data) {
+            timezone = timezoneData.data.timezone || timezoneData.data.utc_offset || 0;
+          }
+        } else {
+          console.warn('Timezone lookup failed with status:', timezoneResponse.status, '- using default timezone');
+        }
+      } catch (tzError) {
+        console.warn('Timezone lookup error:', tzError.message, '- using default timezone');
       }
 
       // Persist a UI-friendly place string into the canonical profile shape
@@ -953,7 +1011,7 @@ const NiyatiChat = () => {
         };
         localStorage.setItem('niyati_user_profile', JSON.stringify(updatedProfile));
         // Update in-memory profile for immediate UI reflection
-        try { updateProfile({ user_placeOfBirth: formattedPlace, placeOfBirth_raw: locationData.display_name || '' }); } catch (e) {}
+        try { updateProfile({ user_placeOfBirth: formattedPlace, placeOfBirth_raw: locationData.display_name || '' }); } catch (e) { }
       } catch (e) {
         // best-effort, do not block
       }
@@ -962,7 +1020,7 @@ const NiyatiChat = () => {
       try {
         const cacheObj = { __ts: Date.now(), data: { location: locationData, timezone } };
         localStorage.setItem(geoCacheKey, JSON.stringify(cacheObj));
-      } catch (e) {}
+      } catch (e) { }
 
       return {
         location: locationData,
@@ -1026,7 +1084,7 @@ const NiyatiChat = () => {
       try {
         console.log('calculateAstrology: calling /api/astrology/planets');
         sendClientLog('calculateAstrology.planets.call');
-          const planetsResponse = await bffFetchWithRetry('/astrology/planets', {
+        const planetsResponse = await bffFetchWithRetry('/astrology/planets', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(astrologyPayload)
@@ -1076,7 +1134,7 @@ const NiyatiChat = () => {
             }
           } catch (e) {
             console.error('calculateAstrology: failed to read horoscope response body', e);
-            try { sendClientLog('calculateAstrology.horoscope.read_error', { message: e && e.message }); } catch (ee) {}
+            try { sendClientLog('calculateAstrology.horoscope.read_error', { message: e && e.message }); } catch (ee) { }
           }
 
           // Small preview for logs
@@ -1097,14 +1155,14 @@ const NiyatiChat = () => {
         }
       } catch (err) {
         console.error('calculateAstrology: error during astrology calls', err);
-        try { sendClientLog('calculateAstrology.error', { message: err && err.message }); } catch (e) {}
+        try { sendClientLog('calculateAstrology.error', { message: err && err.message }); } catch (e) { }
       }
 
       // Persist deterministic cache for astrology results
       try {
         const cacheObj = { __ts: Date.now(), results };
         localStorage.setItem(astroCacheKey, JSON.stringify(cacheObj));
-      } catch (e) {}
+      } catch (e) { }
 
       return results;
     } catch (error) {
@@ -1117,18 +1175,18 @@ const NiyatiChat = () => {
   async function processCompleteProfile(profile) {
     try {
       console.log('Processing complete profile for astrology calculations...');
-      
+
       // Step 1: Resolve location and get timezone
       const { location, timezone } = await resolveLocationAndTimezone(profile.user_placeOfBirth);
-      
+
       console.log('Location resolved:', location);
       console.log('Timezone:', timezone);
-      
+
       // Step 2: Calculate astrology
       const astrologyResults = await calculateAstrology(profile, location, timezone);
-      
+
       console.log('Astrology calculations complete:', astrologyResults);
-      
+
       // Store the results in localStorage for later use
       const cacheKey = `astrology_${auth.phoneNumber}_${Date.now()}`;
       try {
@@ -1143,7 +1201,7 @@ const NiyatiChat = () => {
       } catch (e) {
         console.warn('Failed to cache astrology results:', e);
       }
-      
+
       return astrologyResults;
     } catch (error) {
       console.error('Failed to process complete profile:', error);
@@ -1172,7 +1230,7 @@ const NiyatiChat = () => {
       ) : (
         // --- CHAT SCREEN ---
         <div className="w-full max-w-md bg-slate-900/80 backdrop-blur-md border border-slate-700 rounded-2xl shadow-2xl flex flex-col h-[85vh] z-10 relative">
-          
+
           {/* Header */}
           <ProfileHeader
             profile={profile}
@@ -1201,7 +1259,7 @@ const NiyatiChat = () => {
           />
         </div>
       )}
-      
+
       {/* Global Privacy modal (renders sanitized HTML converted from markdown) */}
       <PrivacyModal
         isOpen={showPrivacyModal}
@@ -1209,7 +1267,7 @@ const NiyatiChat = () => {
         content={privacyHtml}
         isLoading={privacyLoading}
       />
-      
+
       {/* PWA Features */}
       <InstallPrompt />
       <UpdateNotification />

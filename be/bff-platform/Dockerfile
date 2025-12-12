@@ -7,10 +7,10 @@ COPY bff-platform/package*.json ./
 
 FROM base AS development
 RUN npm install
-# Copy commons (shared libraries)
-COPY commons/ /app/commons/
-# Copy service-specific code
+# Copy service-specific code first
 COPY bff-platform/ /app/
+# Copy commons (shared libraries) afterwards so repository commons wins
+COPY commons/ /app/commons/
 RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001 && chown -R nodejs:nodejs /app
 USER nodejs
 EXPOSE 3000
@@ -22,10 +22,10 @@ CMD ["npm", "run", "dev"]
 FROM base AS production
 ENV NODE_ENV=production
 RUN npm ci --only=production && npm cache clean --force
-# Copy commons (shared libraries)
-COPY commons/ /app/commons/
-# Copy service-specific code
+# Copy service-specific code first
 COPY bff-platform/ /app/
+# Copy commons (shared libraries) afterwards so repository commons wins
+COPY commons/ /app/commons/
 RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001 && chown -R nodejs:nodejs /app
 USER nodejs
 EXPOSE 3000
