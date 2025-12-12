@@ -11,7 +11,8 @@ import InstallPrompt from './components/InstallPrompt';
 import UpdateNotification from './components/UpdateNotification';
 import NetworkStatus from './components/NetworkStatus';
 import { marked } from 'marked';
-import { parseNaturalDate, parseNaturalTime } from './utils/dateParser';
+import { parseNaturalTime } from './utils/dateParser';
+import { extractProfileFields } from './utils/profileExtractor';
 
 const NiyatiChat = () => {
   // Custom hooks for state management
@@ -183,10 +184,17 @@ const NiyatiChat = () => {
       delete safe.user_name; delete safe.user_dob; delete safe.user_placeOfBirth; delete safe.user_timeOfBirth; delete safe.phoneNumber;
 
       // fire-and-forget to BFF telemetry endpoint (bffFetch attaches x-request-id)
+      // Backend expects: { message: string, level: string, tag?, meta?, ts? }
       await bffFetch('/telemetry/log', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tag, meta: safe, ts: Date.now() })
+        body: JSON.stringify({
+          message: tag,
+          level: 'info',
+          tag,
+          meta: safe,
+          ts: Date.now()
+        })
       });
     } catch (e) {
       // best-effort, do not surface to user
@@ -465,95 +473,7 @@ const NiyatiChat = () => {
   };
 
   // --- Helper: simple profile extraction heuristics ---
-  async function extractProfileFields(text) {
-    const lower = text.toLowerCase();
-    const result = {};
 
-    // Name patterns
-    const nameMatch = text.match(/(?:my name is|i am|i'm)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})/i);
-    if (nameMatch) result.name = nameMatch[1].trim();
-
-    // DoB patterns (YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY, 12th Jan 1990, or '11 November 2005')
-    const dobMatchISO = text.match(/(\d{4}-\d{2}-\d{2})/);
-    const dobMatchDMY = text.match(/(\d{1,2}[\/\.-]\d{1,2}[\/\.-]\d{2,4})/);
-    // Matches things like '12-Jan-1990' or '12 Jan 1990' (with separators or spaces)
-    const dobMatchText = text.match(/(\d{1,2}[\/\.-]\s*[A-Za-z]{3,9}[\/\.-]\s*\d{2,4})/i);
-    const dobMatchTextSpace = text.match(/(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{2,4})/i);
-    if (dobMatchISO) result.dob = dobMatchISO[1];
-    else if (dobMatchDMY) result.dob = dobMatchDMY[1];
-    else if (dobMatchText) result.dob = dobMatchText[1];
-    else if (dobMatchTextSpace) result.dob = dobMatchTextSpace[1];
-    else {
-      // Try natural language parsing for formats like "the fifteenth of March, 1990"
-      // BUT skip if input looks like just a time (to avoid extracting today's date)
-      const looksLikeTimeOnly = /^\s*(I was born at|born at|at)?\s*\d{1,2}(:\d{2})?\s*(am|pm|AM|PM)?\s*$/i.test(text);
-      const hasDateKeywords = /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec|\d{4})\b/i.test(text);
-
-      if (!looksLikeTimeOnly && hasDateKeywords) {
-        try {
-          const chronoResult = await parseNaturalDate(text);
-          if (chronoResult && chronoResult.confidence > 0.6) {
-            // Validate: don't accept today's date as DOB (likely a false positive)
-            const today = new Date().toISOString().split('T')[0];
-            if (chronoResult.date !== today) {
-              console.log('Extracted date using Chrono:', chronoResult);
-              result.dob = chronoResult.date; // Already in YYYY-MM-DD format
-            } else {
-              console.log('Chrono extracted today\'s date - ignoring as likely false positive');
-            }
-          }
-        } catch (e) {
-          console.debug('Chrono date extraction failed:', e);
-        }
-      }
-    }
-
-    // Place of birth patterns
-    // Match common variants: "born in", "born at", "from", and forms like
-    // "place of my birth is", "place of birth is", "my place of birth is",
-    // as well as "birth place", "birthplace", and variants that include 'was'/'is'.
-    // IMPORTANT: Require the captured place to start with a letter to avoid matching time patterns like "born at 07:31"
-    const placeMatch = text.match(/(?:born in|born at|from|i was born in|place of my birth(?: is| was)?|place of birth(?: is| was|[:\s]*)|my place of birth(?: is| was)?|birthplace(?: is| was|[:\s]*)|birth\s*place(?: is| was|[:\s]*)|my birth place(?: is| was)?)\s+([A-Za-z][A-Za-z0-9 ,.\-']{1,99})/i);
-    if (placeMatch) {
-      // Trim and defensively strip common leading verbs/articles that may be captured
-      let p = placeMatch[1].trim();
-      p = p.replace(/^(?:was|is|my|the|born in|born at)\b[:\s-]*/i, '').trim();
-      result.placeOfBirth = p;
-    }
-
-    // Time of birth patterns (e.g., 7:30 PM, 19:30, 7 pm, 11:00:04 am)
-    const timeMatchSecAmPm = text.match(/(\d{1,2}:\d{2}:\d{2}\s*(?:am|pm))/i);
-    const timeMatchSec24 = text.match(/(\b\d{1,2}:\d{2}:\d{2}\b)/);
-    const timeMatchMinAmPm = text.match(/(\d{1,2}:\d{2}\s*(?:am|pm))/i);
-    const timeMatchMin24 = text.match(/(\b\d{1,2}:\d{2}\b)/);
-    const timeMatchHourAmPm = text.match(/(\b\d{1,2}\s*(?:am|pm)\b)/i);
-    if (timeMatchSecAmPm) result.timeOfBirth = timeMatchSecAmPm[1].trim();
-    else if (timeMatchSec24) result.timeOfBirth = timeMatchSec24[1].trim();
-    else if (timeMatchMinAmPm) result.timeOfBirth = timeMatchMinAmPm[1].trim();
-    else if (timeMatchMin24) result.timeOfBirth = timeMatchMin24[1].trim();
-    else if (timeMatchHourAmPm) result.timeOfBirth = timeMatchHourAmPm[1].trim();
-    else {
-      // Try natural language parsing for formats like "half past two in the afternoon"
-      // BUT only if we didn't already extract a date from the same text (to avoid
-      // misinterpreting date components as time - e.g., "19-May-1979" returning 5:30 PM)
-      // Also require explicit time-related keywords to avoid false positives
-      const hasTimeKeywords = /\b(at|around|approximately|about|AM|PM|a\.m\.|p\.m\.|o'clock|morning|afternoon|evening|night|noon|midnight)\b/i.test(text);
-
-      if (!result.dob && hasTimeKeywords) {
-        try {
-          const chronoResult = await parseNaturalTime(text);
-          if (chronoResult && chronoResult.confidence > 0.6) {
-            console.log('Extracted time using Chrono:', chronoResult);
-            result.timeOfBirth = chronoResult.time; // Already in HH:MM:SS format
-          }
-        } catch (e) {
-          console.debug('Chrono time extraction failed:', e);
-        }
-      }
-    }
-
-    return result;
-  }
 
   // Normalize time strings to HH:MM (24-hour) when possible
   // Normalize time string to HH:MM:SS format
@@ -641,6 +561,15 @@ const NiyatiChat = () => {
     // YYYY-MM-DD already
     const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
     if (iso) return s;
+
+    // Explicitly handle "DD Month YYYY" (e.g. 19 May 1979)
+    const textSpace = s.match(/^(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})$/);
+    if (textSpace) {
+      const months = { jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06', jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12' };
+      const mStr = textSpace[2].toLowerCase().substring(0, 3);
+      const m = months[mStr];
+      if (m) return `${textSpace[3]}-${m}-${textSpace[1].padStart(2, '0')}`;
+    }
 
     // For complex natural language date formats we previously used Chrono.
     // Chrono parsing is now provided as a lazy-loaded utility; here keep the

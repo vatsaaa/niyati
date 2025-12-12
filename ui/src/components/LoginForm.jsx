@@ -1,10 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Sparkles, Phone, ChevronDown } from 'lucide-react';
 
-const LoginForm = ({ 
-  onLogin, 
-  countries, 
-  selectedCountry, 
+const LoginForm = ({
+  onLogin,
+  countries,
+  selectedCountry,
   setSelectedCountry,
   consentChecked,
   setConsentChecked,
@@ -16,8 +16,8 @@ const LoginForm = ({
   const dropdownRef = useRef(null);
 
   // Filter countries based on search
-  const filteredCountries = countries.filter(c => 
-    c.name.toLowerCase().includes(countrySearch.toLowerCase()) || 
+  const filteredCountries = countries.filter(c =>
+    c.name.toLowerCase().includes(countrySearch.toLowerCase()) ||
     c.code.toLowerCase().includes(countrySearch.toLowerCase()) ||
     c.dialCode.includes(countrySearch)
   );
@@ -49,8 +49,8 @@ const LoginForm = ({
   return (
     <div className="w-full max-w-md bg-slate-900/80 backdrop-blur-md border border-slate-700 rounded-2xl shadow-2xl p-8 z-10 text-center">
       <div className="flex gap-3 justify-center mb-4">
-        <button type="button" onClick={() => window.location.href = '/api/v1/auth/google'} className="px-3 py-2 bg-white/5 rounded-lg text-white">Sign in with Google</button>
-        <button type="button" onClick={() => window.location.href = '/api/v1/auth/github'} className="px-3 py-2 bg-white/5 rounded-lg text-white">Sign in with GitHub</button>
+        <button type="button" onClick={() => window.location.href = '/api/v1/auth/google'} className="px-3 py-2 bg-white/5 rounded-lg text-white hover:bg-white/10 transition-colors">Sign in with Google</button>
+        <button type="button" onClick={() => window.location.href = '/api/v1/auth/instagram'} className="px-3 py-2 bg-white/5 rounded-lg text-white hover:bg-white/10 transition-colors">Sign in with Instagram</button>
       </div>
       <div className="text-slate-500 text-sm mb-4">or sign in with phone</div>
       <div className="w-16 h-16 rounded-full bg-gradient-to-tr from-purple-600 to-amber-500 flex items-center justify-center shadow-lg mx-auto mb-6">
@@ -58,7 +58,7 @@ const LoginForm = ({
       </div>
       <h1 className="font-serif text-2xl text-slate-100 mb-2">Welcome to Niyati</h1>
       <p className="text-slate-400 mb-6 text-sm">Enter your phone number to reveal what destiny has in store for you.</p>
-      
+
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="flex gap-2">
           {/* Country Selector */}
@@ -71,7 +71,7 @@ const LoginForm = ({
               <span className="text-2xl">{selectedCountry.flag}</span>
               <ChevronDown size={16} className="text-slate-400" />
             </button>
-            
+
             {showDropdown && (
               <div className="absolute top-full mt-2 left-0 w-64 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-50 overflow-hidden">
                 <input
@@ -92,9 +92,8 @@ const LoginForm = ({
                         setShowDropdown(false);
                         setCountrySearch('');
                       }}
-                      className={`w-full px-4 py-3 text-left hover:bg-slate-800 transition-colors flex items-center gap-3 ${
-                        selectedCountry.code === country.code ? 'bg-slate-800' : ''
-                      }`}
+                      className={`w-full px-4 py-3 text-left hover:bg-slate-800 transition-colors flex items-center gap-3 ${selectedCountry.code === country.code ? 'bg-slate-800' : ''
+                        }`}
                     >
                       <span className="text-2xl">{country.flag}</span>
                       <div className="flex-1">
@@ -114,9 +113,9 @@ const LoginForm = ({
           {/* Phone Number Input */}
           <div className="relative flex-1">
             <Phone className="absolute left-4 top-3.5 text-slate-500 w-5 h-5" />
-            <input 
-              type="tel" 
-              placeholder={selectedCountry ? `${selectedCountry.phoneLength}-digit number` : 'Phone number'} 
+            <input
+              type="tel"
+              placeholder={selectedCountry ? `${selectedCountry.phoneLength}-digit number` : 'Phone number'}
               value={tempPhone}
               onChange={(e) => {
                 const max = selectedCountry?.phoneLength || 10;
@@ -128,7 +127,7 @@ const LoginForm = ({
             />
           </div>
         </div>
-        
+
         <div className="flex items-start gap-2">
           <label className="flex items-center gap-2 text-xs text-slate-200">
             <input
@@ -149,10 +148,14 @@ const LoginForm = ({
             </span>
           </label>
         </div>
-        
-        <button 
+
+        <button
           type="submit"
-          className="w-full bg-gradient-to-r from-purple-600 to-amber-600 hover:from-purple-700 hover:to-amber-700 text-white py-3 px-6 rounded-xl font-medium shadow-md transition-all duration-200"
+          disabled={!tempPhone.trim() || tempPhone.length !== (selectedCountry?.phoneLength || 10) || !consentChecked}
+          className={`w-full py-3 px-6 rounded-xl font-medium shadow-md transition-all duration-200 ${(!tempPhone.trim() || tempPhone.length !== (selectedCountry?.phoneLength || 10) || !consentChecked)
+            ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
+            : 'bg-gradient-to-r from-purple-600 to-amber-600 hover:from-purple-700 hover:to-amber-700 text-white'
+            }`}
         >
           Begin Your Journey
         </button>
