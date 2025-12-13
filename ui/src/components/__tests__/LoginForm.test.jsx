@@ -1,7 +1,43 @@
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import LoginForm from '../LoginForm';
+import { vi, describe, test, beforeEach, afterEach, beforeAll, afterAll, expect } from 'vitest';
+import { JSDOM } from 'jsdom';
+
+// Ensure a DOM environment for tests that rely on document/window
+beforeAll(() => {
+  const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost' });
+  global.window = dom.window;
+  global.document = dom.window.document;
+  Object.defineProperty(global, 'navigator', { value: dom.window.navigator, configurable: true });
+  global.localStorage = dom.window.localStorage;
+  if (typeof global.window.matchMedia !== 'function') {
+    Object.defineProperty(global.window, 'matchMedia', {
+      value: (query) => ({ matches: false, media: query, addListener: () => {}, removeListener: () => {} }),
+      configurable: true
+    });
+  }
+  // Polyfill scrollIntoView and legacy attach/detach event helpers used by React DOM
+  if (!global.window.HTMLElement.prototype.scrollIntoView) {
+    global.window.HTMLElement.prototype.scrollIntoView = function() {};
+  }
+  if (!global.window.HTMLElement.prototype.attachEvent) {
+    global.window.HTMLElement.prototype.attachEvent = function() {};
+  }
+  if (!global.window.HTMLElement.prototype.detachEvent) {
+    global.window.HTMLElement.prototype.detachEvent = function() {};
+  }
+});
+
+afterAll(() => {
+  try {
+    delete global.window;
+    delete global.document;
+    delete global.navigator;
+    delete global.localStorage;
+  } catch (e) {}
+});
 
 describe('LoginForm identify flow', () => {
   const countries = [{ code: 'IN', name: 'India', dialCode: '+91', flag: '🇮🇳', phoneLength: 10 }];
@@ -20,7 +56,7 @@ describe('LoginForm identify flow', () => {
     global.fetch.mockResolvedValueOnce({ ok: true, json: async () => ({ status: 'ok', data: { returning: true, user: mockUser } }) });
 
     const onLogin = vi.fn();
-    render(
+    const { container } = render(
       <LoginForm
         onLogin={onLogin}
         countries={countries}
@@ -32,9 +68,9 @@ describe('LoginForm identify flow', () => {
       />
     );
 
-    const input = screen.getByPlaceholderText(`${selectedCountry.phoneLength}-digit number`);
+    const input = within(container).getByPlaceholderText(`${selectedCountry.phoneLength}-digit number`);
     await userEvent.type(input, '9999999999');
-    const btn = screen.getByRole('button', { name: /Begin Your Journey/i });
+    const btn = within(container).getByRole('button', { name: /Begin Your Journey/i });
     await userEvent.click(btn);
 
     await waitFor(() => expect(onLogin).toHaveBeenCalled());
@@ -45,7 +81,7 @@ describe('LoginForm identify flow', () => {
     global.fetch.mockResolvedValueOnce({ ok: true, json: async () => ({ status: 'ok', data: null }) });
 
     const onLogin = vi.fn();
-    render(
+    const { container } = render(
       <LoginForm
         onLogin={onLogin}
         countries={countries}
@@ -57,9 +93,9 @@ describe('LoginForm identify flow', () => {
       />
     );
 
-    const input = screen.getByPlaceholderText(`${selectedCountry.phoneLength}-digit number`);
+    const input = within(container).getByPlaceholderText(`${selectedCountry.phoneLength}-digit number`);
     await userEvent.type(input, '8888888888');
-    const btn = screen.getByRole('button', { name: /Begin Your Journey/i });
+    const btn = within(container).getByRole('button', { name: /Begin Your Journey/i });
     await userEvent.click(btn);
 
     await waitFor(() => expect(onLogin).toHaveBeenCalled());
