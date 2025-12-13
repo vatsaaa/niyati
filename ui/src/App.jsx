@@ -271,7 +271,10 @@ const NiyatiChat = () => {
 
       // If we got an identified user from the server, prefill missing fields
       const prefill = {};
+      let isReturningUser = false;
       if (identifiedUser) {
+        isReturningUser = true;
+        if (!existing.user_name && identifiedUser.name) prefill.user_name = identifiedUser.name;
         if (!existing.user_dob && identifiedUser.date_of_birth) prefill.user_dob = identifiedUser.date_of_birth;
         if (!existing.user_timeOfBirth && identifiedUser.time_of_birth) prefill.user_timeOfBirth = identifiedUser.time_of_birth;
         if (!existing.user_placeOfBirth && identifiedUser.place_of_birth) prefill.user_placeOfBirth = identifiedUser.place_of_birth;
@@ -282,24 +285,68 @@ const NiyatiChat = () => {
         if (Object.keys(verified).length > 0) prefill.user_verified = verified;
       }
 
-      updateProfile({
+      const updatedProfile = {
+        ...existing,
         ...prefill,
         user_consentGiven: true,
         user_currentLocation: currentLocationData || profile.user_currentLocation || '',
         updatedAt: new Date().toISOString()
-      });
-
-      // Check if profile is complete after consent and process astrology
-      const updatedProfileWithConsent = {
-        ...existing,
-        ...prefill,
-        user_consentGiven: true,
-        user_currentLocation: currentLocationData || existing.user_currentLocation || ''
       };
 
-      if (isProfileComplete(updatedProfileWithConsent)) {
+      updateProfile(updatedProfile);
+
+      // If returning user with complete profile, send "visiting again" message to N8N
+      if (isReturningUser && updatedProfile.user_name && updatedProfile.user_dob && updatedProfile.user_placeOfBirth && updatedProfile.user_timeOfBirth) {
+        // Add welcome message
+        const firstName = updatedProfile.user_name.split(' ')[0];
+        addMessage({
+          id: Date.now(),
+          text: `Welcome back, ${firstName}! 🌟`,
+          sender: 'bot',
+          timestamp: new Date()
+        });
+
+        // Send "visiting again" message to N8N
+        const returningMessage = `${updatedProfile.user_name} is visiting again`;
+        console.log('Sending returning user message to N8N:', returningMessage);
+        
+        // Call webhook in background
+        (async () => {
+          try {
+            const webhookReqId = getSessionReqId();
+            const response = await fetch(N8N_WEBHOOK_URL, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'x-request-id': webhookReqId,
+                'ngrok-skip-browser-warning': 'true'
+              },
+              body: JSON.stringify({
+                message: returningMessage,
+                sessionId: fullPhone,
+                metadata: { reqId: webhookReqId, returning: true }
+              })
+            });
+            
+            if (response.ok) {
+              const data = await response.json();
+              const botResponseText = data.output || data.text || JSON.stringify(data);
+              addMessage({
+                id: Date.now() + 1,
+                text: typeof botResponseText === 'string' && botResponseText.startsWith('"') && botResponseText.endsWith('"') 
+                  ? botResponseText.slice(1, -1) 
+                  : botResponseText,
+                sender: 'bot',
+                timestamp: new Date()
+              });
+            }
+          } catch (e) {
+            console.warn('Failed to send returning user message to N8N:', e);
+          }
+        })();
+      } else if (isProfileComplete(updatedProfile)) {
         console.log('Profile complete after login, processing astrology...');
-        processCompleteProfile(updatedProfileWithConsent);
+        processCompleteProfile(updatedProfile);
       }
     } catch (e) { }
   };
@@ -343,8 +390,8 @@ const NiyatiChat = () => {
     const extracted = await extractProfileFields(userMessage.text);
     console.log('Extracted profile fields:', extracted);
 
-    // Prepare normalized message by replacing extracted values with normalized versions
-    let normalizedMessage = userMessage.text;
+    // Track the updated profile locally to avoid race conditions with localStorage
+    let currentProfile = { ...profile };
 
     if (extracted.name || extracted.dob || extracted.placeOfBirth || extracted.timeOfBirth) {
       const updated = {
@@ -364,28 +411,8 @@ const NiyatiChat = () => {
       };
       console.log('Updated profile with extracted data:', updated);
 
-      // Replace extracted values in the message with normalized versions
-      if (extracted.dob && updated.user_dob) {
-        const userCountry = getUserCountry();
-        const formattedDob = formatDobForDisplay(updated.user_dob, userCountry.code);
-        if (formattedDob) {
-          normalizedMessage = normalizedMessage.replace(extracted.dob, formattedDob);
-          console.log('Replaced date in message:', extracted.dob, '->', formattedDob);
-        }
-      }
-
-      if (extracted.timeOfBirth && updated.user_timeOfBirth) {
-        normalizedMessage = normalizedMessage.replace(extracted.timeOfBirth, updated.user_timeOfBirth);
-        console.log('Replaced time in message:', extracted.timeOfBirth, '->', updated.user_timeOfBirth);
-      }
-
       updateProfile(updated);
-
-      // Process astrology in background if profile is complete
-      if (isProfileComplete(updated)) {
-        console.log('Profile is complete, processing astrology...');
-        processCompleteProfile(updated);
-      }
+      currentProfile = updated; // Keep local reference for subsequent checks
 
       // Background: resolve the extracted placeOfBirth to a structured place (geocode)
       if (extracted.placeOfBirth) {
@@ -395,15 +422,10 @@ const NiyatiChat = () => {
             if (location) {
               const formatted = formatPlaceFromLocation(location);
               const candidate = {
-                ...profile,
+                ...currentProfile,
                 user_placeOfBirth: formatted || extracted.placeOfBirth
               };
               updateProfile(candidate);
-
-              // After resolving place, optionally trigger astrology if profile is now complete
-              if (isProfileComplete(candidate)) {
-                processCompleteProfile(candidate);
-              }
             }
           } catch (err) {
             // fail silently
@@ -411,12 +433,24 @@ const NiyatiChat = () => {
           }
         })();
       }
+    }
 
-      // No chat confirmation message — the UI header will surface extracted details for manual review.
+    // Helper function to construct a full message from profile data
+    function constructFullMessage(p) {
+      const parts = [];
+      if (p.user_name) parts.push(`I am ${p.user_name}`);
+      if (p.user_dob) {
+        const userCountry = getUserCountry();
+        const formattedDob = formatDobForDisplay(p.user_dob, userCountry.code);
+        parts.push(`born on ${formattedDob || p.user_dob}`);
+      }
+      if (p.user_timeOfBirth) parts.push(`at ${p.user_timeOfBirth}`);
+      if (p.user_placeOfBirth) parts.push(`in ${p.user_placeOfBirth}`);
+      return parts.join(', ');
     }
 
     // Helper function to call webhook with retry on fallback URL
-    const callWebhook = async (webhookUrl, reqId) => {
+    const callWebhook = async (webhookUrl, reqId, message) => {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
 
@@ -429,7 +463,7 @@ const NiyatiChat = () => {
             'ngrok-skip-browser-warning': 'true'
           },
           body: JSON.stringify({
-            message: normalizedMessage,
+            message: message,
             sessionId: auth.phoneNumber,
             metadata: { reqId: reqId }
           }),
@@ -443,15 +477,9 @@ const NiyatiChat = () => {
       }
     };
 
-    // Before forwarding to N8N, ensure profile completeness for first-time users.
-    // Returning users (identified in `user_verified`) with consent are allowed to forward immediately.
-    function getCanonicalProfile() {
-      try {
-        const raw = localStorage.getItem('niyati_user_profile');
-        return raw ? JSON.parse(raw) : profile;
-      } catch (e) {
-        return profile || {};
-      }
+    // Check if all required fields are present (excluding consent for now)
+    function hasAllRequiredFields(p) {
+      return !!(p.user_name && p.user_dob && p.user_placeOfBirth && p.user_timeOfBirth);
     }
 
     function missingProfileFields(p) {
@@ -460,54 +488,97 @@ const NiyatiChat = () => {
       if (!p.user_dob) missing.push('date of birth');
       if (!p.user_placeOfBirth) missing.push('place of birth');
       if (!p.user_timeOfBirth) missing.push('time of birth');
-      if (!p.user_consentGiven) missing.push('consent');
       return missing;
     }
 
     try {
-      // Get current profile state (includes any just-extracted data)
-      const canonical = getCanonicalProfile();
-      const isReturning = canonical.user_verified && (canonical.user_verified.id || canonical.user_verified.phoneNumber);
+      // Use the local currentProfile which has the latest extracted data
+      const isReturning = currentProfile.user_verified && (currentProfile.user_verified.id || currentProfile.user_verified.phoneNumber);
 
-      // Check if we just extracted any fields in this message
-      const justExtracted = extracted && (extracted.name || extracted.dob || extracted.placeOfBirth || extracted.timeOfBirth);
-
-      // If user is not returning and profile is incomplete, do NOT forward to N8N.
-      if (!isProfileComplete(canonical) && !isReturning) {
-        // Only prompt if we didn't just extract information
-        if (!justExtracted) {
-          // Encourage the user to complete missing details by asking targeted questions.
-          const missing = missingProfileFields(canonical);
-          const askMap = {
-            'name': "Could you tell me your full name so I can personalise your reading?",
-            'date of birth': "What's your date of birth? For example: 19-May-1979 or 1979-05-19",
-            'place of birth': "Where were you born? City, State/Country is fine.",
-            'time of birth': "Do you know your time of birth? For example: 11:31 am or 23:45",
-            'consent': "Do you consent to send your details to our service for a personalised reading?"
+      // If profile doesn't have all required fields yet, prompt for missing ones
+      if (!hasAllRequiredFields(currentProfile) && !isReturning) {
+        const missing = missingProfileFields(currentProfile);
+        
+        if (missing.length > 0) {
+          // Construct a single friendly message asking for all missing fields
+          const userName = currentProfile.user_name ? currentProfile.user_name.split(' ')[0] : '';
+          const greeting = userName ? `Hi ${userName}, ` : '';
+          
+          // Build natural language for missing fields
+          const fieldPhrases = {
+            'name': 'your full name',
+            'date of birth': 'your date of birth',
+            'place of birth': 'which city and state you were born in',
+            'time of birth': 'your time of birth'
           };
-
-          // Add one or two gentle prompts (avoid spamming many messages at once)
-          const prompts = missing.slice(0, 2).map(m => askMap[m] || `Please provide your ${m}.`);
-          prompts.forEach(text => addMessage({ id: Date.now() + Math.random(), text, sender: 'bot', timestamp: new Date() }));
+          
+          const missingPhrases = missing.map(m => fieldPhrases[m] || m);
+          let question = '';
+          
+          if (missingPhrases.length === 1) {
+            question = `Could you tell me ${missingPhrases[0]}?`;
+          } else if (missingPhrases.length === 2) {
+            question = `Could you tell me ${missingPhrases[0]} and ${missingPhrases[1]}?`;
+          } else {
+            const last = missingPhrases.pop();
+            question = `Could you tell me ${missingPhrases.join(', ')}, and ${last}?`;
+          }
+          
+          addMessage({ 
+            id: Date.now() + Math.random(), 
+            text: greeting + question, 
+            sender: 'bot', 
+            timestamp: new Date() 
+          });
         }
-        // No acknowledgment message when data is extracted - the UI header shows the updates
+        
         setIsLoading(false);
         return;
       }
+
+      // All fields present! Auto-grant consent and update profile
+      if (!currentProfile.user_consentGiven) {
+        currentProfile.user_consentGiven = true;
+        updateProfile(currentProfile);
+      }
+
+      // Save profile to database
+      try {
+        await bffFetchWithRetry('/users/profile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            phoneNumber: auth.phoneNumber,
+            name: currentProfile.user_name,
+            dateOfBirth: currentProfile.user_dob,
+            timeOfBirth: currentProfile.user_timeOfBirth,
+            placeOfBirth: currentProfile.user_placeOfBirth,
+            consentGiven: true
+          })
+        }, { retries: 2, baseDelayMs: 300 });
+        console.log('Profile saved to database');
+      } catch (err) {
+        console.warn('Failed to save profile to database:', err);
+        // Continue with N8N even if DB save fails
+      }
+
+      // Construct the full message from profile data
+      const fullMessage = constructFullMessage(currentProfile);
+      console.log('Constructed full message for N8N:', fullMessage);
 
       // Use the session request id once so header and body match exactly
       const webhookReqId = getSessionReqId();
       console.log('N8N webhook reqId:', webhookReqId);
       console.log('N8N webhook URL:', N8N_WEBHOOK_URL);
       console.log('N8N webhook fallback URL:', N8N_WEBHOOK_FALLBACK_URL);
-      console.log('Sending normalized message to webhook:', normalizedMessage);
+      console.log('Sending full message to webhook:', fullMessage);
 
       let response = null;
       let usedFallback = false;
 
       // Try primary URL first
       try {
-        response = await callWebhook(N8N_WEBHOOK_URL, webhookReqId);
+        response = await callWebhook(N8N_WEBHOOK_URL, webhookReqId, fullMessage);
         // If we got a server error (5xx), try fallback
         if (response.status >= 500) {
           console.warn('Primary webhook returned server error, trying fallback...');
@@ -519,7 +590,7 @@ const NiyatiChat = () => {
         if (N8N_WEBHOOK_FALLBACK_URL && N8N_WEBHOOK_FALLBACK_URL !== N8N_WEBHOOK_URL) {
           console.log('Attempting fallback webhook URL:', N8N_WEBHOOK_FALLBACK_URL);
           usedFallback = true;
-          response = await callWebhook(N8N_WEBHOOK_FALLBACK_URL, webhookReqId);
+          response = await callWebhook(N8N_WEBHOOK_FALLBACK_URL, webhookReqId, fullMessage);
         } else {
           throw primaryError; // No fallback available, rethrow
         }

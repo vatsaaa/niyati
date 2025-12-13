@@ -63,6 +63,104 @@ router.post('/sync', async (req, res) => {
   }
 });
 
+// POST /users/identify
+// Body: { phoneNumber: "+91-9899162012" }
+// Returns { returning: true/false, user: {...} } if found
+router.post('/identify', async (req, res) => {
+  try {
+    const phone = (req.body.phoneNumber || '').trim();
+
+    if (!phone) {
+      return res.sendError(ErrorCodes.MISSING_REQUIRED_FIELD, 'missing_phone_number');
+    }
+
+    const db = req.app.get('db');
+    if (!db) return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Database not configured');
+
+    // Normalize phone by comparing only digits
+    const sql = `SELECT id, phone_number, name, date_of_birth, time_of_birth, place_of_birth, lat, lon, timezone, consent_given, created_at, updated_at FROM users WHERE regexp_replace(phone_number, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g') LIMIT 1`;
+    const result = await db.query(sql, [phone]);
+
+    if (!result || !result.rows || result.rows.length === 0) {
+      return res.sendSuccess({ returning: false, user: null });
+    }
+
+    const user = result.rows[0];
+    return res.sendSuccess({ 
+      returning: true, 
+      user: {
+        id: user.id,
+        phone_number: user.phone_number,
+        name: user.name,
+        date_of_birth: user.date_of_birth,
+        time_of_birth: user.time_of_birth,
+        place_of_birth: user.place_of_birth,
+        lat: user.lat,
+        lon: user.lon,
+        timezone: user.timezone,
+        consent_given: user.consent_given
+      }
+    });
+  } catch (err) {
+    logger.error(sanitize({ msg: 'users.identify.error', err: err && err.message }));
+    return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'users_identify_failed');
+  }
+});
+
+// POST /users/profile
+// Body: profile object for saving/updating user profile
+router.post('/profile', async (req, res) => {
+  try {
+    const profile = req.body || {};
+    if (!profile.phoneNumber) {
+      return res.sendError(ErrorCodes.MISSING_REQUIRED_FIELD, 'missing_phone_number');
+    }
+
+    const db = req.app.get('db');
+    if (!db) return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Database not configured');
+
+    const upsertSql = `
+      INSERT INTO users (
+        phone_number, name, date_of_birth, time_of_birth, place_of_birth,
+        lat, lon, timezone, consent_given, consent_date,
+        created_at, updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now(), now(), now())
+      ON CONFLICT (phone_number) DO UPDATE SET
+        name = COALESCE(EXCLUDED.name, users.name),
+        date_of_birth = COALESCE(EXCLUDED.date_of_birth, users.date_of_birth),
+        time_of_birth = COALESCE(EXCLUDED.time_of_birth, users.time_of_birth),
+        place_of_birth = COALESCE(EXCLUDED.place_of_birth, users.place_of_birth),
+        lat = COALESCE(EXCLUDED.lat, users.lat),
+        lon = COALESCE(EXCLUDED.lon, users.lon),
+        timezone = COALESCE(EXCLUDED.timezone, users.timezone),
+        consent_given = COALESCE(EXCLUDED.consent_given, users.consent_given),
+        updated_at = now()
+      RETURNING id, phone_number, name, date_of_birth, time_of_birth, place_of_birth, lat, lon, timezone, consent_given
+    `;
+
+    const params = [
+      profile.phoneNumber,
+      profile.name || null,
+      profile.dateOfBirth || null,
+      profile.timeOfBirth || null,
+      profile.placeOfBirth || null,
+      profile.lat ? parseFloat(profile.lat) : null,
+      profile.lon ? parseFloat(profile.lon) : null,
+      profile.timezone || null,
+      profile.consentGiven !== undefined ? !!profile.consentGiven : null
+    ];
+
+    const result = await db.query(upsertSql, params);
+    const user = result.rows[0];
+
+    return res.sendSuccess({ user });
+  } catch (err) {
+    logger.error(sanitize({ msg: 'users.profile.error', err: err && err.message }));
+    return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Failed to save profile');
+  }
+});
+
 module.exports = router;
 
 // GET /users/lookup?phoneNumber=... or ?id=...
