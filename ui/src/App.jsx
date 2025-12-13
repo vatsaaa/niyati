@@ -200,7 +200,47 @@ const NiyatiChat = () => {
       // best-effort, do not surface to user
     }
   }
-  const handleLogin = async (phone, country) => {
+
+  // Try to prefill profile from server for returning users.
+  useEffect(() => {
+    let cancelled = false;
+    const tryPrefill = async () => {
+      try {
+        const storedPhone = localStorage.getItem('niyati_user_phone_number') || auth.phoneNumber;
+        if (!storedPhone) return;
+
+        const url = `/users/lookup?phoneNumber=${encodeURIComponent(storedPhone)}`;
+        const res = await bffFetch(url);
+        if (!res || !res.ok) return;
+        const payload = await res.json();
+        if (cancelled) return;
+        if (!payload || payload.status !== 'ok' || !payload.data) return;
+        const u = payload.data.user;
+        if (!u) return; // nothing to prefill
+
+        // Build only missing updates so we don't overwrite user-entered values
+        const updates = {};
+        if (!profile.user_name && u.name) updates.user_name = u.name;
+        if (!profile.user_dob && u.date_of_birth) updates.user_dob = u.date_of_birth;
+        if (!profile.user_timeOfBirth && u.time_of_birth) updates.user_timeOfBirth = u.time_of_birth;
+        if (!profile.user_placeOfBirth && u.place_of_birth) updates.user_placeOfBirth = u.place_of_birth;
+        if (!profile.user_consentGiven && typeof u.consent_given !== 'undefined') updates.user_consentGiven = !!u.consent_given;
+
+        const verified = { ...(profile.user_verified || {}) };
+        if (u.id) verified.id = u.id;
+        if (u.phone_number) verified.phoneNumber = u.phone_number;
+
+        if (Object.keys(updates).length > 0 || Object.keys(verified).length > 0) {
+          updateProfile({ ...updates, user_verified: verified });
+        }
+      } catch (e) {
+        // best-effort, do not surface
+      }
+    };
+    tryPrefill();
+    return () => { cancelled = true; };
+  }, [auth.phoneNumber, profile]);
+  const handleLogin = async (phone, country, identifiedUser = null) => {
     const fullPhone = `${country.dialCode}-${phone.trim()}`;
 
     // Use auth hook to login
@@ -228,7 +268,22 @@ const NiyatiChat = () => {
     // Persist consent and current location in canonical profile shape
     try {
       const existing = profile;
+
+      // If we got an identified user from the server, prefill missing fields
+      const prefill = {};
+      if (identifiedUser) {
+        if (!existing.user_dob && identifiedUser.date_of_birth) prefill.user_dob = identifiedUser.date_of_birth;
+        if (!existing.user_timeOfBirth && identifiedUser.time_of_birth) prefill.user_timeOfBirth = identifiedUser.time_of_birth;
+        if (!existing.user_placeOfBirth && identifiedUser.place_of_birth) prefill.user_placeOfBirth = identifiedUser.place_of_birth;
+        if (!existing.user_consentGiven && typeof identifiedUser.consent_given !== 'undefined') prefill.user_consentGiven = !!identifiedUser.consent_given;
+        const verified = { ...(existing.user_verified || {}) };
+        if (identifiedUser.id) verified.id = identifiedUser.id;
+        if (identifiedUser.phone_number) verified.phoneNumber = identifiedUser.phone_number;
+        if (Object.keys(verified).length > 0) prefill.user_verified = verified;
+      }
+
       updateProfile({
+        ...prefill,
         user_consentGiven: true,
         user_currentLocation: currentLocationData || profile.user_currentLocation || '',
         updatedAt: new Date().toISOString()
@@ -237,6 +292,7 @@ const NiyatiChat = () => {
       // Check if profile is complete after consent and process astrology
       const updatedProfileWithConsent = {
         ...existing,
+        ...prefill,
         user_consentGiven: true,
         user_currentLocation: currentLocationData || existing.user_currentLocation || ''
       };
@@ -310,7 +366,8 @@ const NiyatiChat = () => {
 
       // Replace extracted values in the message with normalized versions
       if (extracted.dob && updated.user_dob) {
-        const formattedDob = formatDobForDisplay(updated.user_dob, auth.countries);
+        const userCountry = getUserCountry();
+        const formattedDob = formatDobForDisplay(updated.user_dob, userCountry.code);
         if (formattedDob) {
           normalizedMessage = normalizedMessage.replace(extracted.dob, formattedDob);
           console.log('Replaced date in message:', extracted.dob, '->', formattedDob);
@@ -386,12 +443,64 @@ const NiyatiChat = () => {
       }
     };
 
+    // Before forwarding to N8N, ensure profile completeness for first-time users.
+    // Returning users (identified in `user_verified`) with consent are allowed to forward immediately.
+    function getCanonicalProfile() {
+      try {
+        const raw = localStorage.getItem('niyati_user_profile');
+        return raw ? JSON.parse(raw) : profile;
+      } catch (e) {
+        return profile || {};
+      }
+    }
+
+    function missingProfileFields(p) {
+      const missing = [];
+      if (!p.user_name) missing.push('name');
+      if (!p.user_dob) missing.push('date of birth');
+      if (!p.user_placeOfBirth) missing.push('place of birth');
+      if (!p.user_timeOfBirth) missing.push('time of birth');
+      if (!p.user_consentGiven) missing.push('consent');
+      return missing;
+    }
+
     try {
+      // Get current profile state (includes any just-extracted data)
+      const canonical = getCanonicalProfile();
+      const isReturning = canonical.user_verified && (canonical.user_verified.id || canonical.user_verified.phoneNumber);
+
+      // Check if we just extracted any fields in this message
+      const justExtracted = extracted && (extracted.name || extracted.dob || extracted.placeOfBirth || extracted.timeOfBirth);
+
+      // If user is not returning and profile is incomplete, do NOT forward to N8N.
+      if (!isProfileComplete(canonical) && !isReturning) {
+        // Only prompt if we didn't just extract information
+        if (!justExtracted) {
+          // Encourage the user to complete missing details by asking targeted questions.
+          const missing = missingProfileFields(canonical);
+          const askMap = {
+            'name': "Could you tell me your full name so I can personalise your reading?",
+            'date of birth': "What's your date of birth? For example: 19-May-1979 or 1979-05-19",
+            'place of birth': "Where were you born? City, State/Country is fine.",
+            'time of birth': "Do you know your time of birth? For example: 11:31 am or 23:45",
+            'consent': "Do you consent to send your details to our service for a personalised reading?"
+          };
+
+          // Add one or two gentle prompts (avoid spamming many messages at once)
+          const prompts = missing.slice(0, 2).map(m => askMap[m] || `Please provide your ${m}.`);
+          prompts.forEach(text => addMessage({ id: Date.now() + Math.random(), text, sender: 'bot', timestamp: new Date() }));
+        }
+        // No acknowledgment message when data is extracted - the UI header shows the updates
+        setIsLoading(false);
+        return;
+      }
+
       // Use the session request id once so header and body match exactly
       const webhookReqId = getSessionReqId();
       console.log('N8N webhook reqId:', webhookReqId);
       console.log('N8N webhook URL:', N8N_WEBHOOK_URL);
       console.log('N8N webhook fallback URL:', N8N_WEBHOOK_FALLBACK_URL);
+      console.log('Sending normalized message to webhook:', normalizedMessage);
 
       let response = null;
       let usedFallback = false;
@@ -562,8 +671,8 @@ const NiyatiChat = () => {
     const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
     if (iso) return s;
 
-    // Explicitly handle "DD Month YYYY" (e.g. 19 May 1979)
-    const textSpace = s.match(/^(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})$/);
+    // Explicitly handle "DD Month YYYY" (e.g. 19 May 1979, 19-May-1979)
+    const textSpace = s.match(/^(\d{1,2})[\s\-]+([A-Za-z]{3,9})[\s\-]+(\d{4})$/);
     if (textSpace) {
       const months = { jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06', jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12' };
       const mStr = textSpace[2].toLowerCase().substring(0, 3);
@@ -1110,6 +1219,34 @@ const NiyatiChat = () => {
 
       console.log('Location resolved:', location);
       console.log('Timezone:', timezone);
+
+      // Step 1.5: Persist profile to backend
+      try {
+        const persistPayload = {
+          phoneNumber: auth.phoneNumber,
+          dateOfBirth: profile.user_dob,
+          timeOfBirth: profile.user_timeOfBirth,
+          placeOfBirth: profile.user_placeOfBirth,
+          lat: location && (location.lat || location.latitude),
+          lon: location && (location.lon || location.longitude),
+          timezone: timezone,
+          consentGiven: profile.user_consentGiven
+        };
+
+        if (persistPayload.phoneNumber) {
+          console.log('Persisting profile to backend...', persistPayload);
+          // Use /users/profile endpoint (routed to bff-auth)
+          await bffFetchWithRetry('/users/profile', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(persistPayload)
+          }, { retries: 2, baseDelayMs: 500 });
+          console.log('Profile persisted successfully');
+        }
+      } catch (err) {
+        console.error('Failed to persist profile:', err);
+        // Continue flow, don't block astrology
+      }
 
       // Step 2: Calculate astrology
       const astrologyResults = await calculateAstrology(profile, location, timezone);

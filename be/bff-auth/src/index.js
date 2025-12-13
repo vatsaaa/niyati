@@ -5,6 +5,8 @@ const cors = require('cors');
 const helmet = require('helmet');
 const compression = require('compression');
 const dotenv = require('dotenv');
+const { Pool } = require('pg');
+const fs = require('fs');
 
 // Load env from repo root .env by default
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
@@ -15,6 +17,7 @@ const { logger, sanitize, attachResponseHelpers } = commons;
 
 // import the auth router from local copy
 const authRouter = require('../lib/auth');
+const usersRouter = require('../lib/users');
 const telemetryRouter = require('../lib/telemetry');
 
 const app = express();
@@ -23,16 +26,48 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
 app.use(helmet());
 app.use(cors());
 app.use(compression());
+app.use(require('cookie-parser')());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: false }));
 
 // Attach response helpers and logger from commons
 app.use(attachResponseHelpers);
 
+// Database initialization
+if (process.env.DATABASE_URL) {
+  let connectionString = process.env.DATABASE_URL;
+
+  // Handle Docker Secret for password (prod)
+  if (process.env.POSTGRES_PASSWORD_FILE && fs.existsSync(process.env.POSTGRES_PASSWORD_FILE)) {
+    try {
+      const password = fs.readFileSync(process.env.POSTGRES_PASSWORD_FILE, 'utf8').trim();
+      const dbUrl = new URL(connectionString);
+      dbUrl.password = password;
+      connectionString = dbUrl.toString();
+      logger.info({ msg: 'Using database password from secret file' });
+    } catch (e) {
+      logger.warn({ msg: 'Failed to read POSTGRES_PASSWORD_FILE', err: e });
+    }
+  }
+
+  const pool = new Pool({
+    connectionString: connectionString,
+  });
+  pool.on('error', (err, client) => {
+    logger.error({ msg: 'Unexpected error on idle client', err });
+    process.exit(-1);
+  });
+  app.set('db', pool);
+  logger.info({ msg: 'Database pool initialized' });
+} else {
+  logger.warn({ msg: 'DATABASE_URL not set, DB features disabled' });
+}
+
 // Mount auth and telemetry routes
 const API_VERSION = process.env.API_VERSION || 'v1';
 const apiRouter = express.Router();
 apiRouter.use('/auth', authRouter);
+apiRouter.use('/users', usersRouter);
 apiRouter.use('/telemetry', telemetryRouter);
 app.use(`/api/${API_VERSION}`, apiRouter);
 

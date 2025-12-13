@@ -19,8 +19,9 @@ test.describe('Login Flow', () => {
       await consentCheckbox.click();
     }
     
-    // Submit the form
+    // Submit the form (wait until enabled)
     const loginButton = page.locator('button:has-text("Begin Your Journey")');
+    await expect(loginButton).toBeEnabled({ timeout: 5000 });
     await loginButton.click();
     
     // Verify we're logged in (chat interface should be visible)
@@ -33,22 +34,10 @@ test.describe('Login Flow', () => {
     
     const phoneInput = page.locator('input[type="tel"]').first();
     await phoneInput.fill('invalid');
-    
     const loginButton = page.locator('button:has-text("Begin Your Journey")');
-    await loginButton.click();
-    
-    // Handle browser alert dialog (LoginForm uses alert()) and/or validation text
-    let sawDialog = false;
-    page.once('dialog', async (dialog) => { sawDialog = true; await dialog.dismiss(); });
 
-    await loginButton.click();
-
-    const validationLocator = page.locator('text=/invalid|required/i');
-    const validationVisible = await validationLocator.isVisible().catch(() => false);
-    const isDisabled = await loginButton.isDisabled().catch(() => false);
-    if (!sawDialog && !validationVisible && !isDisabled) {
-      throw new Error('Expected validation dialog, validation text, or disabled button for invalid phone input');
-    }
+    // For invalid phone input the form should not allow submission — expect disabled
+    await expect(loginButton).toBeDisabled({ timeout: 2000 });
   });
   
   test('should persist login across page reload', async ({ page }) => {
@@ -64,6 +53,7 @@ test.describe('Login Flow', () => {
     }
     
     const loginButton = page.locator('button:has-text("Begin Your Journey")');
+    await expect(loginButton).toBeEnabled({ timeout: 5000 });
     await loginButton.click();
     
     // Wait for login
@@ -91,7 +81,9 @@ test.describe('Profile Creation', () => {
       await consentCheckbox.click();
     }
     
-    await page.locator('button:has-text("Begin Your Journey")').click();
+    const loginButton = page.locator('button:has-text("Begin Your Journey")');
+    await expect(loginButton).toBeEnabled({ timeout: 5000 });
+    await loginButton.click();
     await page.waitForTimeout(1000);
   });
   

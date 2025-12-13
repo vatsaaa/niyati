@@ -43,7 +43,27 @@ const LoginForm = ({
       alert('Please accept the Privacy Policy to continue');
       return;
     }
-    onLogin(tempPhone, selectedCountry);
+    // Call identify endpoint to check if returning user
+    (async () => {
+      try {
+        const fullPhone = `${selectedCountry.dialCode}-${tempPhone.trim()}`;
+        const res = await fetch('/api/v1/users/identify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phoneNumber: fullPhone })
+        });
+        if (res && res.ok) {
+          const payload = await res.json();
+          if (payload && payload.status === 'ok' && payload.data && payload.data.returning) {
+            // Pass identified user back to parent login handler
+            return onLogin(tempPhone, selectedCountry, payload.data.user || null);
+          }
+        }
+      } catch (e) {
+        // Best-effort: ignore errors and continue login
+      }
+      return onLogin(tempPhone, selectedCountry, null);
+    })();
   };
 
   return (

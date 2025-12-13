@@ -11,6 +11,7 @@ describe('bff-auth - integration /auth/me', () => {
   beforeAll(() => {
     app = express();
     app.use(express.json());
+    app.use(require('cookie-parser')());
     app.use(commons.attachResponseHelpers);
     app.set('db', null); // will set per-test
     app.use('/auth', authRouter);
@@ -47,5 +48,34 @@ describe('bff-auth - integration /auth/me', () => {
     const res = await request(app).get('/auth/me').send();
     expect(res.status).toBe(401);
     expect(res.body.error.code).toBe(commons.ErrorCodes.UNAUTHORIZED);
+  });
+
+  test('GET /auth/me with valid refresh_token cookie return user', async () => {
+    app.set('db', mockDb);
+    const secret = 'test-secret'; // unused for cookie check but needed if we mocked jwt verify?
+    // Actually /me checks cookie hash against DB.
+    // We need to mock findRefreshTokenByHash.
+    // But internal implementation of /me queries DB for refresh token path.
+
+    // Mock DB for refresh token lookup
+    const originalMock = mockDb.query;
+    mockDb.query = jest.fn(async (sql, params) => {
+      if (sql.includes('FROM refresh_tokens WHERE token_hash')) {
+        return { rowCount: 1, rows: [{ user_id: 42, revoked: false, expires_at: new Date(Date.now() + 10000) }] };
+      }
+      if (sql.includes('SELECT id, email, name')) {
+        return { rowCount: 1, rows: [{ id: 42, email: 'cookie@example.com', name: 'Cookie User' }] };
+      }
+      return { rowCount: 0, rows: [] };
+    });
+
+    const res = await request(app).get('/auth/me')
+      .set('Cookie', ['refresh_token=validtoken'])
+      .send();
+
+    mockDb.query = originalMock; // restore
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.user.email).toBe('cookie@example.com');
   });
 });

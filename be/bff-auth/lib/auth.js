@@ -48,9 +48,9 @@ function createAccessToken(payload, opts = {}) {
   if (!secret) {
     throw new Error('ACCESS_TOKEN_SECRET not configured');
   }
-  
+
   const expiresIn = opts.expiresIn || process.env.ACCESS_TOKEN_EXPIRES || '15m';
-  
+
   return jwt.sign(payload, secret, {
     expiresIn,
     algorithm: 'HS256', // Explicitly specify algorithm
@@ -59,11 +59,23 @@ function createAccessToken(payload, opts = {}) {
   });
 }
 
+// Helper: set refresh token cookie
+function setRefreshCookie(res, token) {
+  const cookieOptions = {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: process.env.NODE_ENV === 'production' ? 'lax' : 'lax', // Lax needed for top-level navigation, strict for APIs
+    path: '/api/v1/auth',
+    maxAge: process.env.REFRESH_TOKEN_TTL_MS ? parseInt(process.env.REFRESH_TOKEN_TTL_MS, 10) : 30 * 24 * 60 * 60 * 1000
+  };
+  res.cookie('refresh_token', token, cookieOptions);
+}
+
 // POST /auth/token
 // Accepts { refresh_token } in body (or cookie in future)
 router.post('/token', async (req, res) => {
   try {
-    const raw = req.body && (req.body.refresh_token || req.body.token);
+    const raw = (req.body && req.body.refresh_token) || (req.cookies && req.cookies.refresh_token);
     if (!raw || typeof raw !== 'string') {
       return res.sendError(ErrorCodes.BAD_REQUEST, 'Invalid refresh token');
     }
@@ -73,10 +85,10 @@ router.post('/token', async (req, res) => {
 
     const tokenHash = hashToken(raw);
     const row = await findRefreshTokenByHash(db, tokenHash, true); // Update last_used_at
-    
+
     // Use consistent error message to prevent token enumeration
     const invalidTokenMsg = 'Invalid or expired refresh token';
-    
+
     if (!row) return res.sendError(ErrorCodes.UNAUTHORIZED, invalidTokenMsg);
     if (row.revoked) {
       // Token reuse detected - revoke all tokens for this user as security measure
@@ -106,7 +118,9 @@ router.post('/token', async (req, res) => {
     // Issue access token (JWT) with short expiry
     const accessToken = createAccessToken({ sub: row.user_id });
 
-    return res.sendSuccess({ access_token: accessToken, token_type: 'bearer', expires_in: 15 * 60, refresh_token: newRaw });
+    setRefreshCookie(res, newRaw);
+
+    return res.sendSuccess({ access_token: accessToken, token_type: 'bearer', expires_in: 15 * 60 });
   } catch (err) {
     console.error('Token rotation error:', err);
     return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Authentication failed');
@@ -117,7 +131,7 @@ router.post('/token', async (req, res) => {
 // Accepts { refresh_token } to revoke
 router.post('/logout', async (req, res) => {
   try {
-    const raw = req.body && req.body.refresh_token;
+    const raw = (req.body && req.body.refresh_token) || (req.cookies && req.cookies.refresh_token);
     if (!raw) return res.sendError(ErrorCodes.BAD_REQUEST, 'Missing refresh token');
 
     const db = req.app.get('db');
@@ -128,6 +142,7 @@ router.post('/logout', async (req, res) => {
     if (!row) return res.sendSuccess({ revoked: false });
 
     await revokeRefreshToken(db, row.id);
+    res.clearCookie('refresh_token', { path: '/api/v1/auth' });
     return res.sendSuccess({ revoked: true });
   } catch (err) {
     return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, err.message);
@@ -139,17 +154,17 @@ router.post('/logout', async (req, res) => {
 router.post('/register', async (req, res) => {
   try {
     const { email, password, name } = req.body || {};
-    
+
     // Validate email
     if (!isValidEmail(email)) {
       return res.sendError(ErrorCodes.VALIDATION_ERROR, 'Invalid email format');
     }
-    
+
     // Validate password strength
     if (!isValidPassword(password)) {
       return res.sendError(ErrorCodes.VALIDATION_ERROR, 'Password must be at least 8 characters');
     }
-    
+
     // Validate name if provided
     if (name && (typeof name !== 'string' || name.length > 100)) {
       return res.sendError(ErrorCodes.VALIDATION_ERROR, 'Name must be less than 100 characters');
@@ -172,8 +187,10 @@ router.post('/register', async (req, res) => {
     // Create refresh token
     const { raw: refreshRaw } = await createAndStoreRefreshForUser(db, userId);
 
+    setRefreshCookie(res, refreshRaw);
+
     const accessToken = createAccessToken({ sub: userId });
-    return res.sendSuccess({ user_id: userId, access_token: accessToken, refresh_token: refreshRaw });
+    return res.sendSuccess({ user_id: userId, access_token: accessToken });
   } catch (err) {
     console.error('Registration error:', err);
     return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Registration failed');
@@ -186,10 +203,10 @@ router.post('/register', async (req, res) => {
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body || {};
-    
+
     // Consistent error message to prevent user enumeration
     const invalidCredsMsg = 'Invalid email or password';
-    
+
     if (!isValidEmail(email) || !password) {
       return res.sendError(ErrorCodes.UNAUTHORIZED, invalidCredsMsg);
     }
@@ -198,12 +215,12 @@ router.post('/login', async (req, res) => {
     if (!db) return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Database not configured');
 
     const userRes = await db.query('SELECT id, password_hash FROM users WHERE lower(email) = lower($1) LIMIT 1', [email]);
-    
+
     // Always perform bcrypt comparison even if user not found (timing attack prevention)
     const user = userRes.rows[0];
     const hashToCompare = user?.password_hash || '$2b$10$invalidhashfortimingatttackprevention';
     const ok = await bcrypt.compare(password, hashToCompare);
-    
+
     if (!user || !ok) {
       return res.sendError(ErrorCodes.UNAUTHORIZED, invalidCredsMsg);
     }
@@ -211,13 +228,15 @@ router.post('/login', async (req, res) => {
     // Create refresh token
     const { raw: refreshRaw } = await createAndStoreRefreshForUser(db, user.id);
     const accessToken = createAccessToken({ sub: user.id });
-    
+
+    setRefreshCookie(res, refreshRaw);
+
     // Update last_login timestamp (non-blocking)
     db.query('UPDATE users SET last_login = now() WHERE id = $1', [user.id]).catch(err => {
       console.error('Failed to update last_login:', err);
     });
 
-    return res.sendSuccess({ user_id: user.id, access_token: accessToken, refresh_token: refreshRaw });
+    return res.sendSuccess({ user_id: user.id, access_token: accessToken });
   } catch (err) {
     console.error('Login error:', err);
     return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Authentication failed');
@@ -230,7 +249,7 @@ router.post('/login', async (req, res) => {
 router.post('/request-password-reset', async (req, res) => {
   try {
     const { email } = req.body || {};
-    
+
     if (!isValidEmail(email)) {
       // Still return success to prevent email enumeration
       return res.sendSuccess({ requested: true });
@@ -246,7 +265,7 @@ router.post('/request-password-reset', async (req, res) => {
     }
 
     const user = userRes.rows[0];
-    
+
     // Check for recent reset requests to prevent spam
     const recentReset = await db.query(
       'SELECT id FROM password_resets WHERE user_id = $1 AND created_at > now() - interval \'5 minutes\' LIMIT 1',
@@ -256,14 +275,14 @@ router.post('/request-password-reset', async (req, res) => {
       // Silently succeed but don't send another email
       return res.sendSuccess({ requested: true });
     }
-    
+
     const raw = prCreateRaw();
     const tokenHash = prHash(raw);
     const expiresAt = new Date(Date.now() + (process.env.PASSWORD_RESET_TTL_MS ? parseInt(process.env.PASSWORD_RESET_TTL_MS, 10) : 1000 * 60 * 60));
     await storePasswordReset(db, { userId: user.id, tokenHash, expiresAt });
 
     const resetUrl = `${process.env.FRONTEND_BASE || ''}/reset-password?token=${encodeURIComponent(raw)}`;
-    
+
     // Send email asynchronously (non-blocking)
     sendMail({
       to: user.email,
@@ -287,13 +306,13 @@ router.post('/request-password-reset', async (req, res) => {
 router.post('/reset-password', async (req, res) => {
   try {
     const { token, new_password } = req.body || {};
-    
+
     const invalidTokenMsg = 'Invalid or expired reset token';
-    
+
     if (!token || typeof token !== 'string') {
       return res.sendError(ErrorCodes.BAD_REQUEST, invalidTokenMsg);
     }
-    
+
     if (!isValidPassword(new_password)) {
       return res.sendError(ErrorCodes.VALIDATION_ERROR, 'Password must be at least 8 characters');
     }
@@ -303,7 +322,7 @@ router.post('/reset-password', async (req, res) => {
 
     const tokenHash = prHash(token);
     const row = await findByHash(db, tokenHash);
-    
+
     if (!row || row.used || new Date(row.expires_at) < new Date()) {
       return res.sendError(ErrorCodes.UNAUTHORIZED, invalidTokenMsg);
     }
@@ -315,10 +334,10 @@ router.post('/reset-password', async (req, res) => {
       const passwordHash = await bcrypt.hash(new_password, DEFAULT_BCRYPT_ROUNDS);
       await db.query('UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2', [passwordHash, row.user_id]);
       await markUsed(db, row.id);
-      
+
       // Revoke all existing refresh tokens for security
       await db.query('UPDATE refresh_tokens SET revoked = true WHERE user_id = $1', [row.user_id]);
-      
+
       await db.query('COMMIT');
     } catch (err) {
       await db.query('ROLLBACK');
@@ -415,7 +434,7 @@ router.get('/me', async (req, res) => {
         const userId = payload.sub;
         const userRes = await db.query('SELECT id, email, name, avatar_url, created_at, updated_at, last_login FROM users WHERE id = $1 LIMIT 1', [userId]);
         if (userRes.rowCount === 0) return res.sendError(ErrorCodes.NOT_FOUND, 'User not found');
-          return res.sendSuccess({ user: userRes.rows[0] });
+        return res.sendSuccess({ user: userRes.rows[0] });
       } catch (err) {
         return res.sendError(ErrorCodes.UNAUTHORIZED, 'Invalid access token');
       }

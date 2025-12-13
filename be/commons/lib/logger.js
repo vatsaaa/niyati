@@ -46,8 +46,8 @@ const logger = pino(loggerOptions);
 /**
  * Extracts request ID from Express request object.
  * Checks both 'x-request-id' and 'x-correlation-id' headers.
- * 
- * @param {Object} req - Express request object
+ *
+ * @param {import('express').Request} req - Express request object
  * @returns {string|undefined} Request ID if found, undefined otherwise
  */
 function reqIdFromReq(req) {

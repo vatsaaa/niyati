@@ -114,35 +114,122 @@ niyati/
 ├── be/
 │   ├── bff-auth/        # Auth service (port 3001)
 │   ├── bff-platform/    # Platform service (port 3000)
+│   ├── bff-pthru/       # Passthrough service (port 3003)
 │   ├── commons/         # Shared libraries
-│   └── migrations/      # Database schema
-├── ui/                  # React frontend
-├── docker-compose.yml   # Development setup
-└── docker-compose.prod.yml
+│   ├── migrations/      # Database schema
+│   └── worker/          # Background jobs
+├── ui/                  # React frontend (port 5173)
+├── docker-compose.yml          # Base configuration (all services)
+├── docker-compose.override.yml.example # Dev overrides (auto-loaded)
+├── docker-compose.prod.yml     # Production overrides
+└── docker-compose.e2e.yml      # E2E test overrides
 ```
 
 ---
 
-## 🔧 Common Commands
+## 🔧 Docker Commands
 
-### Docker Operations
+### 🚀 Start Services
+
+```bash
+# Development (default)
+docker compose up -d
+
+# Production
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+# With rebuild
+docker compose up -d --build
+
+# E2E Tests
+docker compose -f docker-compose.yml -f docker-compose.e2e.yml up --build e2e
+```
+
+### 🛑 Stop Services
 
 ```bash
 # Development
-docker-compose down && docker-compose up -d  # Stop existing, then start
-docker-compose down               # Stop dev services
-docker-compose down -v            # Stop & remove volumes (reset DB)
-docker-compose logs -f bff-auth   # View auth service logs
-docker-compose build bff-auth     # Rebuild after code changes
+docker compose down
 
-# Production (uses both compose files)
-docker-compose -f docker-compose.yml -f docker-compose.prod.yml down   # Stop prod
-docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d  # Start prod
+# Production
+docker compose -f docker-compose.yml -f docker-compose.prod.yml down
+
+# E2E
+docker compose -f docker-compose.yml -f docker-compose.e2e.yml down
+
+# Stop all + remove volumes (⚠️ deletes data)
+docker compose down -v
 ```
 
-> **Note:** Dev and production services share a network. Always stop the running environment before switching.
+### 🔍 Monitor Services
 
-### Database Operations
+```bash
+# List running services
+docker compose ps
+
+# View all logs
+docker compose logs -f
+
+# View specific service logs
+docker compose logs -f bff-auth
+docker compose logs -f bff-platform
+docker compose logs -f ui-service
+
+# Check health
+curl http://localhost:3001/api/v1/telemetry/health  # Auth
+curl http://localhost:3000/api/v1/telemetry/health  # Platform
+```
+
+### 🔨 Build & Rebuild
+
+```bash
+# Rebuild specific service
+docker compose build bff-auth
+docker compose up -d bff-auth
+
+# Rebuild all
+docker compose build
+
+# Force rebuild (no cache)
+docker compose build --no-cache
+```
+
+### 🧹 Clean Up
+
+```bash
+# Stop and remove containers
+docker compose down
+
+# Remove volumes too (⚠️ loses data)
+docker compose down -v
+
+# Remove images
+docker compose down --rmi all
+
+# Complete cleanup (containers, volumes, images, orphans)
+docker compose down -v --rmi all --remove-orphans
+
+# Manual image removal
+docker images | grep niyati | awk '{print $3}' | xargs docker rmi -f
+```
+
+### 🎯 Individual Services
+
+```bash
+# Start single service
+docker compose up -d postgres
+
+# Stop single service
+docker compose stop bff-auth
+
+# Restart service
+docker compose restart bff-platform
+
+# View service logs
+docker compose logs -f ui-service
+```
+
+### 🗄️ Database Operations
 
 ```bash
 ./scripts/db.sh health            # Check database health
@@ -150,13 +237,6 @@ docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d  # Start p
 ./scripts/db.sh migrate           # Run migrations
 ./scripts/db.sh backup backup.sql # Backup database
 ./scripts/db.sh reset             # Reset database (destructive!)
-```
-
-### Running E2E Tests
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.e2e.yml up --build e2e
-docker compose -f docker-compose.yml -f docker-compose.e2e.yml down
 ```
 
 ---
@@ -237,24 +317,31 @@ NODE_ENV=production docker-compose up
 mkdir -p secrets
 echo -n "$(openssl rand -hex 32)" > secrets/postgres_password.txt
 echo -n "$(openssl rand -hex 64)" > secrets/jwt_secret.txt
+echo -n "your-smtp-user" > secrets/smtp_user.txt
+echo -n "your-smtp-password" > secrets/smtp_password.txt
+echo -n "$(openssl rand -hex 32)" > secrets/worker_token.txt
 chmod 600 secrets/*.txt
 ```
 
 ### 2. Deploy
 
 ```bash
-# Stop any existing services (dev or prod) first
-docker-compose down
-docker-compose -f docker-compose.yml -f docker-compose.prod.yml down
+# Stop all existing services first
+docker compose down
+docker compose -f docker-compose.yml -f docker-compose.prod.yml down
 
-# Run migrations
-docker-compose -f docker-compose.yml -f docker-compose.prod.yml run --rm migrate
+# Run migrations (with migration profile)
+docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile migration run --rm migrate
 
-# Start services
-docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# Start production services
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 
-# Verify
-curl https://yourdomain.com/api/v1/auth/health
+# Optional: Start with proxy, backup, and worker
+docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile proxy --profile backup up -d
+
+# Verify health
+curl http://localhost:3001/api/v1/telemetry/health
+curl http://localhost:3000/api/v1/telemetry/health
 ```
 
 ### Production Features
@@ -398,7 +485,78 @@ npm run dev
 
 ---
 
-## 📋 Complete Docker Reference (Newbie-Friendly)
+## 📋 Quick Reference: All Docker Commands
+
+### Start Services
+
+| What | Command |
+|------|---------|
+| **Dev (all services)** | `docker compose up -d` |
+| **Prod (all services)** | `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d` |
+| **E2E tests** | `docker compose -f docker-compose.yml -f docker-compose.e2e.yml up --build e2e` |
+| **Single service** | `docker compose up -d postgres` |
+| **With rebuild** | `docker compose up -d --build` |
+
+### Stop Services
+
+| What | Command |
+|------|---------|
+| **Dev** | `docker compose down` |
+| **Prod** | `docker compose -f docker-compose.yml -f docker-compose.prod.yml down` |
+| **E2E** | `docker compose -f docker-compose.yml -f docker-compose.e2e.yml down` |
+| **All + delete data** | `docker compose down -v` |
+| **All + delete images** | `docker compose down --rmi all` |
+| **Nuclear (everything)** | `docker compose down -v --rmi all --remove-orphans` |
+
+### Monitor & Debug
+
+| What | Command |
+|------|---------|
+| **List services** | `docker compose ps` |
+| **View all logs** | `docker compose logs -f` |
+| **View service logs** | `docker compose logs -f bff-auth` |
+| **Check health** | `curl http://localhost:3001/api/v1/telemetry/health` |
+
+### Common Workflows
+
+| Task | Commands |
+|------|----------|
+| **Fresh start** | `docker compose down -v && docker compose up -d --build` |
+| **Switch dev→prod** | `docker compose down && docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d` |
+| **Rebuild service** | `docker compose build bff-auth && docker compose up -d bff-auth` |
+| **Reset database** | `docker compose down -v postgres && docker compose up -d postgres` |
+
+---
+
+## 🆘 Troubleshooting
+
+### "Port already in use"
+```bash
+# Find and stop conflicting services
+docker compose down
+docker compose -f docker-compose.yml -f docker-compose.prod.yml down
+docker compose -f docker-compose.yml -f docker-compose.e2e.yml down
+```
+
+### "Cannot connect to database"
+```bash
+# Check if postgres is healthy
+docker compose ps postgres
+docker compose logs postgres
+
+# Restart database
+docker compose restart postgres
+```
+
+### "Image won't delete"
+```bash
+# Stop all containers first
+docker compose down
+docker ps -aq | xargs docker rm -f
+
+# Then remove images
+docker images | grep niyati | awk '{print $3}' | xargs docker rmi -f
+```
 
 > **⚠️ Important:** Development and Production services share a Docker network. **Never run both environments simultaneously** to avoid port conflicts and data issues.
 

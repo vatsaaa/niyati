@@ -4,10 +4,12 @@ const axios = require('axios');
 const morgan = require('morgan');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
-const { config, logger } = require('commons');
+const { config, logger, attachResponseHelpers, ErrorCodes } = require('commons');
 
 const app = express();
 app.use(express.json({ limit: config.server.bodyLimit || '1mb' }));
+// Attach standardized response helpers (res.sendError / res.sendSuccess)
+app.use(attachResponseHelpers);
 app.use(morgan('tiny'));
 
 // Use centralized port configuration
@@ -43,8 +45,7 @@ app.get('/health', healthCors || ((req, res, next) => next()), (req, res) => {
   const uptime = process.uptime();
   const supportsChat = true;
   const n8nConfigured = Boolean(config.get('n8n.webhookUrl', 'N8N_WEBHOOK_URL', ''));
-  return res.json({
-    status: 'ok',
+  return res.sendSuccess({
     service: 'bff-pthru',
     version: process.env.npm_package_version || '0.0.0',
     supportsChat,
@@ -60,7 +61,7 @@ app.post('/api/v1/chat', async (req, res) => {
 
   if (!N8N_WEBHOOK_URL) {
     logger.error({ msg: 'n8n webhook not configured' });
-    return res.status(502).json({ error: 'n8n webhook not configured' });
+    return res.sendError(ErrorCodes.PROVIDER_ERROR, 'n8n webhook not configured');
   }
 
   const correlationId = req.headers['x-correlation-id'] || uuidv4();
@@ -79,12 +80,19 @@ app.post('/api/v1/chat', async (req, res) => {
       validateStatus: () => true
     });
 
-    res.status(response.status).set('X-Correlation-ID', correlationId).json(response.data);
-  } catch (err) {
-    if (err.code === 'ECONNABORTED') {
-      return res.status(504).json({ error: 'timeout', correlationId });
+    // Propagate successful upstream responses via standardized success envelope.
+    if (response.status >= 200 && response.status < 300) {
+      return res.sendSuccess(response.data, { statusCode: response.status, reqId: correlationId });
     }
-    return res.status(502).json({ error: 'bad_gateway', message: err.message, correlationId });
+
+    // Non-2xx upstream responses become provider errors for clients.
+    logger.warn({ msg: 'upstream_non200', status: response.status, reqId: correlationId });
+    return res.sendError(ErrorCodes.PROVIDER_ERROR, 'upstream_error', { statusCode: response.status, details: response.data, reqId: correlationId });
+  } catch (err) {
+    if (err && err.code === 'ECONNABORTED') {
+      return res.sendError(ErrorCodes.GATEWAY_TIMEOUT, 'timeout', { reqId: correlationId });
+    }
+    return res.sendError(ErrorCodes.PROVIDER_ERROR, 'bad_gateway', { details: err && err.message, reqId: correlationId, statusCode: 502 });
   }
 });
 

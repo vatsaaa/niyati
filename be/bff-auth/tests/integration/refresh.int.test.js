@@ -20,13 +20,14 @@ describe('bff-auth - integration (real DB) - refresh token flows', () => {
 
     app = express();
     app.use(express.json());
+    app.use(require('cookie-parser')());
     app.use(commons.attachResponseHelpers);
     app.set('db', pool);
     app.use('/auth', authRouter);
   }, 120000);
 
   afterAll(async () => {
-    if (pool) await pool.query('DELETE FROM refresh_tokens').catch(() => {});
+    if (pool) await pool.query('DELETE FROM refresh_tokens').catch(() => { });
     await testDb.stop();
   });
 
@@ -38,8 +39,15 @@ describe('bff-auth - integration (real DB) - refresh token flows', () => {
     expect(reg.status).toBe(200);
     const userId = reg.body.data.user_id;
     expect(userId).toBeDefined();
-    const refreshToken = reg.body.data.refresh_token;
-    console.log('refreshToken from register:', typeof refreshToken === 'string' ? refreshToken.slice(0,16) + '...' : refreshToken);
+
+    // Extract refresh token from Set-Cookie header
+    const cookies = reg.headers['set-cookie'];
+    expect(cookies).toBeDefined();
+    const refreshTokenCookie = cookies.find(c => c.startsWith('refresh_token='));
+    expect(refreshTokenCookie).toBeDefined();
+    const refreshToken = refreshTokenCookie.split(';')[0].split('=')[1];
+
+    console.log('refreshToken from register cookie:', typeof refreshToken === 'string' ? refreshToken.slice(0, 16) + '...' : refreshToken);
 
     // Inspect refresh_tokens table for debugging
     const all = await pool.query('SELECT id, user_id, token_hash, revoked, expires_at FROM refresh_tokens');
@@ -48,27 +56,31 @@ describe('bff-auth - integration (real DB) - refresh token flows', () => {
 
     const { hashToken } = require('../../lib/refreshTokens');
     const computed = hashToken(refreshToken);
-    console.log('computed hash prefix:', computed.slice(0,16));
+    console.log('computed hash prefix:', computed.slice(0, 16));
     const lookup = await pool.query('SELECT id FROM refresh_tokens WHERE token_hash = $1', [computed]);
     console.log('lookup by computed hash rowCount:', lookup.rowCount);
 
-    // Use refresh token to obtain new access token (rotation)
-    const tokenRes = await request(app).post('/auth/token').send({ refresh_token: refreshToken });
+    // Use refresh token to obtain new access token (rotation) - passing cookie
+    const tokenRes = await request(app).post('/auth/token').set('Cookie', [`refresh_token=${refreshToken}`]).send();
     if (tokenRes.status !== 200) {
       console.error('tokenRes body:', tokenRes.body);
     }
     expect(tokenRes.status).toBe(200);
     expect(tokenRes.body.data).toHaveProperty('access_token');
-    expect(tokenRes.body.data).toHaveProperty('refresh_token');
 
-    const newRefresh = tokenRes.body.data.refresh_token;
+    // Expect new refresh token in cookie
+    const newCookies = tokenRes.headers['set-cookie'];
+    expect(newCookies).toBeDefined();
+    const newRefreshTokenCookie = newCookies.find(c => c.startsWith('refresh_token='));
+    expect(newRefreshTokenCookie).toBeDefined();
+    const newRefresh = newRefreshTokenCookie.split(';')[0].split('=')[1];
 
     // Old token should be revoked in DB (there's a DB row with revoked true)
-    const checkOld = await pool.query('SELECT revoked FROM refresh_tokens WHERE token_hash = $1 LIMIT 1', [ require('./../../lib/refreshTokens').hashToken(refreshToken) ]);
+    const checkOld = await pool.query('SELECT revoked FROM refresh_tokens WHERE token_hash = $1 LIMIT 1', [require('./../../lib/refreshTokens').hashToken(refreshToken)]);
     expect(checkOld.rowCount).toBeGreaterThanOrEqual(0);
 
-    // Logout using new token
-    const logout = await request(app).post('/auth/logout').send({ refresh_token: newRefresh });
+    // Logout using new token via cookie
+    const logout = await request(app).post('/auth/logout').set('Cookie', [`refresh_token=${newRefresh}`]).send();
     expect(logout.status).toBe(200);
     expect(logout.body.data.revoked).toBe(true);
   }, 120000);
