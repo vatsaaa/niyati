@@ -16,6 +16,17 @@ const ChatMessage = ({ message, isLoading }) => {
           ? 'bg-slate-800/80 border border-slate-700/50 text-slate-200' 
           : 'bg-gradient-to-r from-purple-600 to-amber-600 text-white'
       }`}>
+        {/* Render image if present */}
+        {message.image && (
+          <div className="mb-3">
+            <img 
+              src={message.image} 
+              alt="Payment QR Code" 
+              className="rounded-lg max-w-full h-auto border border-slate-600"
+              style={{ maxHeight: '250px' }}
+            />
+          </div>
+        )}
         <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.text}</p>
         {isLoading && isBot && (
           <div className="flex gap-1 mt-2">

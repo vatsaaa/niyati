@@ -78,7 +78,7 @@ const configs = {
     bffBaseUrl: import.meta.env.VITE_BFF_BASE_URL || '',
     bffApiVersion: 'v1',
     authBaseUrl: '', // Same origin via proxy
-    n8nWebhookUrl: import.meta.env.VITE_N8N_WEBHOOK_URL,
+    n8nWebhookUrl: import.meta.env.VITE_N8N_WEBHOOK_URL || '/webhook/chat',
 
     // Feature flags
     features: {

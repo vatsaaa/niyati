@@ -2,12 +2,11 @@ import { useState } from 'react';
 import { extractProfileFields } from '../utils/profileExtractor';
 import { normalizeDateString, normalizeTimeString } from '../utils/normalizers';
 import { resolveLocationAndTimezone } from '../services/geo';
-import { formatPlaceFromLocation } from '../utils/formatters';
+import { formatPlaceFromLocation, formatDobForDisplay, formatTimeForDisplay } from '../utils/formatters';
 import { bffFetchWithRetry, sendClientLog } from '../services/api';
 import { N8N_WEBHOOK_URL, N8N_WEBHOOK_FALLBACK_URL } from '../config';
 import { getSessionReqId } from '../utils/uuid';
 import { hasAllRequiredFields, missingProfileFields } from '../utils/profile';
-import { formatDobForDisplay } from '../utils/formatters';
 
 export function useChat(profile, updateProfile, addMessage, auth) {
   const [isLoading, setIsLoading] = useState(false);
@@ -227,6 +226,25 @@ export function useChat(profile, updateProfile, addMessage, auth) {
         sender: 'bot',
         timestamp: new Date()
       });
+
+      // For first-time users (not returning), show payment QR after n8n response
+      const isReturningUser = currentProfile.user_verified && (currentProfile.user_verified.id || currentProfile.user_verified.phoneNumber);
+      if (!isReturningUser && !currentProfile.user_isPaid) {
+        // Show payment prompt for first-time users
+        addMessage({
+          id: Date.now() + 2,
+          text: 'To unlock your complete birth chart analysis and premium features, please complete your payment of ₹500.',
+          sender: 'bot',
+          timestamp: new Date(),
+        });
+        addMessage({
+          id: Date.now() + 3,
+          image: '/payment/PayQR.jpeg',
+          text: 'Scan the QR code above to pay ₹500. After payment, please share your transaction ID to verify.',
+          sender: 'bot',
+          timestamp: new Date(),
+        });
+      }
 
     } catch (error) {
       console.error("Error:", error);
