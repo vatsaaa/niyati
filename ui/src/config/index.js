@@ -12,8 +12,6 @@ const configs = {
     n8nWebhookUrl: import.meta.env.VITE_N8N_WEBHOOK_URL,
     // Auth service URL (only needed in dev where ports differ)
     authBaseUrl: 'http://localhost:3001',
-    // bff-pthru discovery URL
-    bffPthruUrl: import.meta.env.VITE_BFF_PTHRU_URL || 'http://localhost:3003',
 
     // Feature flags
     features: {
@@ -182,7 +180,6 @@ export const BFF_BASE_URL = currentConfig.bffBaseUrl;
 export const BFF_API_VERSION = currentConfig.bffApiVersion;
 export const N8N_WEBHOOK_URL = currentConfig.n8nWebhookUrl;
 export const N8N_WEBHOOK_FALLBACK_URL = import.meta.env.VITE_N8N_WEBHOOK_FALLBACK_URL || 'http://localhost:5678/webhook/chat';
-export const BFF_PTHRU_URL = currentConfig.bffPthruUrl;
 export const FEATURES = currentConfig.features;
 export const CACHE_CONFIG = currentConfig.cache;
 export const RETRY_CONFIG = currentConfig.retry;

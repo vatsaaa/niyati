@@ -1,0 +1,71 @@
+name: CI Integration Tests
+
+on:
+  pull_request:
+    branches: [ master ]
+  push:
+    branches: [ master ]
+
+jobs:
+  integration:
+    name: Integration (migrations + tests)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: niyati_test
+        options: >-
+          --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 10
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Install bff-platform deps
+        working-directory: be/bff-platform
+        run: npm ci
+
+      - name: Wait for Postgres
+        run: |
+          for i in $(seq 1 30); do
+            pg_isready -h localhost -p 5432 -U postgres -d niyati_test && break || sleep 1
+          done
+
+      - name: Apply migrations
+        run: |
+          export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/niyati_test"
+          for f in $(ls -1 be/migrations/*.up.sql | sort); do
+            echo "Applying $f"
+            psql "$DATABASE_URL" -f "$f"
+          done
+
+      - name: Run bff-platform tests
+        working-directory: be/bff-platform
+        run: |
+          export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/niyati_test"
+          export NODE_ENV=test
+          npm test --silent
+
+      - name: Install bff-auth deps
+        working-directory: be/bff-auth
+        run: npm ci
+
+      - name: Run bff-auth tests
+        working-directory: be/bff-auth
+        run: |
+          export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/niyati_test"
+          export NODE_ENV=test
+          npm test --silent

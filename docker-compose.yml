@@ -122,25 +122,6 @@ services:
       postgres:
         condition: service_healthy
 
-  # BFF Passthrough Service (optional)
-  bff-pthru:
-    build:
-      context: ./be
-      dockerfile: bff-pthru/Dockerfile
-    image: niyati/bff-pthru:latest
-    container_name: niyati-bff-pthru
-    ports:
-      - "${BFF_PTHRU_PORT:-3003}:${BFF_PTHRU_PORT:-3003}"
-    environment:
-      - PORT=${BFF_PTHRU_PORT:-3003}
-      - N8N_WEBHOOK_URL=${N8N_WEBHOOK_URL}
-      - N8N_TOKEN=${N8N_TOKEN}
-    networks:
-      - niyati
-    restart: unless-stopped
-    profiles:
-      - pthru
-
   # UI Service
   ui-service:
     build:
@@ -150,7 +131,6 @@ services:
       args:
         - VITE_BFF_BASE_URL=${VITE_BFF_BASE_URL:-}
         - VITE_N8N_WEBHOOK_URL=${VITE_N8N_WEBHOOK_URL}
-        - VITE_BFF_PTHRU_URL=${VITE_BFF_PTHRU_URL:-}
         - VITE_DEBUG_MODE=${VITE_DEBUG_MODE:-false}
     image: niyati/ui:${BUILD_TARGET:-development}
     container_name: niyati-ui
@@ -164,7 +144,7 @@ services:
       - niyati
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:${UI_PORT:-5173}"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:${UI_PORT:-5173}"]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -114,7 +114,6 @@ niyati/
 ├── be/
 │   ├── bff-auth/        # Auth service (port 3001)
 │   ├── bff-platform/    # Platform service (port 3000)
-│   ├── bff-pthru/       # Passthrough service (port 3003)
 │   ├── commons/         # Shared libraries
 │   ├── migrations/      # Database schema
 │   └── worker/          # Background jobs

@@ -1,5 +1,6 @@
 const express = require('express');
-const { ErrorCodes } = require('../commons');
+function _responses() { return require('../commons/lib/responses'); }
+function RC(codeName) { const r = _responses(); return r && r.ErrorCodes && r.ErrorCodes[codeName] ? r.ErrorCodes[codeName] : codeName; }
 
 const router = express.Router();
 const axios = require('axios');
@@ -19,6 +20,7 @@ router.post('/profile', async (req, res) => {
     try {
         const {
             phoneNumber,
+            name,
             dateOfBirth,
             timeOfBirth,
             placeOfBirth,
@@ -29,12 +31,12 @@ router.post('/profile', async (req, res) => {
         } = req.body || {};
 
         // Mandatory
-        if (!isValidPhone(phoneNumber)) {
-            return res.sendError(ErrorCodes.VALIDATION_ERROR, 'Invalid phone number');
+            if (!isValidPhone(phoneNumber)) {
+                return res.sendError(RC('VALIDATION_ERROR'), 'Invalid phone number');
         }
 
         if (!consentGiven) {
-            return res.sendError(ErrorCodes.VALIDATION_ERROR, 'User consent is required');
+            return res.sendError(RC('VALIDATION_ERROR'), 'User consent is required');
         }
 
         // Forward to bff-platform users sync endpoint only for first-time users.
@@ -56,13 +58,16 @@ router.post('/profile', async (req, res) => {
             // New user - persist via platform sync
             const resp = await axios.post(`${BFF_PLATFORM_BASE.replace(/\/$/, '')}/users/sync`, {
                 phoneNumber,
+                name: name || null,
                 dateOfBirth: dateOfBirth || null,
                 timeOfBirth: timeOfBirth || null,
                 placeOfBirth: placeOfBirth || null,
                 lat: lat ? parseFloat(lat) : null,
                 lon: lon ? parseFloat(lon) : null,
                 timezone: timezone || null,
-                consentGiven: !!consentGiven
+                consentGiven: !!consentGiven,
+                isPaid: !!req.body.isPaid,
+                last_login_location: req.body.last_login_location || null
             }, {
                 headers: SERVICE_TOKEN ? { 'X-Service-Token': SERVICE_TOKEN } : {}
             });
@@ -72,15 +77,15 @@ router.post('/profile', async (req, res) => {
                 return res.sendSuccess({ ...resp.data.data, created: true });
             }
             // Map provider error
-            return res.sendError(ErrorCodes.PROVIDER_ERROR, 'sync_failed');
+                return res.sendError(RC('PROVIDER_ERROR'), 'sync_failed');
         } catch (err) {
             console.error('Profile sync error (to bff-platform):', err && err.message ? err.message : err);
-            return res.sendError(ErrorCodes.PROVIDER_ERROR, 'sync_failed');
+                return res.sendError(RC('PROVIDER_ERROR'), 'sync_failed');
         }
 
     } catch (err) {
         console.error('Profile upsert error:', err);
-        return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Failed to save profile');
+            return res.sendError(RC('INTERNAL_SERVER_ERROR'), 'Failed to save profile');
     }
 });
 
@@ -90,7 +95,7 @@ router.post('/identify', async (req, res) => {
     try {
         const { phoneNumber } = req.body || {};
         if (!isValidPhone(phoneNumber)) {
-            return res.sendError(ErrorCodes.VALIDATION_ERROR, 'Invalid phone number');
+            return res.sendError(RC('VALIDATION_ERROR'), 'Invalid phone number');
         }
 
         const BFF_PLATFORM_BASE = process.env.BFF_PLATFORM_BASE || 'http://bff-platform:3000/api/v1';
@@ -110,14 +115,14 @@ router.post('/identify', async (req, res) => {
                 return res.sendSuccess({ returning: false });
             }
 
-            return res.sendError(ErrorCodes.PROVIDER_ERROR, 'lookup_failed');
+                return res.sendError(RC('PROVIDER_ERROR'), 'lookup_failed');
         } catch (err) {
             console.error('User lookup error (to bff-platform):', err && err.message ? err.message : err);
-            return res.sendError(ErrorCodes.PROVIDER_ERROR, 'lookup_failed');
+                return res.sendError(RC('PROVIDER_ERROR'), 'lookup_failed');
         }
     } catch (err) {
         console.error('Identify error:', err);
-        return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'identify_failed');
+            return res.sendError(RC('INTERNAL_SERVER_ERROR'), 'identify_failed');
     }
 });
 

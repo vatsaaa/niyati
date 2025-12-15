@@ -1,5 +1,5 @@
 const nodemailer = require('nodemailer');
-const { logger } = require('../commons');
+const { logger } = require('../commons/lib/logger');
 
 // Minimal email provider wrapper. If SMTP env vars are configured, it uses nodemailer.
 // Otherwise falls back to a console log (useful in dev/test).

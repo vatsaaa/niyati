@@ -62,7 +62,12 @@ async function applyMigration(client, name, sql) {
     console.log(`applied: ${name}`);
   } catch (err) {
     await client.query('ROLLBACK');
-    throw err;
+    // Enhance error message with migration file context
+    const enhancedErr = new Error(`Migration "${name}" failed: ${err.message}`);
+    enhancedErr.migration = name;
+    enhancedErr.originalError = err;
+    enhancedErr.position = err.position; // SQL position if available
+    throw enhancedErr;
   }
 }
 
@@ -87,6 +92,7 @@ async function run() {
       return { applied: 0 };
     }
 
+    let appliedCount = 0;
     for (const file of files) {
       const applied = await hasMigrationApplied(client, file);
       if (applied) {
@@ -97,13 +103,17 @@ async function run() {
       const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8');
       console.log(`applying: ${file}`);
       await applyMigration(client, file, sql);
+      appliedCount++;
     }
 
-    console.log('Migrations complete');
+    console.log(`Migrations complete. Applied ${appliedCount} new migration(s).`);
     await client.end();
-    return { applied: files.length };
+    return { applied: appliedCount, total: files.length };
   } catch (err) {
     console.error('Migration failed:', err && err.message ? err.message : err);
+    if (err.position) {
+      console.error(`SQL error at position: ${err.position}`);
+    }
     try {
       await client.end();
     } catch (e) {
@@ -113,11 +123,63 @@ async function run() {
   }
 }
 
+// Show migration status without applying
+async function status() {
+  console.log('DATABASE_URL=', DATABASE_URL.replace(/:(?:[^:@]+)@/, ':*****@'));
+  const client = new Client({ connectionString: DATABASE_URL });
+
+  try {
+    await waitForDb(DATABASE_URL);
+    await client.connect();
+    await ensureMigrationsTable(client);
+
+    const files = listSqlFiles(MIGRATIONS_DIR);
+    const appliedRes = await client.query('SELECT name, applied_at FROM migrations ORDER BY applied_at');
+    const appliedSet = new Set(appliedRes.rows.map(r => r.name));
+
+    console.log('\nMigration Status:');
+    console.log('=================');
+    
+    for (const file of files) {
+      const isApplied = appliedSet.has(file);
+      const row = appliedRes.rows.find(r => r.name === file);
+      const appliedAt = row ? new Date(row.applied_at).toISOString() : '';
+      console.log(`  ${isApplied ? '✓' : '○'} ${file}${appliedAt ? ` (applied: ${appliedAt})` : ''}`);
+    }
+
+    // Check for orphaned migrations (applied but file missing)
+    for (const row of appliedRes.rows) {
+      if (!files.includes(row.name)) {
+        console.log(`  ⚠ ${row.name} (applied but file missing!)`);
+      }
+    }
+
+    const pending = files.filter(f => !appliedSet.has(f));
+    console.log(`\nTotal: ${files.length} migrations, ${appliedSet.size} applied, ${pending.length} pending`);
+
+    await client.end();
+    return { total: files.length, applied: appliedSet.size, pending: pending.length };
+  } catch (err) {
+    console.error('Status check failed:', err && err.message ? err.message : err);
+    try { await client.end(); } catch (e) {}
+    throw err;
+  }
+}
+
 if (require.main === module) {
-  run()
-    .then(() => process.exit(0))
-    .catch(() => process.exit(1));
+  const args = process.argv.slice(2);
+  const command = args[0] || 'run';
+
+  if (command === '--status' || command === 'status') {
+    status()
+      .then(() => process.exit(0))
+      .catch(() => process.exit(1));
+  } else {
+    run()
+      .then(() => process.exit(0))
+      .catch(() => process.exit(1));
+  }
 }
 
 // Export runner so other tools (jest global setup) can invoke migrations
-module.exports = { run };
+module.exports = { run, status };

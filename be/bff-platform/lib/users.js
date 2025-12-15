@@ -27,9 +27,10 @@ router.post('/sync', async (req, res) => {
       INSERT INTO users (
         phone_number, date_of_birth, time_of_birth, place_of_birth,
         lat, lon, timezone, consent_given, consent_date,
+        is_paid, last_login_location, last_login_lat, last_login_lon,
         created_at, updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), now(), now())
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), $9, $10, $11, $12, now(), now())
       ON CONFLICT (phone_number) DO UPDATE SET
         date_of_birth = EXCLUDED.date_of_birth,
         time_of_birth = EXCLUDED.time_of_birth,
@@ -38,8 +39,12 @@ router.post('/sync', async (req, res) => {
         lon = EXCLUDED.lon,
         timezone = EXCLUDED.timezone,
         consent_given = EXCLUDED.consent_given,
+        is_paid = COALESCE(EXCLUDED.is_paid, users.is_paid),
+        last_login_location = COALESCE(EXCLUDED.last_login_location, users.last_login_location),
+        last_login_lat = COALESCE(EXCLUDED.last_login_lat, users.last_login_lat),
+        last_login_lon = COALESCE(EXCLUDED.last_login_lon, users.last_login_lon),
         updated_at = now()
-      RETURNING id, phone_number, created_at, updated_at
+      RETURNING id, phone_number, created_at, updated_at, is_paid, last_login_location, last_login_lat, last_login_lon
     `;
 
     const params = [
@@ -50,7 +55,11 @@ router.post('/sync', async (req, res) => {
       profile.lat ? parseFloat(profile.lat) : null,
       profile.lon ? parseFloat(profile.lon) : null,
       profile.timezone || null,
-      !!profile.consentGiven
+      !!profile.consentGiven,
+      profile.isPaid === undefined ? false : !!profile.isPaid,
+      profile.last_login_location || null,
+      profile.last_login_lat ? parseFloat(profile.last_login_lat) : (profile.last_login_lat === 0 ? 0 : null),
+      profile.last_login_lon ? parseFloat(profile.last_login_lon) : (profile.last_login_lon === 0 ? 0 : null)
     ];
 
     const result = await db.query(upsertSql, params);
@@ -78,7 +87,7 @@ router.post('/identify', async (req, res) => {
     if (!db) return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Database not configured');
 
     // Normalize phone by comparing only digits
-    const sql = `SELECT id, phone_number, name, date_of_birth, time_of_birth, place_of_birth, lat, lon, timezone, consent_given, created_at, updated_at FROM users WHERE regexp_replace(phone_number, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g') LIMIT 1`;
+    const sql = `SELECT id, phone_number, name, date_of_birth, time_of_birth, place_of_birth, lat, lon, timezone, consent_given, is_paid, last_login_location, last_login_lat, last_login_lon, created_at, updated_at FROM users WHERE regexp_replace(phone_number, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g') LIMIT 1`;
     const result = await db.query(sql, [phone]);
 
     if (!result || !result.rows || result.rows.length === 0) {
@@ -88,7 +97,7 @@ router.post('/identify', async (req, res) => {
     const user = result.rows[0];
     return res.sendSuccess({ 
       returning: true, 
-      user: {
+        user: {
         id: user.id,
         phone_number: user.phone_number,
         name: user.name,
@@ -98,7 +107,11 @@ router.post('/identify', async (req, res) => {
         lat: user.lat,
         lon: user.lon,
         timezone: user.timezone,
-        consent_given: user.consent_given
+        consent_given: user.consent_given,
+        is_paid: user.is_paid,
+        last_login_location: user.last_login_location,
+        last_login_lat: user.last_login_lat,
+        last_login_lon: user.last_login_lon
       }
     });
   } catch (err) {
@@ -123,9 +136,10 @@ router.post('/profile', async (req, res) => {
       INSERT INTO users (
         phone_number, name, date_of_birth, time_of_birth, place_of_birth,
         lat, lon, timezone, consent_given, consent_date,
+        is_paid, last_login_location, last_login_lat, last_login_lon,
         created_at, updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now(), now(), now())
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now(), now())
       ON CONFLICT (phone_number) DO UPDATE SET
         name = COALESCE(EXCLUDED.name, users.name),
         date_of_birth = COALESCE(EXCLUDED.date_of_birth, users.date_of_birth),
@@ -135,8 +149,12 @@ router.post('/profile', async (req, res) => {
         lon = COALESCE(EXCLUDED.lon, users.lon),
         timezone = COALESCE(EXCLUDED.timezone, users.timezone),
         consent_given = COALESCE(EXCLUDED.consent_given, users.consent_given),
+        is_paid = COALESCE(EXCLUDED.is_paid, users.is_paid),
+        last_login_location = COALESCE(EXCLUDED.last_login_location, users.last_login_location),
+        last_login_lat = COALESCE(EXCLUDED.last_login_lat, users.last_login_lat),
+        last_login_lon = COALESCE(EXCLUDED.last_login_lon, users.last_login_lon),
         updated_at = now()
-      RETURNING id, phone_number, name, date_of_birth, time_of_birth, place_of_birth, lat, lon, timezone, consent_given
+      RETURNING id, phone_number, name, date_of_birth, time_of_birth, place_of_birth, lat, lon, timezone, consent_given, is_paid, last_login_location, last_login_lat, last_login_lon
     `;
 
     const params = [
@@ -148,13 +166,35 @@ router.post('/profile', async (req, res) => {
       profile.lat ? parseFloat(profile.lat) : null,
       profile.lon ? parseFloat(profile.lon) : null,
       profile.timezone || null,
-      profile.consentGiven !== undefined ? !!profile.consentGiven : null
+      profile.consentGiven !== undefined ? !!profile.consentGiven : null,
+      profile.isPaid === undefined ? false : !!profile.isPaid,
+      profile.last_login_location || null,
+      profile.last_login_lat ? parseFloat(profile.last_login_lat) : (profile.last_login_lat === 0 ? 0 : null),
+      profile.last_login_lon ? parseFloat(profile.last_login_lon) : (profile.last_login_lon === 0 ? 0 : null)
     ];
 
     const result = await db.query(upsertSql, params);
     const user = result.rows[0];
 
-    return res.sendSuccess({ user });
+    // Normalize returned user object to include new fields
+    const outUser = {
+      id: user.id,
+      phone_number: user.phone_number,
+      name: user.name,
+      date_of_birth: user.date_of_birth,
+      time_of_birth: user.time_of_birth,
+      place_of_birth: user.place_of_birth,
+      lat: user.lat,
+      lon: user.lon,
+      timezone: user.timezone,
+      consent_given: user.consent_given,
+      is_paid: user.is_paid,
+      last_login_location: user.last_login_location,
+      last_login_lat: user.last_login_lat,
+      last_login_lon: user.last_login_lon
+    };
+
+    return res.sendSuccess({ user: outUser });
   } catch (err) {
     logger.error(sanitize({ msg: 'users.profile.error', err: err && err.message }));
     return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Failed to save profile');
@@ -187,11 +227,11 @@ router.get('/lookup', async (req, res) => {
     let sql;
     let params = [];
     if (id) {
-      sql = `SELECT id, phone_number, date_of_birth, time_of_birth, place_of_birth, lat, lon, timezone, consent_given, created_at, updated_at FROM users WHERE id = $1 LIMIT 1`;
+      sql = `SELECT id, phone_number, date_of_birth, time_of_birth, place_of_birth, lat, lon, timezone, consent_given, is_paid, last_login_location, last_login_lat, last_login_lon, created_at, updated_at FROM users WHERE id = $1 LIMIT 1`;
       params = [id];
     } else {
       // Normalize phone by comparing only digits to allow flexible formatting ( +91-999... vs +91999... )
-      sql = `SELECT id, phone_number, date_of_birth, time_of_birth, place_of_birth, lat, lon, timezone, consent_given, created_at, updated_at FROM users WHERE regexp_replace(phone_number, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g') LIMIT 1`;
+      sql = `SELECT id, phone_number, date_of_birth, time_of_birth, place_of_birth, lat, lon, timezone, consent_given, is_paid, last_login_location, last_login_lat, last_login_lon, created_at, updated_at FROM users WHERE regexp_replace(phone_number, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g') LIMIT 1`;
       params = [phone];
     }
 

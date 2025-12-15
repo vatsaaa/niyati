@@ -15,19 +15,11 @@
     "serve:dist": "serve -s dist -l 4173",
     "pwa:check": "node ./scripts/lighthouse_check.js",
     "pwa:check:auto": "bash ./scripts/pwa_check_with_server.sh",
-    "pwa:test": "playwright test --config=playwright.pwa.config.js",
-    "test:pwa": "npm run build && npm run pwa:test",
     "preview:staging": "vite preview --mode staging",
-    "test": "playwright test",
-    "test:unit": "vitest src --run",
-    "test:coverage": "vitest --coverage --reporter=verbose",
-    "test:ui": "playwright test --ui",
-    "test:headed": "playwright test --headed",
-    "test:debug": "playwright test --debug",
-    "test:report": "playwright show-report",
-    "test:codegen": "playwright codegen http://localhost:5173",
+    
     "format": "prettier --write 'src/**/*.{js,jsx,css}'",
     "format:check": "prettier --check 'src/**/*.{js,jsx,css}'",
+    "test": "vitest --run --environment jsdom",
     "check-size": "node ./scripts/check-size.cjs",
     "type-check": "echo 'No TypeScript configured' && exit 0",
     "audit:security": "npm audit --audit-level=moderate",
@@ -36,7 +28,9 @@
   "dependencies": {
     "dompurify": "^3.0.6",
     "lucide-react": "^0.553.0",
-    "marked": "^5.1.1",
+    "marked": "^17.0.1",
+    "chrono-node": "^2.3.1",
+    "wink-nlp": "^1.8.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
@@ -62,7 +56,7 @@
     "serve": "^14.1.1",
     "tailwindcss": "^3.4.17",
     "vite": "^7.2.2",
-    "vitest": "^4.0.15"
-    ,"@vitest/coverage-v8": "^1.0.0"
+    "vitest": "^4.0.15",
+    "@vitest/coverage-v8": "^4.0.0"
   }
 }

@@ -1,7 +1,9 @@
 const express = require('express');
 const { createRawToken, hashToken, findRefreshTokenByHash, rotateRefreshToken, revokeRefreshToken, storeRefreshToken } = require('./refreshTokens');
 const jwt = require('jsonwebtoken');
-const { config, ErrorCodes } = require('../commons');
+const config = require('../commons/config');
+function _responses() { return require('../commons/lib/responses'); }
+function RC(codeName) { const r = _responses(); return r && r.ErrorCodes && r.ErrorCodes[codeName] ? r.ErrorCodes[codeName] : codeName; }
 const { createRawToken: prCreateRaw, hashToken: prHash, storePasswordReset, findByHash, markUsed } = require('./passwordReset');
 const { sendMail } = require('./emailProvider');
 const { authenticate } = require('./authMiddleware');
@@ -76,12 +78,12 @@ function setRefreshCookie(res, token) {
 router.post('/token', async (req, res) => {
   try {
     const raw = (req.body && req.body.refresh_token) || (req.cookies && req.cookies.refresh_token);
-    if (!raw || typeof raw !== 'string') {
-      return res.sendError(ErrorCodes.BAD_REQUEST, 'Invalid refresh token');
+        if (!raw || typeof raw !== 'string') {
+          return res.sendError(RC('BAD_REQUEST'), 'Invalid refresh token');
     }
 
     const db = req.app.get('db');
-    if (!db) return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Database not configured');
+      if (!db) return res.sendError(RC('INTERNAL_SERVER_ERROR'), 'Database not configured');
 
     const tokenHash = hashToken(raw);
     const row = await findRefreshTokenByHash(db, tokenHash, true); // Update last_used_at
@@ -89,14 +91,15 @@ router.post('/token', async (req, res) => {
     // Use consistent error message to prevent token enumeration
     const invalidTokenMsg = 'Invalid or expired refresh token';
 
-    if (!row) return res.sendError(ErrorCodes.UNAUTHORIZED, invalidTokenMsg);
+      if (!row) return res.sendError(_responses().ErrorCodes.UNAUTHORIZED, invalidTokenMsg);
+      if (!row) return res.sendError(RC('UNAUTHORIZED'), invalidTokenMsg);
     if (row.revoked) {
       // Token reuse detected - revoke all tokens for this user as security measure
       await db.query('UPDATE refresh_tokens SET revoked = true WHERE user_id = $1', [row.user_id]);
-      return res.sendError(ErrorCodes.UNAUTHORIZED, invalidTokenMsg);
+        return res.sendError(RC('UNAUTHORIZED'), invalidTokenMsg);
     }
     if (new Date(row.expires_at) < new Date()) {
-      return res.sendError(ErrorCodes.UNAUTHORIZED, invalidTokenMsg);
+        return res.sendError(_responses().ErrorCodes.UNAUTHORIZED, invalidTokenMsg);
     }
 
     // Detect potential token reuse (same token used within suspicious timeframe)
@@ -104,7 +107,7 @@ router.post('/token', async (req, res) => {
       const timeSinceLastUse = Date.now() - new Date(row.last_used_at).getTime();
       if (timeSinceLastUse < 1000) { // Less than 1 second - likely replay attack
         await db.query('UPDATE refresh_tokens SET revoked = true WHERE user_id = $1', [row.user_id]);
-        return res.sendError(ErrorCodes.UNAUTHORIZED, invalidTokenMsg);
+          return res.sendError(RC('UNAUTHORIZED'), invalidTokenMsg);
       }
     }
 
@@ -123,7 +126,7 @@ router.post('/token', async (req, res) => {
     return res.sendSuccess({ access_token: accessToken, token_type: 'bearer', expires_in: 15 * 60 });
   } catch (err) {
     console.error('Token rotation error:', err);
-    return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Authentication failed');
+      return res.sendError(_responses().ErrorCodes.INTERNAL_SERVER_ERROR, 'Authentication failed');
   }
 });
 
@@ -132,10 +135,12 @@ router.post('/token', async (req, res) => {
 router.post('/logout', async (req, res) => {
   try {
     const raw = (req.body && req.body.refresh_token) || (req.cookies && req.cookies.refresh_token);
-    if (!raw) return res.sendError(ErrorCodes.BAD_REQUEST, 'Missing refresh token');
+       if (!raw) return res.sendError(_responses().ErrorCodes.BAD_REQUEST, 'Missing refresh token');
+  if (!raw) return res.sendError(RC('BAD_REQUEST'), 'Missing refresh token');
+  if (!db) return res.sendError(RC('INTERNAL_SERVER_ERROR'), 'Database not configured');
 
     const db = req.app.get('db');
-    if (!db) return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Database not configured');
+       if (!db) return res.sendError(_responses().ErrorCodes.INTERNAL_SERVER_ERROR, 'Database not configured');
 
     const tokenHash = hashToken(raw);
     const row = await findRefreshTokenByHash(db, tokenHash);
@@ -145,7 +150,7 @@ router.post('/logout', async (req, res) => {
     res.clearCookie('refresh_token', { path: '/api/v1/auth' });
     return res.sendSuccess({ revoked: true });
   } catch (err) {
-    return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, err.message);
+       return res.sendError(_responses().ErrorCodes.INTERNAL_SERVER_ERROR, err.message);
   }
 });
 
@@ -157,27 +162,28 @@ router.post('/register', async (req, res) => {
 
     // Validate email
     if (!isValidEmail(email)) {
-      return res.sendError(ErrorCodes.VALIDATION_ERROR, 'Invalid email format');
+        return res.sendError(_responses().ErrorCodes.VALIDATION_ERROR, 'Invalid email format');
     }
 
     // Validate password strength
     if (!isValidPassword(password)) {
-      return res.sendError(ErrorCodes.VALIDATION_ERROR, 'Password must be at least 8 characters');
+        return res.sendError(_responses().ErrorCodes.VALIDATION_ERROR, 'Password must be at least 8 characters');
     }
 
     // Validate name if provided
     if (name && (typeof name !== 'string' || name.length > 100)) {
-      return res.sendError(ErrorCodes.VALIDATION_ERROR, 'Name must be less than 100 characters');
+        return res.sendError(_responses().ErrorCodes.VALIDATION_ERROR, 'Name must be less than 100 characters');
     }
 
     const db = req.app.get('db');
-    if (!db) return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Database not configured');
+       if (!db) return res.sendError(_responses().ErrorCodes.INTERNAL_SERVER_ERROR, 'Database not configured');
 
     // Check for existing user
     const existing = await db.query('SELECT id FROM users WHERE lower(email) = lower($1) LIMIT 1', [email]);
     if (existing.rowCount > 0) {
-      return res.sendError(ErrorCodes.CONFLICT, 'Email already registered');
+        return res.sendError(RC('CONFLICT'), 'Email already registered');
     }
+  if (!db) return res.sendError(RC('INTERNAL_SERVER_ERROR'), 'Database not configured');
 
     const passwordHash = await bcrypt.hash(password, DEFAULT_BCRYPT_ROUNDS);
     const insertSql = `INSERT INTO users (email, password_hash, name, created_at, updated_at) VALUES ($1, $2, $3, now(), now()) RETURNING id`;
@@ -193,7 +199,7 @@ router.post('/register', async (req, res) => {
     return res.sendSuccess({ user_id: userId, access_token: accessToken });
   } catch (err) {
     console.error('Registration error:', err);
-    return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Registration failed');
+       return res.sendError(_responses().ErrorCodes.INTERNAL_SERVER_ERROR, 'Registration failed');
   }
 });
 
@@ -208,11 +214,11 @@ router.post('/login', async (req, res) => {
     const invalidCredsMsg = 'Invalid email or password';
 
     if (!isValidEmail(email) || !password) {
-      return res.sendError(ErrorCodes.UNAUTHORIZED, invalidCredsMsg);
+        return res.sendError(RC('UNAUTHORIZED'), invalidCredsMsg);
     }
 
     const db = req.app.get('db');
-    if (!db) return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Database not configured');
+      if (!db) return res.sendError(_responses().ErrorCodes.INTERNAL_SERVER_ERROR, 'Database not configured');
 
     const userRes = await db.query('SELECT id, password_hash FROM users WHERE lower(email) = lower($1) LIMIT 1', [email]);
 
@@ -222,7 +228,7 @@ router.post('/login', async (req, res) => {
     const ok = await bcrypt.compare(password, hashToCompare);
 
     if (!user || !ok) {
-      return res.sendError(ErrorCodes.UNAUTHORIZED, invalidCredsMsg);
+        return res.sendError(RC('UNAUTHORIZED'), invalidCredsMsg);
     }
 
     // Create refresh token
@@ -239,7 +245,7 @@ router.post('/login', async (req, res) => {
     return res.sendSuccess({ user_id: user.id, access_token: accessToken });
   } catch (err) {
     console.error('Login error:', err);
-    return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Authentication failed');
+      return res.sendError(_responses().ErrorCodes.INTERNAL_SERVER_ERROR, 'Authentication failed');
   }
 });
 
@@ -310,11 +316,11 @@ router.post('/reset-password', async (req, res) => {
     const invalidTokenMsg = 'Invalid or expired reset token';
 
     if (!token || typeof token !== 'string') {
-      return res.sendError(ErrorCodes.BAD_REQUEST, invalidTokenMsg);
+      return res.sendError(RC('BAD_REQUEST'), invalidTokenMsg);
     }
 
     if (!isValidPassword(new_password)) {
-      return res.sendError(ErrorCodes.VALIDATION_ERROR, 'Password must be at least 8 characters');
+      return res.sendError(RC('VALIDATION_ERROR'), 'Password must be at least 8 characters');
     }
 
     const db = req.app.get('db');

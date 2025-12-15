@@ -70,7 +70,9 @@ async function callMapsCo(path, params = {}, opts = {}) {
       } catch (err) {
         attempt++;
         const status = err && err.response && err.response.status;
-        const isTransient = !err.response || RETRY.TRANSIENT_ERROR_CODES.includes(status);
+        // Treat unknown response errors and common transient HTTP errors as retryable
+        const transientStatusCodes = [429, 502, 503, 504];
+        const isTransient = !err.response || transientStatusCodes.includes(status);
         logger.debug('geocode:request_attempt_failed', sanitize({ url: requestUrl, attempt, status, message: err && err.message }));
         if (!isTransient || attempt > RETRIES) throw err;
         const delay = Math.min(BASE_DELAY_MS * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 100), MAX_DELAY_MS);
@@ -142,8 +144,18 @@ async function search(q, opts = {}) {
     logger.debug('geocode:search_incoming', sanitize({ q, params }));
     const data = await callMapsCo('/search', params, opts);
     if (!Array.isArray(data) || !data.length) return { status: 'error', reason: 'no_results' };
-    const suggestions = (Array.isArray(data) ? data : []).slice(0, params.limit).map(item => mapItemToSuggestion(item));
-    const result = { status: suggestions.length === 1 ? 'ok' : 'ambiguous', source: config.geocode.baseUrl, suggestions, place: suggestions[0] };
+    
+    // Map to suggestions and sort by importance (highest first)
+    let suggestions = (Array.isArray(data) ? data : []).slice(0, params.limit).map(item => mapItemToSuggestion(item));
+    suggestions = suggestions.sort((a, b) => {
+      const impA = (a.raw && a.raw.importance) || 0;
+      const impB = (b.raw && b.raw.importance) || 0;
+      return impB - impA; // Descending order - most important first
+    });
+    
+    // Best match is the one with highest importance
+    const bestMatch = suggestions[0];
+    const result = { status: suggestions.length === 1 ? 'ok' : 'ambiguous', source: config.geocode.baseUrl, suggestions, place: bestMatch };
     logger.debug('geocode:search_result', sanitize({ q, result }));
     return result;
   } catch (err) {

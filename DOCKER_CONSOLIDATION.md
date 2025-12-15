@@ -76,7 +76,6 @@ docker-compose.yml                    # Base: ALL services with dev defaults
 │   ├── mailhog                       # Email testing
 │   ├── bff-auth                      # Auth service
 │   ├── bff-platform                  # Platform service
-│   ├── bff-pthru                     # Passthrough (profile: pthru)
 │   ├── ui-service                    # Frontend
 │   └── worker                        # Background jobs (profile: production)
 │

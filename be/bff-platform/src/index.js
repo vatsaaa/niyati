@@ -64,7 +64,18 @@ if (process.env.DATABASE_URL) {
 }
 
   // Attach response helpers and logger from commons
-    app.use(attachResponseHelpers);
+      app.use(attachResponseHelpers);
+
+  // Fail-fast environment validation (bff-platform) — skip during tests
+  if (process.env.NODE_ENV !== 'test') {
+    try {
+      const { validateEnv } = require('../lib/validateEnv');
+      validateEnv();
+    } catch (e) {
+      console.error('Environment validation failed during bootstrap (bff-platform):', e && e.message);
+      throw e;
+    }
+  }
 
   // Also expose ErrorCodes for consistent error codes usage in this file
   const { ErrorCodes } = commons;
@@ -114,6 +125,26 @@ app.use(`/api/${API_VERSION}`, apiRouter);
 app.get('/', (req, res) => res.sendSuccess({ service: 'bff-platform', version: API_VERSION }));
 app.get('/api/v1/telemetry/health', (req, res) => res.sendSuccess({ service: 'bff-platform' }));
 
-app.listen(PORT, () => {
-  logger.info({ msg: `BFF Platform listening on http://localhost:${PORT}` });
+// Centralized error handler: avoid leaking internals and return structured errors
+app.use((err, req, res, next) => {
+  try {
+    const safeMessage = err && err.message ? err.message : 'internal_error';
+    const code = (err && err.code) || (commons && commons.ErrorCodes && commons.ErrorCodes.INTERNAL_SERVER_ERROR) || 'internal_error';
+    const status = (err && err.status) || 500;
+    try { logger.error({ msg: 'unhandled_error', err: err && err.stack ? err.stack : err }); } catch (e) { console.error('unhandled_error', err); }
+    if (res && res.sendError) return res.sendError(code, safeMessage);
+    return res.status(status).json({ success: false, error: { code, message: safeMessage } });
+  } catch (e) {
+    console.error('Error in global error handler', e);
+    return res.status(500).json({ success: false, error: { code: 'internal_error', message: 'internal_error' } });
+  }
 });
+
+if (process.env.NODE_ENV !== 'test') {
+  app.listen(PORT, () => {
+    logger.info({ msg: `BFF Platform listening on http://localhost:${PORT}` });
+  });
+}
+
+// Export app for tests
+module.exports = app;

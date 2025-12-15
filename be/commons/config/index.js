@@ -26,7 +26,6 @@
  * @property {Object} features
  * @property {Object} geocode
  * @property {Object} astrology
- * @property {Object} bffPthru
  * @property {Object} n8n
  */
 
@@ -158,11 +157,6 @@ module.exports = {
     timeout: getConfigValue('astrology.timeout', 'ASTRO_TIMEOUT', 10000),
     retryMax: getConfigValue('astrology.retryMax', 'ASTRO_RETRY_MAX', 2),
     retryBaseMs: getConfigValue('astrology.retryBaseMs', 'ASTRO_RETRY_BASE_MS', 500)
-  },
-  
-  // bff-pthru specific config
-  bffPthru: {
-    requestTimeoutMs: getConfigValue('bffPthru.requestTimeoutMs', 'BFF_REQUEST_TIMEOUT_MS', 60000)
   },
   
   // n8n webhook configuration

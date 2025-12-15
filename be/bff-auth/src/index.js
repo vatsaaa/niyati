@@ -11,9 +11,10 @@ const fs = require('fs');
 // Load env from repo root .env by default
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
-// Use shared commons from be/commons
-const commons = require('../commons');
-const { logger, sanitize, attachResponseHelpers } = commons;
+// Use specific commons utilities to avoid circular re-export imports
+const { logger } = require('../commons/lib/logger');
+const { attachResponseHelpers } = require('../commons/lib/responses');
+const { sanitize } = require('../commons/lib/sanitize');
 
 // import the auth router from local copy
 const authRouter = require('../lib/auth');
@@ -32,6 +33,17 @@ app.use(bodyParser.urlencoded({ extended: false }));
 
 // Attach response helpers and logger from commons
 app.use(attachResponseHelpers);
+
+// Fail-fast environment validation
+try {
+  // validateEnv is intentionally required from lib to validate early
+  const { validateEnv } = require('../lib/validateEnv');
+  validateEnv();
+} catch (e) {
+  // If validation fails, log and rethrow to stop startup
+  console.error('Environment validation failed during bootstrap:', e && e.message);
+  throw e;
+}
 
 // Database initialization
 if (process.env.DATABASE_URL) {

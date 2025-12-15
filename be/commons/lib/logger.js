@@ -12,8 +12,15 @@ try {
 }
 
 const level = config.logging.level;
-// Disable pretty printing in Docker - pino-pretty has module resolution issues
-const prettyPrint = false;
+// Determine pretty print: env overrides config
+let prettyPrint;
+if (process.env.LOG_PRETTY_PRINT !== undefined) {
+  prettyPrint = String(process.env.LOG_PRETTY_PRINT).toLowerCase() === 'true';
+} else if (config && config.logging && typeof config.logging.prettyPrint !== 'undefined') {
+  prettyPrint = !!config.logging.prettyPrint;
+} else {
+  prettyPrint = false;
+}
 
 // Configure logger based on environment
 const loggerOptions = {
@@ -22,10 +29,9 @@ const loggerOptions = {
   base: { pid: process.pid }
 };
 
-// Add pretty printing for development
+// Add pretty printing when explicitly enabled and pino-pretty is available
 if (prettyPrint) {
   try {
-    // Use require.resolve to ensure pino-pretty is found
     require.resolve('pino-pretty');
     loggerOptions.transport = {
       target: 'pino-pretty',
@@ -36,8 +42,9 @@ if (prettyPrint) {
       }
     };
   } catch (e) {
-    // If pino-pretty not available, fall back to regular logging
-    console.warn('pino-pretty not available, using standard logging');
+    // If pino-pretty not available, fall back to regular logging but warn
+    // only in non-test environments to avoid noisy test output
+    if (process.env.NODE_ENV !== 'test') console.warn('pino-pretty not available, using standard logging');
   }
 }
 
