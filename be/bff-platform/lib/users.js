@@ -139,7 +139,7 @@ router.post('/profile', async (req, res) => {
         is_paid, last_login_location, last_login_lat, last_login_lon,
         created_at, updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now(), now())
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CASE WHEN $9 THEN now() ELSE NULL END, $10, $11, $12, $13, now(), now())
       ON CONFLICT (phone_number) DO UPDATE SET
         name = COALESCE(EXCLUDED.name, users.name),
         date_of_birth = COALESCE(EXCLUDED.date_of_birth, users.date_of_birth),
