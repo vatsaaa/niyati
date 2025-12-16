@@ -8,6 +8,76 @@ import { N8N_WEBHOOK_URL, N8N_WEBHOOK_FALLBACK_URL } from '../config';
 import { getSessionReqId } from '../utils/uuid';
 import { hasAllRequiredFields, missingProfileFields } from '../utils/profile';
 
+// Check if initial profile has been sent to n8n for this session
+function hasProfileBeenSent() {
+  try {
+    return localStorage.getItem('niyati_profile_sent') === 'true';
+  } catch (e) {
+    return false;
+  }
+}
+
+function markProfileAsSent() {
+  try {
+    localStorage.setItem('niyati_profile_sent', 'true');
+  } catch (e) {
+    // ignore
+  }
+}
+
+// Check if payment QR has already been shown to avoid repeating
+function hasPaymentQRBeenShown() {
+  try {
+    return localStorage.getItem('niyati_payment_qr_shown') === 'true';
+  } catch (e) {
+    return false;
+  }
+}
+
+function markPaymentQRAsShown() {
+  try {
+    localStorage.setItem('niyati_payment_qr_shown', 'true');
+  } catch (e) {
+    // ignore
+  }
+}
+
+// UPI validation patterns
+const UPI_ID_REGEX = /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/;
+const UPI_TXN_ID_REGEX = /^\d{12}$/;
+
+// Check if message contains payment info (UPI ID and/or transaction ID)
+function extractPaymentInfo(text) {
+  const result = { upiId: null, txnId: null };
+  if (!text) return result;
+  
+  // Try to find UPI ID
+  const words = text.split(/\s+/);
+  for (const word of words) {
+    const cleanWord = word.replace(/[,;.!?]$/, '');
+    if (UPI_ID_REGEX.test(cleanWord)) {
+      result.upiId = cleanWord;
+    }
+    // Check for 12-digit transaction ID
+    const digits = cleanWord.replace(/\D/g, '');
+    if (digits.length === 12 && UPI_TXN_ID_REGEX.test(digits)) {
+      result.txnId = digits;
+    }
+  }
+  return result;
+}
+
+// Check if user is asking about horoscope (allowed for free users)
+function isHoroscopeQuery(text) {
+  const horoscopeKeywords = [
+    'horoscope', 'today', 'daily', 'zodiac', 'sign', 'aries', 'taurus', 'gemini',
+    'cancer', 'leo', 'virgo', 'libra', 'scorpio', 'sagittarius', 'capricorn',
+    'aquarius', 'pisces', 'rashifal', 'rashi', 'sun sign', 'moon sign'
+  ];
+  const lowerText = text.toLowerCase();
+  return horoscopeKeywords.some(keyword => lowerText.includes(keyword));
+}
+
 export function useChat(profile, updateProfile, addMessage, auth) {
   const [isLoading, setIsLoading] = useState(false);
 
@@ -120,6 +190,62 @@ export function useChat(profile, updateProfile, addMessage, auth) {
 
     try {
       const isReturning = currentProfile.user_verified && (currentProfile.user_verified.id || currentProfile.user_verified.phoneNumber);
+      const userIsPaid = !!currentProfile.user_isPaid;
+      const qrAlreadyShown = hasPaymentQRBeenShown();
+      
+      // Check if user is submitting payment info
+      const paymentInfo = extractPaymentInfo(inputText);
+      if (paymentInfo.upiId || paymentInfo.txnId) {
+        // User is providing payment details
+        if (paymentInfo.upiId && paymentInfo.txnId) {
+          // Both UPI ID and transaction ID provided - mark as pending verification
+          addMessage({
+            id: Date.now() + Math.random(),
+            text: `Thank you! We received your payment details:\n• UPI ID: ${paymentInfo.upiId}\n• Transaction ID: ${paymentInfo.txnId}\n\nWe'll verify your payment shortly. Once confirmed, you'll have full access to all premium features.`,
+            sender: 'bot',
+            timestamp: new Date()
+          });
+          // Save payment info to profile (for backend verification later)
+          updateProfile({ 
+            user_pendingPayment: { upiId: paymentInfo.upiId, txnId: paymentInfo.txnId, submittedAt: new Date().toISOString() }
+          });
+          setIsLoading(false);
+          return;
+        } else if (paymentInfo.upiId && !paymentInfo.txnId) {
+          addMessage({
+            id: Date.now() + Math.random(),
+            text: `I received your UPI ID (${paymentInfo.upiId}). Please also share the 12-digit UPI transaction ID from your payment confirmation.`,
+            sender: 'bot',
+            timestamp: new Date()
+          });
+          setIsLoading(false);
+          return;
+        } else if (!paymentInfo.upiId && paymentInfo.txnId) {
+          addMessage({
+            id: Date.now() + Math.random(),
+            text: `I received a transaction ID (${paymentInfo.txnId}). Please also share the UPI ID you used to make the payment (e.g., yourname@upi).`,
+            sender: 'bot',
+            timestamp: new Date()
+          });
+          setIsLoading(false);
+          return;
+        }
+      }
+      
+      // For non-paid users who have already seen QR, restrict to horoscope only
+      if (!userIsPaid && qrAlreadyShown && hasAllRequiredFields(currentProfile)) {
+        if (!isHoroscopeQuery(inputText)) {
+          addMessage({
+            id: Date.now() + Math.random(),
+            text: "I'd love to help you with detailed birth chart analysis and personalized predictions! However, as a free user, you can only access today's horoscope. To unlock all premium features, please complete your payment of ₹500 and share your UPI ID and 12-digit transaction ID.",
+            sender: 'bot',
+            timestamp: new Date()
+          });
+          setIsLoading(false);
+          return;
+        }
+        // Allow horoscope queries to proceed to n8n
+      }
 
       if (!hasAllRequiredFields(currentProfile) && !isReturning) {
         const missing = missingProfileFields(currentProfile);
@@ -164,32 +290,40 @@ export function useChat(profile, updateProfile, addMessage, auth) {
         currentProfile.user_consentGiven = true;
       }
 
-      try {
-        await bffFetchWithRetry('/users/profile', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            phoneNumber: auth.phoneNumber,
-            name: currentProfile.user_name,
-            dateOfBirth: currentProfile.user_dob,
-            timeOfBirth: currentProfile.user_timeOfBirth,
-            placeOfBirth: currentProfile.user_placeOfBirth,
-            consentGiven: true,
-            isPaid: !!currentProfile.user_isPaid,
-            last_login_location: currentProfile.user_currentLocation || ''
-          })
-        }, { retries: 2, baseDelayMs: 300 });
-      } catch (err) {
-        console.warn('Failed to save profile to database:', err);
+      // Only save profile to database if it hasn't been sent yet
+      const profileAlreadySent = hasProfileBeenSent();
+      if (!profileAlreadySent) {
+        try {
+          await bffFetchWithRetry('/users/profile', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              phoneNumber: auth.phoneNumber,
+              name: currentProfile.user_name,
+              dateOfBirth: currentProfile.user_dob,
+              timeOfBirth: currentProfile.user_timeOfBirth,
+              placeOfBirth: currentProfile.user_placeOfBirth,
+              consentGiven: true,
+              isPaid: !!currentProfile.user_isPaid,
+              last_login_location: currentProfile.user_currentLocation || ''
+            })
+          }, { retries: 2, baseDelayMs: 300 });
+          markProfileAsSent();
+        } catch (err) {
+          console.warn('Failed to save profile to database:', err);
+        }
       }
 
-      const fullMessage = constructFullMessage(currentProfile);
+      // Determine what message to send to n8n:
+      // - First time (profile not sent): send full profile details
+      // - Subsequent times: send only the user's message
+      const messageToSend = profileAlreadySent ? inputText : constructFullMessage(currentProfile);
       const webhookReqId = getSessionReqId();
       let response = null;
       let usedFallback = false;
 
       try {
-        response = await callWebhook(N8N_WEBHOOK_URL, webhookReqId, fullMessage);
+        response = await callWebhook(N8N_WEBHOOK_URL, webhookReqId, messageToSend);
         if (response.status >= 500) {
           throw new Error(`Server error: ${response.status}`);
         }
@@ -197,7 +331,7 @@ export function useChat(profile, updateProfile, addMessage, auth) {
         console.warn('Primary webhook failed:', primaryError.message);
         if (N8N_WEBHOOK_FALLBACK_URL && N8N_WEBHOOK_FALLBACK_URL !== N8N_WEBHOOK_URL) {
           usedFallback = true;
-          response = await callWebhook(N8N_WEBHOOK_FALLBACK_URL, webhookReqId, fullMessage);
+          response = await callWebhook(N8N_WEBHOOK_FALLBACK_URL, webhookReqId, messageToSend);
         } else {
           throw primaryError;
         }
@@ -227,23 +361,18 @@ export function useChat(profile, updateProfile, addMessage, auth) {
         timestamp: new Date()
       });
 
-      // For first-time users (not returning), show payment QR after n8n response
+      // For first-time users (not returning), show payment QR after n8n response - ONLY ONCE
       const isReturningUser = currentProfile.user_verified && (currentProfile.user_verified.id || currentProfile.user_verified.phoneNumber);
-      if (!isReturningUser && !currentProfile.user_isPaid) {
-        // Show payment prompt for first-time users
+      if (!isReturningUser && !currentProfile.user_isPaid && !hasPaymentQRBeenShown()) {
+        // Single consolidated message with QR
         addMessage({
           id: Date.now() + 2,
-          text: 'To unlock your complete birth chart analysis and premium features, please complete your payment of ₹500.',
-          sender: 'bot',
-          timestamp: new Date(),
-        });
-        addMessage({
-          id: Date.now() + 3,
           image: '/payment/PayQR.jpeg',
-          text: 'Scan the QR code above to pay ₹500. After payment, please share your transaction ID to verify.',
+          text: 'To unlock your complete birth chart analysis and premium features, please scan the QR code above to pay ₹500. After payment, share your UPI ID (e.g., yourname@upi) and the 12-digit UPI transaction ID for verification.',
           sender: 'bot',
           timestamp: new Date(),
         });
+        markPaymentQRAsShown();
       }
 
     } catch (error) {

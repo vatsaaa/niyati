@@ -2,6 +2,23 @@ import { bffFetchWithRetry } from './api';
 import { simpleHash } from '../utils/hash';
 import { CACHE_CONFIG } from '../config';
 
+// Well-known cities/places that should not be disambiguated by user country
+// These are unique enough that they don't need country context
+const WELL_KNOWN_PLACES = new Set([
+  'new delhi', 'delhi', 'mumbai', 'bombay', 'kolkata', 'calcutta', 'chennai', 'madras',
+  'bangalore', 'bengaluru', 'hyderabad', 'pune', 'ahmedabad', 'jaipur', 'lucknow',
+  'tokyo', 'kyoto', 'osaka', 'beijing', 'shanghai', 'hong kong', 'singapore',
+  'london', 'paris', 'rome', 'berlin', 'madrid', 'barcelona', 'amsterdam', 'vienna',
+  'sydney', 'melbourne', 'toronto', 'vancouver', 'montreal', 'dubai', 'abu dhabi',
+  'moscow', 'cairo', 'cape town', 'johannesburg', 'rio de janeiro', 'sao paulo',
+  'buenos aires', 'mexico city', 'bangkok', 'seoul', 'taipei', 'kuala lumpur',
+  'jakarta', 'manila', 'hanoi', 'ho chi minh', 'kathmandu', 'colombo', 'dhaka',
+  'karachi', 'lahore', 'islamabad', 'kabul', 'tehran', 'istanbul', 'ankara',
+  'jerusalem', 'tel aviv', 'athens', 'lisbon', 'dublin', 'edinburgh', 'brussels',
+  'zurich', 'geneva', 'oslo', 'stockholm', 'copenhagen', 'helsinki', 'warsaw', 'prague',
+  'budapest', 'bucharest', 'kiev', 'minsk', 'riga', 'tallinn', 'vilnius'
+]);
+
 /**
  * Determines the appropriate geocoding API endpoint and payload based on the location string format.
  * @param {string} location - The location string (e.g., "City, State, Country").
@@ -27,7 +44,13 @@ export function determineGeocodingEndpoint(location, userCountryName = null) {
     return { endpoint: '/geocode', payload: { q: cleaned, limit: 5 } };
   } else {
     let queryString = cleaned;
-    if (userCountryName && parts.length === 1) {
+    // Only append user country if:
+    // 1. We have a user country
+    // 2. It's a single-part location (no commas)
+    // 3. It's NOT a well-known place that doesn't need disambiguation
+    // 4. The location doesn't already include the country name
+    const isWellKnown = WELL_KNOWN_PLACES.has(cleaned.toLowerCase());
+    if (userCountryName && parts.length === 1 && !isWellKnown) {
       if (!cleaned.toLowerCase().includes(userCountryName.toLowerCase())) {
         queryString = `${cleaned}, ${userCountryName}`;
       }

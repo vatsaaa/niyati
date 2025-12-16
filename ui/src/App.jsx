@@ -106,8 +106,12 @@ const NiyatiChat = () => {
       auth.logout();
       resetProfile();
       clearMessages();
-      // Clear session request id
-      try { localStorage.removeItem('niyati_x_request_id'); } catch (e) { }
+      // Clear session request id, profile sent flag, and payment QR shown flag
+      try { 
+        localStorage.removeItem('niyati_x_request_id');
+        localStorage.removeItem('niyati_profile_sent');
+        localStorage.removeItem('niyati_payment_qr_shown');
+      } catch (e) { }
       // reload to ensure all components pick up cleared storage
       window.location.reload();
     }

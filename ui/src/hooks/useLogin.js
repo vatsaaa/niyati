@@ -71,26 +71,26 @@ export function useLogin(auth, profile, updateProfile, addMessage) {
       updateProfile(updatedProfile);
 
       if (isReturningUser && hasAllRequiredFields(updatedProfile) && updatedProfile.user_consentGiven) {
-        // Format the returning user message as specified
-        const payingStatus = isPaidUser ? 'Paying' : 'Non-paying';
+        // Format context for n8n to generate personalized greeting
+        const payingStatus = isPaidUser ? 'Paid subscriber' : 'Free user';
         const userName = updatedProfile.user_name || 'User';
-        const dob = formatDobForDisplay(updatedProfile.user_dob, country.code) || updatedProfile.user_dob || 'unknown';
-        const tob = formatTimeForDisplay(updatedProfile.user_timeOfBirth) || updatedProfile.user_timeOfBirth || 'unknown time';
+        const firstName = userName.split(' ')[0] || userName;
+        const dob = updatedProfile.user_dob || 'unknown';
+        const tob = updatedProfile.user_timeOfBirth || 'unknown';
         const pob = updatedProfile.user_placeOfBirth || 'unknown place';
         const currentLoc = newLocation || 'unknown location';
         const lastLoc = lastLoginLocation || 'unknown';
 
-        const returningMessage = `${payingStatus} ${userName}, born on ${dob} at ${tob} at ${pob} has logged in from ${currentLoc} and their last login place was ${lastLoc}`;
+        // System context message - tells n8n this is a returning user login, not a user query
+        // n8n should generate a personalized welcome greeting based on this context
+        const systemContext = `[SYSTEM: Returning user login - Generate a warm, personalized welcome greeting]
+User: ${firstName} (${payingStatus})
+Birth: ${dob} at ${tob} in ${pob}
+Current location: ${currentLoc}
+Last login location: ${lastLoc}
+Instructions: Welcome this returning user warmly. Reference their location if interesting (same or different from last time). Keep it brief and friendly - this is just a greeting, not a prophecy.`;
 
-        // Show greeting to user
-        const firstName = userName.split(' ')[0] || '';
-        let greetingText = firstName
-          ? `Hi ${firstName}, welcome back!`
-          : `Welcome back!`;
-        
-        addMessage({ id: Date.now(), text: greetingText, sender: 'bot', timestamp: new Date() });
-
-        // Send to n8n
+        // Send to n8n and let it generate the personalized greeting
         (async () => {
           try {
             const webhookReqId = getSessionReqId();
@@ -102,16 +102,17 @@ export function useLogin(auth, profile, updateProfile, addMessage) {
                 'ngrok-skip-browser-warning': 'true',
               },
               body: JSON.stringify({ 
-                message: returningMessage, 
+                message: systemContext, 
                 sessionId: fullPhone, 
                 metadata: { 
                   reqId: webhookReqId, 
                   returning: true,
+                  isSystemContext: true,
                   isPaid: isPaidUser,
-                  userName,
-                  dob: updatedProfile.user_dob,
-                  tob: updatedProfile.user_timeOfBirth,
-                  pob: updatedProfile.user_placeOfBirth,
+                  userName: firstName,
+                  dob,
+                  tob,
+                  pob,
                   currentLocation: currentLoc,
                   lastLoginLocation: lastLoc
                 } 
@@ -122,37 +123,52 @@ export function useLogin(auth, profile, updateProfile, addMessage) {
               const data = await response.json();
               const botResponseText = data.output || data.text || JSON.stringify(data);
               addMessage({
-                id: Date.now() + 1,
+                id: Date.now(),
                 text: (typeof botResponseText === 'string' && botResponseText.startsWith('"') && botResponseText.endsWith('"'))
                   ? botResponseText.slice(1, -1)
                   : botResponseText,
                 sender: 'bot',
                 timestamp: new Date(),
               });
+            } else {
+              // Fallback greeting if n8n fails
+              addMessage({ id: Date.now(), text: `Hi ${firstName}, welcome back!`, sender: 'bot', timestamp: new Date() });
             }
           } catch (e) {
-            console.warn('Failed to send returning user message to N8N:', e);
+            console.warn('Failed to get personalized greeting from N8N:', e);
+            // Fallback greeting
+            addMessage({ id: Date.now(), text: `Hi ${firstName}, welcome back!`, sender: 'bot', timestamp: new Date() });
           }
 
-          // Show payment prompt for non-paid returning users
+          // Show payment prompt for non-paid returning users - single consolidated message
           if (!isPaidUser) {
             addMessage({
               id: Date.now() + 2,
-              text: 'To continue enjoying our premium astrology services, please complete your payment of ₹500.',
-              sender: 'bot',
-              timestamp: new Date(),
-            });
-            addMessage({
-              id: Date.now() + 3,
               image: '/payment/PayQR.jpeg',
-              text: 'Scan the QR code above to pay ₹500. After payment, please share your transaction ID to verify.',
+              text: 'To continue enjoying our premium astrology services, please scan the QR code above to pay ₹500. After payment, share your UPI ID (e.g., yourname@upi) and the 12-digit UPI transaction ID for verification.',
               sender: 'bot',
               timestamp: new Date(),
             });
+            // Mark QR as shown
+            try { localStorage.setItem('niyati_payment_qr_shown', 'true'); } catch (e) { }
           }
         })();
       } else if (hasAllRequiredFields(updatedProfile) && updatedProfile.user_consentGiven) {
         processCompleteProfile(updatedProfile, auth.countries, auth.phoneNumber);
+      } else if (!isReturningUser) {
+        // New user - welcome them and ask for their details
+        const welcomeMessages = [
+          "Welcome to Niyati! I'm your personal astrology guide. To create your birth chart and reveal what destiny has in store for you, I'll need a few details. Could you please tell me your full name, date of birth, time of birth, and place of birth?",
+          "Namaste! I'm Niyati, your cosmic companion. To unveil the secrets written in your stars, please share your full name, date of birth (DD/MM/YYYY), time of birth, and birthplace.",
+          "Hello and welcome! I'm Niyati, here to help you discover your astrological destiny. To get started, could you share your name, when you were born (date and time), and where you were born?"
+        ];
+        const randomWelcome = welcomeMessages[Math.floor(Math.random() * welcomeMessages.length)];
+        addMessage({
+          id: Date.now(),
+          text: randomWelcome,
+          sender: 'bot',
+          timestamp: new Date(),
+        });
       }
     } catch (e) {
       // ignore
