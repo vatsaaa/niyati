@@ -88,7 +88,7 @@ function getCreditsConfig() {
     credits_monthly_free: 10,
     credits_horoscope_cost: 2,
     credits_premium_cost: 4,
-    credits_low_threshold: 4,
+    credits_low_threshold: 6,
     payment_amount_inr: 500
   };
 }
@@ -384,7 +384,7 @@ export function useChat(profile, updateProfile, addMessage, auth) {
       }
       
       // For free users (no payment history), restrict to horoscope only
-      if (!isPaidUser && qrAlreadyShown && hasAllRequiredFields(currentProfile)) {
+      if (!isPaidUser && hasAllRequiredFields(currentProfile)) {
         if (!isHoroscopeQuery(inputText)) {
           addMessage({
             id: Date.now() + Math.random(),
@@ -546,8 +546,8 @@ export function useChat(profile, updateProfile, addMessage, auth) {
         console.log('[useChat] Credit deduction result:', { newCredits, previousCredits: latestProfile.user_credits });
         if (newCredits !== null) {
           updateProfile({ user_credits: newCredits });
-          // Notify user of credit deduction
-          if (newCredits <= config.credits_low_threshold) {
+          // Notify user of credit deduction: show low-credit when strictly below threshold
+          if (newCredits < config.credits_low_threshold) {
             addMessage({
               id: Date.now() + Math.random(),
               text: `⚠️ Low credits: You have ${newCredits} credits remaining.`,
@@ -561,7 +561,7 @@ export function useChat(profile, updateProfile, addMessage, auth) {
       // For first-time users (not returning) with low credits, show payment QR after n8n response - ONLY ONCE
       const isReturningUser = currentProfile.user_verified && (currentProfile.user_verified.id || currentProfile.user_verified.phoneNumber);
       const currentCredits = currentProfile.user_credits ?? config.credits_monthly_free;
-      if (!isReturningUser && currentCredits <= config.credits_low_threshold && !hasPaymentQRBeenShown()) {
+      if (!isReturningUser && currentCredits < config.credits_low_threshold && !hasPaymentQRBeenShown()) {
         // Single consolidated message with QR
         addMessage({
           id: Date.now() + 2,

@@ -5,6 +5,8 @@
     # The CADDY_EMAIL environment variable can be provided by compose; if
     # it's not set, use the fallback below so Caddyfile parsing doesn't fail.
     email {$CADDY_EMAIL:ankur.vatsa@gmail.com}
+    # Enable debug logging to capture detailed proxy traces during local debugging
+    debug
     # Use staging for testing, remove 'acme_ca' for production Let's Encrypt
     # acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
 }
@@ -101,12 +103,8 @@
     # UI - serve everything else
     handle /* {
         reverse_proxy ui-service:{$UI_PROD_PORT:80} {
-            # Health check
-            health_uri /health
-            health_interval 30s
-            health_timeout 10s
-            
-            # Headers
+            # Development server: skip active health checks to avoid
+            # rejecting the backend due to method/host differences.
             header_up Host {host}
             header_up X-Real-IP {remote_host}
             header_up X-Forwarded-For {remote_host}
