@@ -39,6 +39,22 @@
     }
 
     # BFF Auth API routes (specific auth endpoints + users)
+    # Route platform-only user actions (deductions) to bff-platform
+    # This ensures POST /api/v1/users/deduct-credits (implemented in bff-platform)
+    # is forwarded to the platform service instead of bff-auth which returns 404.
+    handle /api/v1/users/deduct-credits {
+        reverse_proxy bff-platform:{$BFF_PLATFORM_PORT:3000} {
+            # Health check
+            health_uri /api/v1/telemetry/health
+            health_interval 30s
+            health_timeout 10s
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
     handle /api/v1/users/* {
         reverse_proxy bff-auth:{$BFF_AUTH_PORT:3001} {
             health_uri /api/v1/telemetry/health
