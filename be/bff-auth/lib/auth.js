@@ -76,7 +76,10 @@ function setRefreshCookie(res, token) {
   const cookieOptions = {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: process.env.NODE_ENV === 'production' ? 'lax' : 'lax', // Lax needed for top-level navigation, strict for APIs
+    // Allow explicit opt-in for cross-site cookies (ngrok/tunneling).
+    // To enable cross-site cookies (needed when the app is served from a different host),
+    // set environment variable `ALLOW_CROSS_SITE_COOKIES=true` in production environment.
+    sameSite: process.env.ALLOW_CROSS_SITE_COOKIES === 'true' ? 'none' : (process.env.NODE_ENV === 'production' ? 'lax' : 'lax'),
     path: '/api/v1/auth',
     maxAge: process.env.REFRESH_TOKEN_TTL_MS ? parseInt(process.env.REFRESH_TOKEN_TTL_MS, 10) : 30 * 24 * 60 * 60 * 1000
   };

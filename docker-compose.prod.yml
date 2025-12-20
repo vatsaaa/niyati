@@ -47,6 +47,8 @@ services:
       - JWT_SECRET_FILE=/run/secrets/jwt_secret
       - SMTP_USER_FILE=/run/secrets/smtp_user
       - SMTP_PASSWORD_FILE=/run/secrets/smtp_password
+      - CORS_ALLOWED=${CORS_ALLOWED}
+      - ALLOW_CROSS_SITE_COOKIES=${ALLOW_CROSS_SITE_COOKIES:-false}
     restart: always
 
   bff-platform:
@@ -64,6 +66,8 @@ services:
       - LOG_PRETTY_PRINT=false
       - LOG_LEVEL=info
       - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
+      - CORS_ALLOWED=${CORS_ALLOWED}
+      - ALLOW_CROSS_SITE_COOKIES=${ALLOW_CROSS_SITE_COOKIES:-false}
     restart: always
 
   ui-service:

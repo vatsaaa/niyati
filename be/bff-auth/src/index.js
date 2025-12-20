@@ -25,7 +25,20 @@ const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
 
 app.use(helmet());
-app.use(cors());
+// Configure CORS to allow specific origins and credentials for cross-site tunnels (ngrok)
+const allowedOrigins = (process.env.CORS_ALLOWED || '')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+app.use(cors({
+  origin: (origin, cb) => {
+    // Allow non-browser or same-origin requests (no origin)
+    if (!origin) return cb(null, true);
+    if (allowedOrigins.length === 0) return cb(null, true);
+    return allowedOrigins.includes(origin) ? cb(null, true) : cb(new Error('Not allowed by CORS'));
+  },
+  credentials: true
+}));
 app.use(compression());
 app.use(require('cookie-parser')());
 app.use(bodyParser.json());

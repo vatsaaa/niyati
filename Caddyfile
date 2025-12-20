@@ -11,10 +11,9 @@
     # acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
 }
 
-# Main domain - replace with your actual domain
-{$DOMAIN:localhost} {
-    # Enable automatic HTTPS (Let's Encrypt)
-    # For local development without a domain, Caddy will use self-signed certs
+# HTTP server on port 80 - no automatic redirect to HTTPS (ngrok handles HTTPS)
+# Accept both localhost and ngrok domain
+http://{$DOMAIN:localhost}, http://nonexperientially-nonascetical-agnes.ngrok-free.dev {
 
     # Enable gzip compression
     encode gzip
@@ -33,6 +32,29 @@
         Referrer-Policy "strict-origin-when-cross-origin"
         # Remove server header
         -Server
+    }
+
+    # CORS headers for API routes
+    @api path /api/*
+    header @api {
+        Access-Control-Allow-Origin "https://nonexperientially-nonascetical-agnes.ngrok-free.dev"
+        Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+        Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With"
+        Access-Control-Allow-Credentials "true"
+        Access-Control-Max-Age "3600"
+    }
+
+    # Handle preflight OPTIONS requests for CORS
+    @options method OPTIONS
+    handle @options {
+        header {
+            Access-Control-Allow-Origin "https://nonexperientially-nonascetical-agnes.ngrok-free.dev"
+            Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+            Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With"
+            Access-Control-Allow-Credentials "true"
+            Access-Control-Max-Age "3600"
+        }
+        respond "" 204
     }
 
     # Health check endpoint
@@ -84,6 +106,18 @@
         }
     }
 
+    # N8N Webhook route - proxy to local n8n instance
+    handle /webhook/* {
+        reverse_proxy host.docker.internal:5678 {
+            # N8N doesn't have a health endpoint, so no health check
+            # Headers
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
     # BFF Platform API routes (platform-specific endpoints and general API catch-all)
     handle /api/* {
         reverse_proxy bff-platform:{$BFF_PLATFORM_PORT:3000} {
@@ -102,9 +136,8 @@
 
     # UI - serve everything else
     handle /* {
-        reverse_proxy ui-service:{$UI_PROD_PORT:80} {
-            # Development server: skip active health checks to avoid
-            # rejecting the backend due to method/host differences.
+        reverse_proxy ui-service:80 {
+            # Production server: nginx
             header_up Host {host}
             header_up X-Real-IP {remote_host}
             header_up X-Forwarded-For {remote_host}

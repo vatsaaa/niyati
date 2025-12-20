@@ -135,7 +135,7 @@ services:
     image: niyati/ui:${BUILD_TARGET:-development}
     container_name: niyati-ui
     ports:
-      - "${UI_PORT:-5173}:${UI_PORT:-5173}"
+      - "${UI_PORT:-5173}:80"
     env_file:
       - .env.ui
     environment:
@@ -144,7 +144,7 @@ services:
       - niyati
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:${UI_PORT:-5173}"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:80"]
       interval: 30s
       timeout: 10s
       retries: 3
