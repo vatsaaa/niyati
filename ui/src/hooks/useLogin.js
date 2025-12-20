@@ -103,7 +103,10 @@ export function useLogin(auth, profile, updateProfile, addMessage, clearMessages
       const updatedProfile = {
         ...existing,
         ...prefill,
-        user_consentGiven: true,
+        // Preserve the real consent value from prefill (identifiedUser) or existing profile.
+        user_consentGiven: (typeof prefill.user_consentGiven !== 'undefined')
+          ? prefill.user_consentGiven
+          : (typeof existing.user_consentGiven !== 'undefined' ? existing.user_consentGiven : undefined),
         user_currentLocation: newLocation || existing.user_currentLocation || '',
         updatedAt: new Date().toISOString(),
       };
@@ -111,17 +114,23 @@ export function useLogin(auth, profile, updateProfile, addMessage, clearMessages
       updateProfile(updatedProfile);
 
       // Update last_login_location in database for returning users
-      if (isReturningUser && newLocation && identifiedUser?.id) {
+        if (isReturningUser && newLocation && identifiedUser?.id) {
         try {
+          // Build body and include consentOnly if we actually know the consent value
+          const profileUpdateBody = {
+            phoneNumber: fullPhone,
+            last_login_location: newLocation,
+            last_login_lat: currentLocationData?.lat || currentLocationData?.latitude || null,
+            last_login_lon: currentLocationData?.lon || currentLocationData?.longitude || null
+          };
+          if (typeof updatedProfile.user_consentGiven !== 'undefined') {
+            profileUpdateBody.consentGiven = !!updatedProfile.user_consentGiven;
+          }
+
           const updateResponse = await bffFetch('/users/profile', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              phoneNumber: fullPhone,
-              last_login_location: newLocation,
-              last_login_lat: currentLocationData?.lat || currentLocationData?.latitude || null,
-              last_login_lon: currentLocationData?.lon || currentLocationData?.longitude || null
-            }),
+            body: JSON.stringify(profileUpdateBody),
             timeout: 5000
           });
           if (!updateResponse.ok) {

@@ -49,8 +49,8 @@ router.post('/sync', async (req, res) => {
     }
 
     const profile = req.body || {};
-    if (!profile.phoneNumber || !profile.consentGiven) {
-      return res.sendError(ErrorCodes.MISSING_REQUIRED_FIELD, 'phone_or_consent_missing');
+    if (!profile.phoneNumber) {
+      return res.sendError(ErrorCodes.MISSING_REQUIRED_FIELD, 'missing_phone');
     }
 
     const db = req.app.get('db');
@@ -65,7 +65,7 @@ router.post('/sync', async (req, res) => {
         is_paid, last_payment_amount, last_payment_verified, upi_id, upi_txn_id,
         created_at, updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now(), $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, now(), now())
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CASE WHEN $9 THEN now() ELSE NULL END, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, now(), now())
       ON CONFLICT (phone_number) DO UPDATE SET
         name = COALESCE(EXCLUDED.name, users.name),
         date_of_birth = EXCLUDED.date_of_birth,
@@ -74,7 +74,7 @@ router.post('/sync', async (req, res) => {
         lat = EXCLUDED.lat,
         lon = EXCLUDED.lon,
         timezone = EXCLUDED.timezone,
-        consent_given = EXCLUDED.consent_given,
+        consent_given = COALESCE(EXCLUDED.consent_given, users.consent_given),
         last_login_location = COALESCE(EXCLUDED.last_login_location, users.last_login_location),
         last_login_lat = COALESCE(EXCLUDED.last_login_lat, users.last_login_lat),
         last_login_lon = COALESCE(EXCLUDED.last_login_lon, users.last_login_lon),
@@ -94,7 +94,7 @@ router.post('/sync', async (req, res) => {
       profile.lat ? parseFloat(profile.lat) : null,
       profile.lon ? parseFloat(profile.lon) : null,
       profile.timezone || null,
-      !!profile.consentGiven,
+      (typeof profile.consentGiven !== 'undefined') ? !!profile.consentGiven : null,
       10, // Default 10 credits for new users
       0,  // Default 0 total_paid_amount
       normalizedLastLoginLocation,

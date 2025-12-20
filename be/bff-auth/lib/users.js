@@ -35,10 +35,6 @@ router.post('/profile', async (req, res) => {
                 return res.sendError(RC('VALIDATION_ERROR'), 'Invalid phone number');
         }
 
-        if (!consentGiven) {
-            return res.sendError(RC('VALIDATION_ERROR'), 'User consent is required');
-        }
-
         // Forward to bff-platform users sync endpoint only for first-time users.
         const BFF_PLATFORM_BASE = process.env.BFF_PLATFORM_BASE || 'http://bff-platform:3000/api/v1';
         const SERVICE_TOKEN = process.env.SERVICE_TOKEN || '';
@@ -53,11 +49,37 @@ router.post('/profile', async (req, res) => {
             });
 
             if (lookupResp && lookupResp.data && lookupResp.data.status === 'ok' && lookupResp.data.data && lookupResp.data.data.user) {
-                // Returning user - do not persist again. Return existing data to client.
-                return res.sendSuccess({ user: lookupResp.data.data.user, created: false });
+                // Returning user - allow lightweight updates (e.g., last_login_location)
+                const existingUser = lookupResp.data.data.user;
+
+                // If the client provided any updatable fields, forward them to platform sync/update
+                const normalizedLastLoginLocation = (req.body.last_login_location === undefined || req.body.last_login_location === null) ? undefined : String(req.body.last_login_location);
+                const updatePayload = {};
+                if (typeof normalizedLastLoginLocation !== 'undefined') updatePayload.last_login_location = normalizedLastLoginLocation;
+                if (typeof lat !== 'undefined') updatePayload.lat = lat ? parseFloat(lat) : null;
+                if (typeof lon !== 'undefined') updatePayload.lon = lon ? parseFloat(lon) : null;
+                if (typeof timezone !== 'undefined') updatePayload.timezone = timezone || null;
+                // Only include consentGiven if explicitly provided by client - otherwise preserve existing
+                if (typeof consentGiven !== 'undefined') updatePayload.consentGiven = !!consentGiven;
+
+                if (Object.keys(updatePayload).length > 0) {
+                    try {
+                        await axios.post(`${BFF_PLATFORM_BASE.replace(/\/$/, '')}/users/sync`, Object.assign({ phoneNumber }, updatePayload), {
+                            headers: SERVICE_TOKEN ? { 'X-Service-Token': SERVICE_TOKEN } : {}
+                        });
+                        // Re-fetch or merge existingUser is fine for now; we'll return existing data.
+                    } catch (err) {
+                        console.warn('Failed to forward returning-user update to platform:', err && err.message ? err.message : err);
+                    }
+                }
+
+                return res.sendSuccess({ user: existingUser, created: false });
             }
 
-            // New user - persist via platform sync
+            // New user - require explicit consent and persist via platform sync
+            if (!consentGiven) {
+                return res.sendError(RC('VALIDATION_ERROR'), 'User consent is required');
+            }
             // Normalize last_login_location to string to avoid accidental numeric coercion
             const normalizedLastLoginLocation = (req.body.last_login_location === undefined || req.body.last_login_location === null) ? null : String(req.body.last_login_location);
 
