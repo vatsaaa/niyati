@@ -71,8 +71,9 @@ services:
       target: production
     image: niyati/ui:production
     container_name: niyati-ui-prod
-    ports:
-      - "80:80"
+    ports: []
+    expose:
+      - "${UI_PROD_PORT:-80}"
     environment:
       - NODE_ENV=production
     restart: always

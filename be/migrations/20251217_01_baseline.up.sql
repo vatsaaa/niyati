@@ -5,11 +5,18 @@
 
 BEGIN;
 
--- Ensure pgcrypto is available for gen_random_uuid()
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
+-- WARNING: destructive migration
+-- Drop existing objects and recreate them. THIS WILL REMOVE EXISTING DATA.
+DROP TABLE IF EXISTS password_resets CASCADE;
+DROP TABLE IF EXISTS oauth_accounts CASCADE;
+DROP TABLE IF EXISTS refresh_tokens CASCADE;
+DROP TABLE IF EXISTS users CASCADE;
+DROP EXTENSION IF EXISTS pgcrypto CASCADE;
 
--- Users table (final schema)
-CREATE TABLE IF NOT EXISTS users (
+-- Ensure pgcrypto is available for gen_random_uuid()
+CREATE EXTENSION pgcrypto;
+
+CREATE TABLE users (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   email VARCHAR(255),
   password_hash TEXT,
@@ -24,7 +31,16 @@ CREATE TABLE IF NOT EXISTS users (
   timezone VARCHAR(50),
   consent_given BOOLEAN DEFAULT FALSE,
   consent_date TIMESTAMP WITH TIME ZONE,
-  is_paid BOOLEAN DEFAULT FALSE,
+  -- Credits system (replaces is_paid boolean)
+  credits INTEGER DEFAULT 10,                          -- Current credits balance
+  credits_last_reset TIMESTAMP WITH TIME ZONE DEFAULT now(),  -- When monthly credits were last reset
+  total_paid_amount INTEGER DEFAULT 0,                 -- Total amount paid in INR (for tracking)
+  is_paid BOOLEAN DEFAULT FALSE,                       -- Has user made at least one verified payment
+  last_payment_amount INTEGER DEFAULT 0,               -- Last payment amount (INR)
+  last_payment_verified BOOLEAN DEFAULT FALSE,        -- Was last payment verified
+  upi_id VARCHAR(255),                                 -- UPI ID used for payment
+  upi_txn_id VARCHAR(255),                             -- UPI transaction identifier
+  -- Location tracking
   last_login TIMESTAMP WITH TIME ZONE,
   last_login_location VARCHAR(255),
   last_login_lat DOUBLE PRECISION,
@@ -33,10 +49,10 @@ CREATE TABLE IF NOT EXISTS users (
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT now()
 );
 
--- Indexes for users
-CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users ((lower(email))) WHERE email IS NOT NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone ON users (phone_number);
-CREATE INDEX IF NOT EXISTS idx_users_is_paid ON users (is_paid);
+-- Indexes for users (recreated)
+CREATE UNIQUE INDEX idx_users_email ON users ((lower(email))) WHERE email IS NOT NULL;
+CREATE UNIQUE INDEX idx_users_phone ON users (phone_number);
+CREATE INDEX idx_users_credits ON users (credits);
 
 -- Trigger to keep `updated_at` current on UPDATE
 CREATE OR REPLACE FUNCTION users_updated_at_trigger()
@@ -47,14 +63,13 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS trg_users_updated_at ON users;
 CREATE TRIGGER trg_users_updated_at
 BEFORE UPDATE ON users
 FOR EACH ROW
 EXECUTE FUNCTION users_updated_at_trigger();
 
 -- Refresh tokens
-CREATE TABLE IF NOT EXISTS refresh_tokens (
+CREATE TABLE refresh_tokens (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   token_hash text NOT NULL,
@@ -64,11 +79,10 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
   last_used_at timestamptz
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_refresh_tokens_token_hash ON refresh_tokens(token_hash);
-CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON refresh_tokens(user_id);
+CREATE UNIQUE INDEX idx_refresh_tokens_token_hash ON refresh_tokens(token_hash);
+CREATE INDEX idx_refresh_tokens_user_id ON refresh_tokens(user_id);
 
--- OAuth accounts
-CREATE TABLE IF NOT EXISTS oauth_accounts (
+CREATE TABLE oauth_accounts (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID REFERENCES users(id) ON DELETE CASCADE,
   provider VARCHAR(100) NOT NULL,
@@ -80,11 +94,10 @@ CREATE TABLE IF NOT EXISTS oauth_accounts (
   last_used_at TIMESTAMP WITH TIME ZONE
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_oauth_provider_providerid ON oauth_accounts ((lower(provider)), provider_id);
-CREATE INDEX IF NOT EXISTS idx_oauth_user_id ON oauth_accounts (user_id);
+CREATE UNIQUE INDEX idx_oauth_provider_providerid ON oauth_accounts ((lower(provider)), provider_id);
+CREATE INDEX idx_oauth_user_id ON oauth_accounts (user_id);
 
--- Password resets
-CREATE TABLE IF NOT EXISTS password_resets (
+CREATE TABLE password_resets (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   token_hash text NOT NULL,
@@ -93,8 +106,8 @@ CREATE TABLE IF NOT EXISTS password_resets (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_password_resets_token_hash ON password_resets(token_hash);
-CREATE INDEX IF NOT EXISTS idx_password_resets_user_id ON password_resets(user_id);
+CREATE UNIQUE INDEX idx_password_resets_token_hash ON password_resets(token_hash);
+CREATE INDEX idx_password_resets_user_id ON password_resets(user_id);
 
 COMMIT;
 

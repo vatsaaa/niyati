@@ -200,6 +200,14 @@ export const useMessages = () => {
       localStorage.setItem('niyati_chat_history', JSON.stringify(updated));
       return updated;
     });
+    // Log messages for observability
+    try {
+      if (newMessage && newMessage.sender === 'bot') {
+        console.log('NIYATI', newMessage.text || JSON.stringify(newMessage));
+      }
+    } catch (e) {
+      // ignore logging errors
+    }
     return newMessage;
   };
 

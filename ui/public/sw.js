@@ -3,7 +3,7 @@
  * Advanced caching strategies for optimal offline experience
  */
 
-const VERSION = '1.0.1';
+const VERSION = '1.0.3';
 const CACHE_STATIC = `niyati-static-v${VERSION}`;
 const CACHE_DYNAMIC = `niyati-dynamic-v${VERSION}`;
 const CACHE_API = `niyati-api-v${VERSION}`;
@@ -126,11 +126,17 @@ self.addEventListener('fetch', (event) => {
  */
 async function handleNavigationRequest(request, event) {
   try {
-    // Use navigation preload response if available
+    // Try navigation preload first if available
+    let preloadResponse;
     if (event && event.preloadResponse) {
-      const preloadResponse = await event.preloadResponse;
-      if (preloadResponse) {
-        return preloadResponse;
+      try {
+        preloadResponse = await event.preloadResponse;
+        if (preloadResponse && preloadResponse.ok) {
+          return preloadResponse;
+        }
+      } catch (preloadError) {
+        // Preload failed, fall through to network fetch
+        console.log('[SW] Preload failed, trying network:', preloadError);
       }
     }
 

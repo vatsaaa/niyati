@@ -34,8 +34,17 @@
 function sanitize(obj) {
   if (!obj || typeof obj !== 'object') return obj;
   
+  // Protect against prototype pollution
+  if (Object.prototype.toString.call(obj) !== '[object Object]' && !Array.isArray(obj)) {
+    return obj;
+  }
+  
   try {
+    // Create a safe clone that prevents prototype pollution
     const clone = JSON.parse(JSON.stringify(obj));
+    
+    // Track seen objects to detect circular references
+    const seen = new WeakSet();
     
     // Patterns for sensitive key names
     const SENSITIVE_RE = /(?:phone|phonenumber|email|ssn|passport|aadhar|nationalid|api[_-]?key|apikey|token|access[_-]?token|authorization|auth|password|card|cvv|creditcard|bank[_-]?account|account[_-]?number|routing[_-]?number|id(_)?number|\baddress\b|street|zip|zipcode)/i;
@@ -51,6 +60,10 @@ function sanitize(obj) {
      */
     const redact = (o, depth = 0) => {
       if (!o || typeof o !== 'object' || depth > 12) return;
+      
+      // Circular reference detection
+      if (seen.has(o)) return;
+      seen.add(o);
       
       // Handle arrays
       if (Array.isArray(o)) {
@@ -69,6 +82,12 @@ function sanitize(obj) {
       
       // Handle objects
       for (const k of Object.keys(o)) {
+        // Protect against prototype pollution
+        if (k === '__proto__' || k === 'constructor' || k === 'prototype') {
+          delete o[k];
+          continue;
+        }
+        
         try {
           const lk = k.toString().toLowerCase();
           const v = o[k];

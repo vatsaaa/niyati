@@ -44,6 +44,8 @@ router.post('/profile', async (req, res) => {
         const SERVICE_TOKEN = process.env.SERVICE_TOKEN || '';
 
         try {
+            // Log incoming profile creation/update (USER)
+            try { console.log('USER', `PROFILE ${phoneNumber} last_login_location=${req.body.last_login_location || ''}`); } catch (e) {}
             // Check if user already exists on platform
             const lookupResp = await axios.get(`${BFF_PLATFORM_BASE.replace(/\/$/, '')}/users/lookup`, {
                 params: { phoneNumber },
@@ -56,6 +58,9 @@ router.post('/profile', async (req, res) => {
             }
 
             // New user - persist via platform sync
+            // Normalize last_login_location to string to avoid accidental numeric coercion
+            const normalizedLastLoginLocation = (req.body.last_login_location === undefined || req.body.last_login_location === null) ? null : String(req.body.last_login_location);
+
             const resp = await axios.post(`${BFF_PLATFORM_BASE.replace(/\/$/, '')}/users/sync`, {
                 phoneNumber,
                 name: name || null,
@@ -67,10 +72,13 @@ router.post('/profile', async (req, res) => {
                 timezone: timezone || null,
                 consentGiven: !!consentGiven,
                 isPaid: !!req.body.isPaid,
-                last_login_location: req.body.last_login_location || null
+                last_login_location: normalizedLastLoginLocation
             }, {
                 headers: SERVICE_TOKEN ? { 'X-Service-Token': SERVICE_TOKEN } : {}
             });
+
+            // Server-side log indicating we forwarded profile to platform (NIYATI)
+            try { console.log('NIYATI', `Forwarded profile for ${phoneNumber} to bff-platform`); } catch (e) {}
 
             // Expect standardized response from bff-platform
             if (resp && resp.data && resp.data.status === 'ok') {

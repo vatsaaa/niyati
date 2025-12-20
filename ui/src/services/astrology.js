@@ -120,7 +120,8 @@ export async function processCompleteProfile(profile, countries, phoneNumber) {
     timezone: timezone,
     consentGiven: profile.user_consentGiven,
     isPaid: !!profile.user_isPaid,
-    last_login_location: formatCurrentLocationForDisplay(location) || '',
+    // Use current location, not birth place location
+    last_login_location: profile.user_currentLocation || '',
   };
 
   if (persistPayload.phoneNumber) {

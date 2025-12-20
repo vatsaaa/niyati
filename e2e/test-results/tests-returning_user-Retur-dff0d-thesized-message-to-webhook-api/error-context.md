@@ -1,0 +1,53 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - generic:
+    - generic:
+      - img
+    - generic:
+      - img
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]:
+        - generic [ref=e8]: "?"
+        - generic [ref=e9]:
+          - generic [ref=e10]:
+            - heading "Niyati" [level=2] [ref=e11]
+            - 'generic "10 credits remaining. Daily horoscope: 2 credits. Premium questions: 4 credits." [ref=e12]':
+              - img [ref=e13]
+              - generic [ref=e18]: "10"
+          - generic [ref=e20]:
+            - generic [ref=e21]:
+              - generic [ref=e22]: 🇺🇸
+              - generic [ref=e23]: "9999999999"
+            - generic [ref=e24]: —
+            - generic [ref=e25]: —
+            - generic [ref=e26]: —
+            - generic [ref=e27]: —
+      - button "Logout / Reset" [ref=e28] [cursor=pointer]:
+        - img [ref=e29]
+    - generic [ref=e32]:
+      - generic [ref=e33]:
+        - img [ref=e35]
+        - generic [ref=e38]:
+          - paragraph [ref=e39]: Hello! I am Niyati. What is on your mind today?
+          - paragraph [ref=e40]: 10:59 PM
+      - generic [ref=e41]:
+        - img [ref=e43]
+        - generic [ref=e46]:
+          - paragraph [ref=e47]: Namaste! I'm Niyati, your cosmic companion. To unveil the secrets written in your stars, please share your full name, date of birth (DD/MM/YYYY), time of birth, and birthplace.
+          - paragraph [ref=e48]: 10:59 PM
+      - generic [ref=e50]:
+        - paragraph [ref=e51]: Hi — check my profile
+        - paragraph [ref=e52]: 10:59 PM
+      - generic [ref=e53]:
+        - img [ref=e55]
+        - generic [ref=e58]:
+          - paragraph [ref=e59]: Could you tell me your full name, your date of birth, which city and state you were born in, and your time of birth?
+          - paragraph [ref=e60]: 10:59 PM
+    - generic [ref=e62]:
+      - textbox "Ask something..." [ref=e63]
+      - button [ref=e64] [cursor=pointer]:
+        - img [ref=e65]
+```

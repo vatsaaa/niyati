@@ -110,10 +110,17 @@ function validateEnv() {
   }
 
   if (errors.length > 0) {
-    logger.fatal({ msg: 'Environment validation failed - missing or invalid required configuration', errors });
-    console.error('\n❌ Environment Validation Failed:\n');
-    errors.forEach(err => console.error(`  - ${err}`));
-    console.error('\nPlease check your .env file and ensure all required variables are set.\n');
+    try { logger.fatal({ msg: 'Environment validation failed - missing or invalid required configuration', errors }); } catch (e) {}
+
+    // Avoid noisy console output during automated test runs. Tests that expect
+    // validation to throw should still receive the thrown Error; only suppress
+    // the verbose console printing when running under `NODE_ENV=test`.
+    if (process.env.NODE_ENV !== 'test') {
+      console.error('\n❌ Environment Validation Failed:\n');
+      errors.forEach(err => console.error(`  - ${err}`));
+      console.error('\nPlease check your .env file and ensure all required variables are set.\n');
+    }
+
     throw new Error('process.exit:1');
   }
 

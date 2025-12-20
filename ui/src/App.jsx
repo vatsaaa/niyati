@@ -99,7 +99,7 @@ const NiyatiChat = () => {
 
   const closePrivacy = () => setShowPrivacyModal(false);
 
-  const { handleLogin } = useLogin(auth, profile, updateProfile, addMessage);
+  const { handleLogin } = useLogin(auth, profile, updateProfile, addMessage, clearMessages);
 
   const handleReset = () => {
     if (window.confirm("This will clear your chat history on this device and log you out. Continue?")) {

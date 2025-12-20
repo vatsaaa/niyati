@@ -53,9 +53,18 @@ function validateEnv() {
   }
 
   if (errors && errors.length > 0) {
-    try { logger.fatal({ msg: 'Environment validation failed', errors }); } catch (e) { console.error(errors); }
-    console.error('\n❌ Environment Validation Failed (bff-platform):\n');
-    errors.forEach(err => console.error('  -', err));
+    try { logger.fatal({ msg: 'Environment validation failed', errors }); } catch (e) {
+      if (process.env.NODE_ENV !== 'test') console.error(errors);
+    }
+
+    // During `test` runs we still want the validation to throw (so tests can assert
+    // validation behavior) but avoid noisy console output. For non-test runs, keep
+    // the original verbose logging to help operators debug missing configuration.
+    if (process.env.NODE_ENV !== 'test') {
+      console.error('\n❌ Environment Validation Failed (bff-platform):\n');
+      errors.forEach(err => console.error('  -', err));
+    }
+
     throw new Error('process.exit:1');
   }
 

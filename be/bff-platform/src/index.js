@@ -52,13 +52,29 @@ if (process.env.DATABASE_URL) {
     }
   }
 
-  const pool = new Pool({ connectionString });
-  pool.on('error', (err, client) => {
-    logger.error({ msg: 'Unexpected error on idle client (bff-platform)', err });
-    process.exit(-1);
+  const pool = new Pool({ 
+    connectionString,
+    max: 20, // Maximum pool size
+    idleTimeoutMillis: 30000, // Close idle clients after 30s
+    connectionTimeoutMillis: 10000, // Return error after 10s if connection cannot be established
   });
+  
+  pool.on('error', (err, client) => {
+    logger.error({ msg: 'Unexpected error on idle client (bff-platform)', err: err?.message || err });
+    // Don't exit immediately, log and let the app attempt recovery
+  });
+  
+  // Verify connection on startup
+  pool.query('SELECT 1').then(() => {
+    logger.info({ msg: 'BFF Platform database pool initialized and verified' });
+  }).catch((err) => {
+    logger.error({ msg: 'Failed to verify database connection', err: err?.message || err });
+    if (process.env.NODE_ENV !== 'test') {
+      process.exit(1);
+    }
+  });
+  
   app.set('db', pool);
-  logger.info({ msg: 'BFF Platform database pool initialized' });
 } else {
   logger.warn({ msg: 'DATABASE_URL not set for bff-platform, DB features disabled' });
 }
@@ -93,8 +109,16 @@ apiRouter.use('/users', usersRouter);
 // Expects JSON { text: string, ref?: ISODateString }
 apiRouter.post('/parse/date', (req, res) => {
   const { text, ref } = req.body || {};
+  
+  // Enhanced input validation
   if (!text || typeof text !== 'string') {
     return res.sendError(ErrorCodes.INVALID_INPUT, 'missing_or_invalid_text');
+  }
+  if (text.length > 500) {
+    return res.sendError(ErrorCodes.INVALID_INPUT, 'text_too_long', { maxLength: 500 });
+  }
+  if (ref && typeof ref !== 'string') {
+    return res.sendError(ErrorCodes.INVALID_INPUT, 'invalid_reference_date');
   }
 
   if (!chrono) {
@@ -141,8 +165,26 @@ app.use((err, req, res, next) => {
 });
 
 if (process.env.NODE_ENV !== 'test') {
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     logger.info({ msg: `BFF Platform listening on http://localhost:${PORT}` });
+  });
+  
+  // Graceful shutdown handler
+  process.on('SIGTERM', async () => {
+    logger.info({ msg: 'SIGTERM received, shutting down BFF Platform gracefully' });
+    server.close(async () => {
+      const db = app.get('db');
+      if (db) {
+        await db.end().catch(err => logger.error({ msg: 'Error closing DB pool', err }));
+      }
+      process.exit(0);
+    });
+    
+    // Force shutdown after 30s
+    setTimeout(() => {
+      logger.error({ msg: 'Forced shutdown after timeout' });
+      process.exit(1);
+    }, 30000);
   });
 }
 

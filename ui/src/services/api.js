@@ -8,6 +8,14 @@ import { getSessionReqId } from '../utils/uuid';
  * @returns {Promise<Response>} The Fetch Response object.
  */
 export async function bffFetch(pathOrUrl, options = {}) {
+  // Input validation
+  if (!pathOrUrl || typeof pathOrUrl !== 'string') {
+    throw new Error('pathOrUrl must be a non-empty string');
+  }
+  if (pathOrUrl.length > 2000) {
+    throw new Error('URL exceeds maximum length');
+  }
+  
   let url;
   if (typeof pathOrUrl === 'string' && (pathOrUrl.startsWith('http://') || pathOrUrl.startsWith('https://'))) {
     url = pathOrUrl; // Absolute URL, use as-is
@@ -18,10 +26,29 @@ export async function bffFetch(pathOrUrl, options = {}) {
   const reqId = getSessionReqId();
   const headers = new Headers(options.headers || {});
   headers.set('x-request-id', reqId);
-
-  const merged = { ...options, headers };
-  console.log('[bffFetch] Calling:', url, 'with options:', merged);
-  return fetch(url, merged);
+  
+  // Add default timeout if not specified
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), options.timeout || 30000);
+  
+  const merged = { 
+    ...options, 
+    headers,
+    signal: options.signal || controller.signal
+  };
+  
+  try {
+    console.log('[bffFetch] Calling:', url, 'with options:', merged);
+    const response = await fetch(url, merged);
+    clearTimeout(timeoutId);
+    return response;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error.name === 'AbortError') {
+      throw new Error('Request timeout');
+    }
+    throw error;
+  }
 }
 
 /**
@@ -35,22 +62,30 @@ export async function bffFetch(pathOrUrl, options = {}) {
  * @returns {Promise<Response>} The Fetch Response object.
  */
 export async function bffFetchWithRetry(pathOrUrl, options = {}, opts = {}) {
-  const retries = typeof opts.retries === 'number' ? opts.retries : RETRY_CONFIG.maxRetries;
-  const baseDelay = typeof opts.baseDelayMs === 'number' ? opts.baseDelayMs : RETRY_CONFIG.baseDelayMs;
+  const retries = typeof opts.retries === 'number' && opts.retries >= 0 ? opts.retries : RETRY_CONFIG.maxRetries;
+  const baseDelay = typeof opts.baseDelayMs === 'number' && opts.baseDelayMs > 0 ? opts.baseDelayMs : RETRY_CONFIG.baseDelayMs;
   const retryOnStatus = Array.isArray(opts.retryOnStatus) ? opts.retryOnStatus : [502, 503, 504, 429];
 
   let attempt = 0;
+  let lastError = null;
+  
   while (true) {
     try {
       const res = await bffFetch(pathOrUrl, options);
       if (retryOnStatus.includes(res.status) && attempt < retries) {
-        throw new Error(`Transient status ${res.status}`);
+        lastError = new Error(`Transient status ${res.status}`);
+        throw lastError;
       }
       return res;
     } catch (err) {
+      lastError = err;
       attempt++;
-      if (attempt > retries) throw err;
-      const delay = baseDelay * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 100);
+      if (attempt > retries) {
+        console.error(`Request failed after ${retries} retries:`, err?.message || err);
+        throw err;
+      }
+      const delay = Math.min(baseDelay * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 100), 10000); // Cap at 10s
+      console.log(`Retry attempt ${attempt}/${retries} after ${delay}ms`);
       await new Promise(r => setTimeout(r, delay));
     }
   }
@@ -65,6 +100,15 @@ export async function bffFetchWithRetry(pathOrUrl, options = {}, opts = {}) {
  */
 export async function sendClientLog(tag, meta = {}, profile) {
   try {
+    // Input validation
+    if (!tag || typeof tag !== 'string') {
+      console.warn('sendClientLog: tag must be a non-empty string');
+      return;
+    }
+    if (tag.length > 100) {
+      console.warn('sendClientLog: tag too long, truncating');
+      tag = tag.substring(0, 100);
+    }
     if (!profile || !profile.user_consentGiven) return;
 
     const safe = { ...meta };
@@ -74,6 +118,8 @@ export async function sendClientLog(tag, meta = {}, profile) {
     delete safe.user_placeOfBirth;
     delete safe.user_timeOfBirth;
     delete safe.phoneNumber;
+    delete safe.email;
+    delete safe.password;
 
     await bffFetch('/telemetry/log', {
       method: 'POST',

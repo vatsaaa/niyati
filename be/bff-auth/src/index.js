@@ -64,13 +64,25 @@ if (process.env.DATABASE_URL) {
 
   const pool = new Pool({
     connectionString: connectionString,
+    max: 20, // Maximum pool size
+    idleTimeoutMillis: 30000, // Close idle clients after 30s
+    connectionTimeoutMillis: 10000, // Return error after 10s if connection cannot be established
   });
+  
   pool.on('error', (err, client) => {
-    logger.error({ msg: 'Unexpected error on idle client', err });
-    process.exit(-1);
+    logger.error({ msg: 'Unexpected error on idle client', err: err?.message || err });
+    // Don't exit immediately, log and let the app attempt recovery
   });
+  
+  // Verify connection on startup
+  pool.query('SELECT 1').then(() => {
+    logger.info({ msg: 'Database pool initialized and verified' });
+  }).catch((err) => {
+    logger.error({ msg: 'Failed to verify database connection', err: err?.message || err });
+    process.exit(1);
+  });
+  
   app.set('db', pool);
-  logger.info({ msg: 'Database pool initialized' });
 } else {
   logger.warn({ msg: 'DATABASE_URL not set, DB features disabled' });
 }
@@ -88,6 +100,24 @@ app.get('/', (req, res) => res.json({ status: 'ok', service: 'bff-auth', version
 // Health endpoint
 app.get('/api/v1/telemetry/health', (req, res) => res.json({ status: 'ok', service: 'bff-auth' }));
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   logger.info({ msg: `BFF Auth listening on http://localhost:${PORT}` });
+});
+
+// Graceful shutdown handler
+process.on('SIGTERM', async () => {
+  logger.info({ msg: 'SIGTERM received, shutting down gracefully' });
+  server.close(async () => {
+    const db = app.get('db');
+    if (db) {
+      await db.end().catch(err => logger.error({ msg: 'Error closing DB pool', err }));
+    }
+    process.exit(0);
+  });
+  
+  // Force shutdown after 30s
+  setTimeout(() => {
+    logger.error({ msg: 'Forced shutdown after timeout' });
+    process.exit(1);
+  }, 30000);
 });

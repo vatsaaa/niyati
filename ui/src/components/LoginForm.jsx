@@ -55,14 +55,14 @@ const LoginForm = ({
         if (res && res.ok) {
           const payload = await res.json();
           if (payload && payload.status === 'ok' && payload.data && payload.data.returning) {
-            // Pass identified user back to parent login handler
-            return onLogin(tempPhone, selectedCountry, payload.data.user || null);
+            // Pass identified user and config back to parent login handler
+            return onLogin(tempPhone, selectedCountry, payload.data.user || null, payload.data.config || null);
           }
         }
       } catch (e) {
         // Best-effort: ignore errors and continue login
       }
-      return onLogin(tempPhone, selectedCountry, null);
+      return onLogin(tempPhone, selectedCountry, null, null);
     })();
   };
 

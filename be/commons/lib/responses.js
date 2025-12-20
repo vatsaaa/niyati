@@ -90,6 +90,17 @@ const ErrorStatusCodes = {
  * @returns {object} Standardized error response
  */
 function createErrorResponse(code, message, options = {}) {
+  // Input validation
+  if (!code || typeof code !== 'string') {
+    code = ErrorCodes.INTERNAL_SERVER_ERROR;
+  }
+  if (!message || typeof message !== 'string') {
+    message = 'An error occurred';
+  }
+  if (!options || typeof options !== 'object') {
+    options = {};
+  }
+  
   const { details, reqId, statusCode } = options;
 
   return {

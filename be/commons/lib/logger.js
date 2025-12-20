@@ -25,8 +25,33 @@ if (process.env.LOG_PRETTY_PRINT !== undefined) {
 // Configure logger based on environment
 const loggerOptions = {
   level,
-  redact: { paths: [], censor: '***REDACTED***' },
-  base: { pid: process.pid }
+  redact: { 
+    paths: [
+      'password',
+      'token',
+      'apiKey',
+      'api_key',
+      'accessToken',
+      'access_token',
+      'refreshToken',
+      'refresh_token',
+      'secret',
+      'privateKey',
+      'private_key',
+      'req.headers.authorization',
+      'req.headers["x-api-key"]',
+      'authorization'
+    ], 
+    censor: '***REDACTED***',
+    remove: true // Remove instead of replacing with censor string
+  },
+  base: { pid: process.pid },
+  // Prevent circular references from causing crashes
+  serializers: {
+    err: pino.stdSerializers.err,
+    req: pino.stdSerializers.req,
+    res: pino.stdSerializers.res
+  }
 };
 
 // Add pretty printing when explicitly enabled and pino-pretty is available
@@ -58,8 +83,17 @@ const logger = pino(loggerOptions);
  * @returns {string|undefined} Request ID if found, undefined otherwise
  */
 function reqIdFromReq(req) {
-  if (!req) return undefined;
-  return req.headers && (req.headers['x-request-id'] || req.headers['x-correlation-id']);
+  if (!req || typeof req !== 'object') return undefined;
+  if (!req.headers || typeof req.headers !== 'object') return undefined;
+  
+  const requestId = req.headers['x-request-id'] || req.headers['x-correlation-id'];
+  
+  // Validate format - should be a reasonable UUID or similar
+  if (requestId && typeof requestId === 'string' && requestId.length > 0 && requestId.length < 100) {
+    return requestId;
+  }
+  
+  return undefined;
 }
 
 module.exports = {

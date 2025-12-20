@@ -1,9 +1,10 @@
 # Caddyfile - Production reverse proxy with automatic HTTPS
 # Caddy automatically obtains and renews Let's Encrypt certificates
-
 {
     # Global options
-    email {$CADDY_EMAIL}
+    # The CADDY_EMAIL environment variable can be provided by compose; if
+    # it's not set, use the fallback below so Caddyfile parsing doesn't fail.
+    email {$CADDY_EMAIL:ankur.vatsa@gmail.com}
     # Use staging for testing, remove 'acme_ca' for production Let's Encrypt
     # acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
 }

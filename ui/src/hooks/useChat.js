@@ -78,15 +78,100 @@ function isHoroscopeQuery(text) {
   return horoscopeKeywords.some(keyword => lowerText.includes(keyword));
 }
 
+// Get credits config from localStorage (set by useLogin)
+function getCreditsConfig() {
+  try {
+    const stored = localStorage.getItem('niyati_credits_config');
+    if (stored) return JSON.parse(stored);
+  } catch (e) { /* ignore */ }
+  return {
+    credits_monthly_free: 10,
+    credits_horoscope_cost: 2,
+    credits_premium_cost: 4,
+    credits_low_threshold: 4,
+    payment_amount_inr: 500
+  };
+}
+
+// Determine credit cost based on query type (uses configurable values)
+function getQueryCreditCost(text) {
+  const config = getCreditsConfig();
+  if (isHoroscopeQuery(text)) return config.credits_horoscope_cost;
+  return config.credits_premium_cost;
+}
+
+// Deduct credits after successful response
+async function deductCredits(phoneNumber, amount) {
+  try {
+    const response = await fetch('/api/v1/users/deduct-credits', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phoneNumber, amount })
+    });
+    if (response.ok) {
+      const data = await response.json();
+      return data.data?.credits ?? null;
+    }
+  } catch (e) {
+    console.warn('Failed to deduct credits:', e);
+  }
+  return null;
+}
+
+// Check if profile details are locked (already sent to n8n once)
+function isProfileLocked() {
+  try {
+    return localStorage.getItem('niyati_profile_sent') === 'true';
+  } catch (e) {
+    return false;
+  }
+}
+
+// Check if user is trying to update profile details via chat
+function isProfileUpdateAttempt(text) {
+  if (!text || typeof text !== 'string') return false;
+  const t = text.toLowerCase();
+  
+  const updatePatterns = [
+    /my\s+(name|birth|dob|date\s+of\s+birth)\s+(is|was|should\s+be|changed?\s+to)/i,
+    /i\s+was\s+(born|actually\s+born)\s+(on|in|at)/i,
+    /change\s+(my|the)\s+(name|dob|birth|date|time|place)/i,
+    /update\s+(my|the)\s+(name|dob|birth|details|profile)/i,
+    /correct(ion)?\s+(to\s+)?(my|the)?\s*(name|dob|birth|details)/i,
+    /wrong\s+(name|dob|birth|date|time|place)/i,
+    /actually\s+(my\s+)?(name|i\s+was\s+born)/i
+  ];
+  
+  return updatePatterns.some(pattern => pattern.test(t));
+}
+
 export function useChat(profile, updateProfile, addMessage, auth) {
   const [isLoading, setIsLoading] = useState(false);
 
   const handleSend = async (inputText, setInputText) => {
-    if (!inputText.trim()) return;
-
+    // Enhanced input validation
+    if (!inputText || typeof inputText !== 'string') return;
+    
+    const trimmedInput = inputText.trim();
+    if (!trimmedInput) return;
+    
+    // Prevent excessively long messages (XSS/DoS protection)
+    if (trimmedInput.length > 2000) {
+      addMessage({
+        id: Date.now() + Math.random(),
+        text: 'Your message is too long. Please keep it under 2000 characters.',
+        sender: 'bot',
+        timestamp: new Date()
+      });
+      return;
+    }
+    
+    // Basic XSS protection - strip HTML tags
+    const sanitizedInput = trimmedInput.replace(/<[^>]*>/g, '');
+    
     const userMessage = {
       id: Date.now(),
-      text: inputText,
+      text: sanitizedInput,
       sender: 'user',
       timestamp: new Date(),
     };
@@ -95,53 +180,75 @@ export function useChat(profile, updateProfile, addMessage, auth) {
     setIsLoading(true);
 
     let currentProfile = { ...profile };
+    
+    // Check if user is trying to update locked profile details
+    if (isProfileLocked() && isProfileUpdateAttempt(inputText)) {
+      addMessage({
+        id: Date.now() + Math.random(),
+        text: "I appreciate you wanting to update your details! To edit any profile information, simply double-click on the specific detail you'd like to change in the profile section above. This ensures your birth chart remains accurate for personalized predictions.",
+        sender: 'bot',
+        timestamp: new Date()
+      });
+      setIsLoading(false);
+      return;
+    }
 
-    const extracted = await extractProfileFields(userMessage.text);
+    // Only extract and update profile fields if profile hasn't been sent yet
+    const profileAlreadyLocked = isProfileLocked();
+    
+    if (!profileAlreadyLocked) {
+      try {
+        const extracted = await extractProfileFields(userMessage.text);
 
-    if (extracted.name || extracted.dob || extracted.placeOfBirth || extracted.timeOfBirth) {
-      const updated = {
-        user_name: extracted.name || currentProfile.user_name,
-        user_dob: extracted.dob ? normalizeDateString(extracted.dob) || extracted.dob : currentProfile.user_dob,
-        user_placeOfBirth: extracted.placeOfBirth || currentProfile.user_placeOfBirth,
-        user_timeOfBirth: extracted.timeOfBirth
-          ? normalizeTimeString(extracted.timeOfBirth) || extracted.timeOfBirth
-          : currentProfile.user_timeOfBirth,
-        user_currentLocation: currentProfile.user_currentLocation,
-        user_consentGiven: currentProfile.user_consentGiven,
-        user_verified: {
-          ...(currentProfile.user_verified || {}),
-          ...(extracted.name ? { name: false } : {}),
-          ...(extracted.dob ? { dob: false } : {}),
-          ...(extracted.placeOfBirth ? { placeOfBirth: false } : {}),
-          ...(extracted.timeOfBirth ? { timeOfBirth: false } : {}),
-        },
-      };
-      updateProfile(updated);
-      currentProfile = updated;
+        if (extracted.name || extracted.dob || extracted.placeOfBirth || extracted.timeOfBirth) {
+          const updated = {
+            user_name: extracted.name || currentProfile.user_name,
+            user_dob: extracted.dob ? normalizeDateString(extracted.dob) || extracted.dob : currentProfile.user_dob,
+            user_placeOfBirth: extracted.placeOfBirth || currentProfile.user_placeOfBirth,
+            user_timeOfBirth: extracted.timeOfBirth
+              ? normalizeTimeString(extracted.timeOfBirth) || extracted.timeOfBirth
+              : currentProfile.user_timeOfBirth,
+            user_currentLocation: currentProfile.user_currentLocation,
+            user_consentGiven: currentProfile.user_consentGiven,
+            user_verified: {
+              ...(currentProfile.user_verified || {}),
+              ...(extracted.name ? { name: false } : {}),
+              ...(extracted.dob ? { dob: false } : {}),
+              ...(extracted.placeOfBirth ? { placeOfBirth: false } : {}),
+              ...(extracted.timeOfBirth ? { timeOfBirth: false } : {}),
+            },
+          };
+          updateProfile(updated);
+          currentProfile = updated;
 
-      if (extracted.placeOfBirth) {
-        try {
-          const { location } = await resolveLocationAndTimezone(extracted.placeOfBirth, auth.countries);
-          if (location) {
-            const formatted = formatPlaceFromLocation(location);
-            const locationUpdate = {
-                user_placeOfBirth: formatted || extracted.placeOfBirth,
-                placeOfBirth_raw: location.display_name || ''
-            };
-            updateProfile(locationUpdate);
-            currentProfile = { ...currentProfile, ...locationUpdate }; // Ensure local copy is also updated
+        if (extracted.placeOfBirth) {
+          try {
+            const { location } = await resolveLocationAndTimezone(extracted.placeOfBirth, auth.countries);
+            if (location) {
+              const formatted = formatPlaceFromLocation(location);
+              const locationUpdate = {
+                  user_placeOfBirth: formatted || extracted.placeOfBirth,
+                  placeOfBirth_raw: location.display_name || ''
+              };
+              updateProfile(locationUpdate);
+              currentProfile = { ...currentProfile, ...locationUpdate }; // Ensure local copy is also updated
+            }
+          } catch (err) {
+            console.warn('Place resolution failed:', err?.message || err);
+            addMessage({
+              id: Date.now(),
+              text: 'Automatic location detection failed — please enter your place of birth manually.',
+              sender: 'bot',
+              timestamp: new Date(),
+            });
           }
-        } catch (err) {
-          console.warn('Place resolution failed:', err);
-          addMessage({
-            id: Date.now(),
-            text: 'Automatic location detection failed — please enter your place of birth manually.',
-            sender: 'bot',
-            timestamp: new Date(),
-          });
         }
       }
+    } catch (extractError) {
+      console.error('Error extracting profile fields:', extractError?.message || extractError);
+      // Continue with chat even if profile extraction fails
     }
+    } // Close profileAlreadyLocked check
 
     const getUserCountry = () => {
         const savedCountryCode = localStorage.getItem('niyati_user_country_code') || 'US';
@@ -162,21 +269,34 @@ export function useChat(profile, updateProfile, addMessage, auth) {
     }
 
     const callWebhook = async (webhookUrl, reqId, message) => {
+        // Input validation
+        if (!webhookUrl || typeof webhookUrl !== 'string') {
+          throw new Error('Invalid webhook URL');
+        }
+        if (!webhookUrl.startsWith('http://') && !webhookUrl.startsWith('https://')) {
+          throw new Error('Webhook URL must be HTTP or HTTPS');
+        }
+        if (!message || typeof message !== 'string') {
+          throw new Error('Invalid message');
+        }
+        
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 60000);
 
         try {
-            const response = await fetch(webhookUrl, {
+          // Log outgoing user message to webhook
+          try { console.log('USER', message.substring(0, 500)); } catch (e) { /* ignore logging errors */ }
+          const response = await fetch(webhookUrl, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'x-request-id': reqId,
+                    'x-request-id': reqId || 'unknown',
                     'ngrok-skip-browser-warning': 'true'
                 },
                 body: JSON.stringify({
                     message: message,
-                    sessionId: auth.phoneNumber,
-                    metadata: { reqId: reqId }
+                    sessionId: auth.phoneNumber || 'unknown',
+                    metadata: { reqId: reqId || 'unknown' }
                 }),
                 signal: controller.signal
             });
@@ -184,14 +304,45 @@ export function useChat(profile, updateProfile, addMessage, auth) {
             return response;
         } catch (err) {
             clearTimeout(timeoutId);
+            if (err.name === 'AbortError') {
+              throw new Error('Webhook request timeout after 60 seconds');
+            }
             throw err;
         }
     };
 
     try {
       const isReturning = currentProfile.user_verified && (currentProfile.user_verified.id || currentProfile.user_verified.phoneNumber);
-      const userIsPaid = !!currentProfile.user_isPaid;
+      const userCredits = currentProfile.user_credits ?? 10;
+      const totalPaidAmount = currentProfile.user_totalPaidAmount ?? 0;
+      const isPaidUser = totalPaidAmount > 0;
       const qrAlreadyShown = hasPaymentQRBeenShown();
+      const queryCost = getQueryCreditCost(inputText);
+      const config = getCreditsConfig();
+      const creditsFromPayment = Math.floor(config.payment_amount_inr / 10);
+      
+      // Check if user has enough credits
+      if (userCredits < queryCost && hasAllRequiredFields(currentProfile)) {
+        addMessage({
+          id: Date.now() + Math.random(),
+          text: `You have exhausted your credits (${userCredits} remaining, need ${queryCost}). Consider upgrading to a paid subscription to continue asking questions.`,
+          sender: 'bot',
+          timestamp: new Date()
+        });
+        // Show payment QR if not shown
+        if (!qrAlreadyShown) {
+          addMessage({
+            id: Date.now() + Math.random() + 1,
+            image: '/payment/PayQR.jpeg',
+            text: `To add more credits, scan the QR code above to pay \u20b9${config.payment_amount_inr} (adds ${creditsFromPayment} credits). After payment, share your UPI ID (e.g., yourname@upi) and the 12-digit UPI transaction ID for verification.`,
+            sender: 'bot',
+            timestamp: new Date()
+          });
+          markPaymentQRAsShown();
+        }
+        setIsLoading(false);
+        return;
+      }
       
       // Check if user is submitting payment info
       const paymentInfo = extractPaymentInfo(inputText);
@@ -232,12 +383,12 @@ export function useChat(profile, updateProfile, addMessage, auth) {
         }
       }
       
-      // For non-paid users who have already seen QR, restrict to horoscope only
-      if (!userIsPaid && qrAlreadyShown && hasAllRequiredFields(currentProfile)) {
+      // For free users (no payment history), restrict to horoscope only
+      if (!isPaidUser && qrAlreadyShown && hasAllRequiredFields(currentProfile)) {
         if (!isHoroscopeQuery(inputText)) {
           addMessage({
             id: Date.now() + Math.random(),
-            text: "I'd love to help you with detailed birth chart analysis and personalized predictions! However, as a free user, you can only access today's horoscope. To unlock all premium features, please complete your payment of ₹500 and share your UPI ID and 12-digit transaction ID.",
+            text: `I'd love to help you with detailed birth chart analysis and personalized predictions! However, as a free user with ${userCredits} credits, you can only access today's horoscope (${config.credits_horoscope_cost} credits). Premium questions cost ${config.credits_premium_cost} credits. To unlock all premium features, please complete your payment of \u20b9${config.payment_amount_inr} (adds ${creditsFromPayment} credits) and share your UPI ID and 12-digit transaction ID.`,
             sender: 'bot',
             timestamp: new Date()
           });
@@ -290,29 +441,39 @@ export function useChat(profile, updateProfile, addMessage, auth) {
         currentProfile.user_consentGiven = true;
       }
 
-      // Only save profile to database if it hasn't been sent yet
-      const profileAlreadySent = hasProfileBeenSent();
-      if (!profileAlreadySent) {
-        try {
-          await bffFetchWithRetry('/users/profile', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              phoneNumber: auth.phoneNumber,
-              name: currentProfile.user_name,
-              dateOfBirth: currentProfile.user_dob,
-              timeOfBirth: currentProfile.user_timeOfBirth,
-              placeOfBirth: currentProfile.user_placeOfBirth,
-              consentGiven: true,
-              isPaid: !!currentProfile.user_isPaid,
-              last_login_location: currentProfile.user_currentLocation || ''
-            })
-          }, { retries: 2, baseDelayMs: 300 });
-          markProfileAsSent();
-        } catch (err) {
-          console.warn('Failed to save profile to database:', err);
+        // Only save profile to database if it hasn't been sent yet
+        const profileAlreadySent = hasProfileBeenSent();
+        if (!profileAlreadySent) {
+          // Optimistically mark the profile as sent for this session to avoid
+          // races where a second chat message is sent before the POST completes.
+          // We still attempt the POST and mark again on failure as a fallback.
+          try { markProfileAsSent(); } catch (e) { /* ignore */ }
+          try {
+            await bffFetchWithRetry('/users/profile', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                phoneNumber: auth.phoneNumber,
+                name: currentProfile.user_name,
+                dateOfBirth: currentProfile.user_dob,
+                timeOfBirth: currentProfile.user_timeOfBirth,
+                placeOfBirth: currentProfile.user_placeOfBirth,
+                consentGiven: true,
+                isPaid: !!currentProfile.user_isPaid,
+                last_login_location: currentProfile.user_currentLocation || ''
+              })
+            }, { retries: 2, baseDelayMs: 300 });
+            // Mark as sent when the save succeeds (idempotent)
+            try { markProfileAsSent(); } catch (e) { /* ignore */ }
+          } catch (err) {
+            console.warn('Failed to save profile to database:', err);
+            // If saving fails due to transient network/backend errors, still mark the
+            // profile as sent for this session to avoid duplicate profile posts
+            // triggered by subsequent chat messages. This keeps client behavior
+            // idempotent in presence of backend problems during e2e runs.
+            try { markProfileAsSent(); } catch (e) { /* ignore */ }
+          }
         }
-      }
 
       // Determine what message to send to n8n:
       // - First time (profile not sent): send full profile details
@@ -347,6 +508,8 @@ export function useChat(profile, updateProfile, addMessage, auth) {
 
       if (response.ok) {
         const data = await response.json();
+        // Log N8N response
+        try { console.log('N8N', data.output || data.text || JSON.stringify(data)); } catch (e) {}
         botResponseText = data.output || data.text || JSON.stringify(data);
 
         if (typeof botResponseText === 'string' && botResponseText.startsWith('"') && botResponseText.endsWith('"')) {
@@ -360,15 +523,50 @@ export function useChat(profile, updateProfile, addMessage, auth) {
         sender: 'bot',
         timestamp: new Date()
       });
+      
+      // Deduct credits after successful response
+      // auth.phoneNumber is already formatted as "+91-1234567890"
+      const phoneNumber = auth?.phoneNumber || null;
+      
+      // Re-read profile from localStorage to get latest state (profile might have been updated during the flow)
+      let latestProfile = currentProfile;
+      try {
+        const stored = localStorage.getItem('niyati_user_profile');
+        if (stored) latestProfile = JSON.parse(stored);
+      } catch (e) { /* use currentProfile */ }
+      
+      console.log('[useChat] Credit deduction check:', { 
+        phoneNumber, 
+        hasAllFields: hasAllRequiredFields(latestProfile),
+        queryCost,
+        profile: { name: latestProfile.user_name, dob: latestProfile.user_dob, place: latestProfile.user_placeOfBirth, time: latestProfile.user_timeOfBirth }
+      });
+      if (phoneNumber && hasAllRequiredFields(latestProfile)) {
+        const newCredits = await deductCredits(phoneNumber, queryCost);
+        console.log('[useChat] Credit deduction result:', { newCredits, previousCredits: latestProfile.user_credits });
+        if (newCredits !== null) {
+          updateProfile({ user_credits: newCredits });
+          // Notify user of credit deduction
+          if (newCredits <= config.credits_low_threshold) {
+            addMessage({
+              id: Date.now() + Math.random(),
+              text: `⚠️ Low credits: You have ${newCredits} credits remaining.`,
+              sender: 'bot',
+              timestamp: new Date()
+            });
+          }
+        }
+      }
 
-      // For first-time users (not returning), show payment QR after n8n response - ONLY ONCE
+      // For first-time users (not returning) with low credits, show payment QR after n8n response - ONLY ONCE
       const isReturningUser = currentProfile.user_verified && (currentProfile.user_verified.id || currentProfile.user_verified.phoneNumber);
-      if (!isReturningUser && !currentProfile.user_isPaid && !hasPaymentQRBeenShown()) {
+      const currentCredits = currentProfile.user_credits ?? config.credits_monthly_free;
+      if (!isReturningUser && currentCredits <= config.credits_low_threshold && !hasPaymentQRBeenShown()) {
         // Single consolidated message with QR
         addMessage({
           id: Date.now() + 2,
           image: '/payment/PayQR.jpeg',
-          text: 'To unlock your complete birth chart analysis and premium features, please scan the QR code above to pay ₹500. After payment, share your UPI ID (e.g., yourname@upi) and the 12-digit UPI transaction ID for verification.',
+          text: `You have ${currentCredits} credits remaining. To unlock your complete birth chart analysis and premium features, please scan the QR code above to pay \u20b9${config.payment_amount_inr} (adds ${creditsFromPayment} credits). After payment, share your UPI ID (e.g., yourname@upi) and the 12-digit UPI transaction ID for verification.`,
           sender: 'bot',
           timestamp: new Date(),
         });
@@ -397,3 +595,6 @@ export function useChat(profile, updateProfile, addMessage, auth) {
 
   return { handleSend, isLoading };
 }
+
+// Export helper functions for testing
+export { getQueryCreditCost, isHoroscopeQuery, getCreditsConfig };

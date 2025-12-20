@@ -8,6 +8,7 @@ const { createRawToken: prCreateRaw, hashToken: prHash, storePasswordReset, find
 const { sendMail } = require('./emailProvider');
 const { authenticate } = require('./authMiddleware');
 const crypto = require('crypto');
+const { handleCallback, fetchUserInfo } = require('../src/socialLogin');
 
 const router = express.Router();
 const bcrypt = require('bcryptjs');
@@ -17,15 +18,24 @@ const DEFAULT_BCRYPT_ROUNDS = process.env.BCRYPT_ROUNDS ? parseInt(process.env.B
 // Input validation helpers
 function isValidEmail(email) {
   if (!email || typeof email !== 'string') return false;
-  // Basic email validation - consider using a library like validator.js for production
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  return emailRegex.test(email) && email.length <= 255;
+  // Trim and lowercase for consistency
+  const normalized = email.trim().toLowerCase();
+  if (normalized.length < 3 || normalized.length > 255) return false;
+  // More robust email validation
+  const emailRegex = /^[a-zA-Z0-9.!#$%&'*+\/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
+  return emailRegex.test(normalized);
 }
 
 function isValidPassword(password) {
   if (!password || typeof password !== 'string') return false;
-  // Minimum 8 characters - adjust policy as needed
-  return password.length >= 8 && password.length <= 128;
+  // Minimum 8 characters, maximum 128 to prevent DoS
+  if (password.length < 8 || password.length > 128) return false;
+  // Optional: Add complexity requirements (uncomment if needed)
+  // const hasUpper = /[A-Z]/.test(password);
+  // const hasLower = /[a-z]/.test(password);
+  // const hasDigit = /[0-9]/.test(password);
+  // return hasUpper && hasLower && hasDigit;
+  return true;
 }
 
 // Timing-safe string comparison to prevent timing attacks
@@ -78,12 +88,15 @@ function setRefreshCookie(res, token) {
 router.post('/token', async (req, res) => {
   try {
     const raw = (req.body && req.body.refresh_token) || (req.cookies && req.cookies.refresh_token);
-        if (!raw || typeof raw !== 'string') {
-          return res.sendError(RC('BAD_REQUEST'), 'Invalid refresh token');
+    if (!raw || typeof raw !== 'string' || raw.length === 0) {
+      return res.sendError(RC('BAD_REQUEST'), 'Invalid refresh token');
+    }
+    if (raw.length > 500) {
+      return res.sendError(RC('BAD_REQUEST'), 'Refresh token exceeds maximum length');
     }
 
     const db = req.app.get('db');
-      if (!db) return res.sendError(RC('INTERNAL_SERVER_ERROR'), 'Database not configured');
+    if (!db) return res.sendError(RC('INTERNAL_SERVER_ERROR'), 'Database not configured');
 
     const tokenHash = hashToken(raw);
     const row = await findRefreshTokenByHash(db, tokenHash, true); // Update last_used_at
@@ -91,15 +104,18 @@ router.post('/token', async (req, res) => {
     // Use consistent error message to prevent token enumeration
     const invalidTokenMsg = 'Invalid or expired refresh token';
 
-      if (!row) return res.sendError(_responses().ErrorCodes.UNAUTHORIZED, invalidTokenMsg);
-      if (!row) return res.sendError(RC('UNAUTHORIZED'), invalidTokenMsg);
+    if (!row) return res.sendError(RC('UNAUTHORIZED'), invalidTokenMsg);
     if (row.revoked) {
       // Token reuse detected - revoke all tokens for this user as security measure
-      await db.query('UPDATE refresh_tokens SET revoked = true WHERE user_id = $1', [row.user_id]);
-        return res.sendError(RC('UNAUTHORIZED'), invalidTokenMsg);
+      try {
+        await db.query('UPDATE refresh_tokens SET revoked = true, updated_at = now() WHERE user_id = $1 AND revoked = false', [row.user_id]);
+      } catch (revokeErr) {
+        console.error('Failed to revoke tokens:', revokeErr);
+      }
+      return res.sendError(RC('UNAUTHORIZED'), invalidTokenMsg);
     }
     if (new Date(row.expires_at) < new Date()) {
-        return res.sendError(_responses().ErrorCodes.UNAUTHORIZED, invalidTokenMsg);
+      return res.sendError(RC('UNAUTHORIZED'), invalidTokenMsg);
     }
 
     // Detect potential token reuse (same token used within suspicious timeframe)
@@ -135,22 +151,27 @@ router.post('/token', async (req, res) => {
 router.post('/logout', async (req, res) => {
   try {
     const raw = (req.body && req.body.refresh_token) || (req.cookies && req.cookies.refresh_token);
-       if (!raw) return res.sendError(_responses().ErrorCodes.BAD_REQUEST, 'Missing refresh token');
-  if (!raw) return res.sendError(RC('BAD_REQUEST'), 'Missing refresh token');
-  if (!db) return res.sendError(RC('INTERNAL_SERVER_ERROR'), 'Database not configured');
+    if (!raw || typeof raw !== 'string') {
+      return res.sendError(RC('BAD_REQUEST'), 'Missing refresh token');
+    }
 
     const db = req.app.get('db');
-       if (!db) return res.sendError(_responses().ErrorCodes.INTERNAL_SERVER_ERROR, 'Database not configured');
+    if (!db) return res.sendError(RC('INTERNAL_SERVER_ERROR'), 'Database not configured');
 
     const tokenHash = hashToken(raw);
     const row = await findRefreshTokenByHash(db, tokenHash);
-    if (!row) return res.sendSuccess({ revoked: false });
+    if (!row) {
+      // Clear cookie anyway
+      res.clearCookie('refresh_token', { path: '/api/v1/auth' });
+      return res.sendSuccess({ revoked: false });
+    }
 
     await revokeRefreshToken(db, row.id);
     res.clearCookie('refresh_token', { path: '/api/v1/auth' });
     return res.sendSuccess({ revoked: true });
   } catch (err) {
-       return res.sendError(_responses().ErrorCodes.INTERNAL_SERVER_ERROR, err.message);
+    console.error('Logout error:', err?.message || err);
+    return res.sendError(RC('INTERNAL_SERVER_ERROR'), 'Logout failed');
   }
 });
 
@@ -172,18 +193,18 @@ router.post('/register', async (req, res) => {
 
     // Validate name if provided
     if (name && (typeof name !== 'string' || name.length > 100)) {
-        return res.sendError(_responses().ErrorCodes.VALIDATION_ERROR, 'Name must be less than 100 characters');
+      return res.sendError(RC('VALIDATION_ERROR'), 'Name must be less than 100 characters');
     }
 
     const db = req.app.get('db');
-       if (!db) return res.sendError(_responses().ErrorCodes.INTERNAL_SERVER_ERROR, 'Database not configured');
+    if (!db) return res.sendError(RC('INTERNAL_SERVER_ERROR'), 'Database not configured');
 
-    // Check for existing user
-    const existing = await db.query('SELECT id FROM users WHERE lower(email) = lower($1) LIMIT 1', [email]);
+    // Check for existing user (normalize email)
+    const normalizedEmail = email.toLowerCase().trim();
+    const existing = await db.query('SELECT id FROM users WHERE lower(email) = $1 LIMIT 1', [normalizedEmail]);
     if (existing.rowCount > 0) {
-        return res.sendError(RC('CONFLICT'), 'Email already registered');
+      return res.sendError(RC('CONFLICT'), 'Email already registered');
     }
-  if (!db) return res.sendError(RC('INTERNAL_SERVER_ERROR'), 'Database not configured');
 
     const passwordHash = await bcrypt.hash(password, DEFAULT_BCRYPT_ROUNDS);
     const insertSql = `INSERT INTO users (email, password_hash, name, created_at, updated_at) VALUES ($1, $2, $3, now(), now()) RETURNING id`;
@@ -461,4 +482,71 @@ router.get('/me', async (req, res) => {
   }
 });
 
+// POST /auth/oauth/callback
+// Body: { provider, code, code_verifier, redirect_uri }
+router.post('/oauth/callback', async (req, res) => {
+  try {
+    const { provider, code, code_verifier: codeVerifier, redirect_uri: redirectUri } = req.body || {};
+    if (!provider || !code) return res.sendError(RC('BAD_REQUEST'), 'provider and code required');
+
+    const db = req.app.get('db');
+    if (!db) return res.sendError(RC('INTERNAL_SERVER_ERROR'), 'Database not configured');
+
+    // Exchange code for tokens
+    const tokens = await handleCallback({ code, provider, codeVerifier, redirectUri });
+
+    // Fetch user info
+    const userInfo = await fetchUserInfo(provider, tokens) || {};
+    const providerId = userInfo.sub || userInfo.id || userInfo.user_id || userInfo.sub_jwk;
+    const email = userInfo.email || null;
+    const name = userInfo.name || userInfo.displayName || null;
+    const avatar = userInfo.picture || userInfo.avatar_url || null;
+
+    if (!providerId) return res.sendError(RC('BAD_REQUEST'), 'Unable to determine provider user id');
+
+    // Find existing oauth account
+    const existing = await db.query('SELECT user_id FROM oauth_accounts WHERE provider = $1 AND provider_id = $2 LIMIT 1', [provider, providerId]);
+    let userId;
+
+    await db.query('BEGIN');
+    try {
+      if (existing.rowCount > 0) {
+        userId = existing.rows[0].user_id;
+      } else {
+        // If a local user exists with same email, link to that user. Otherwise create new user.
+        if (email) {
+          const userRes = await db.query('SELECT id FROM users WHERE lower(email) = lower($1) LIMIT 1', [email]);
+          if (userRes.rowCount > 0) {
+            userId = userRes.rows[0].id;
+          }
+        }
+
+        if (!userId) {
+          const insert = await db.query('INSERT INTO users (email, name, avatar_url, created_at, updated_at) VALUES ($1, $2, $3, now(), now()) RETURNING id', [email, name, avatar]);
+          userId = insert.rows[0].id;
+        }
+
+        // Insert oauth_accounts link
+        await db.query('INSERT INTO oauth_accounts (user_id, provider, provider_id, token_meta, created_at) VALUES ($1, $2, $3, $4, now())', [userId, provider, providerId, tokens ? JSON.stringify(tokens) : null]);
+      }
+
+      // Create refresh and access tokens
+      const { raw: refreshRaw } = await createAndStoreRefreshForUser(db, userId);
+      const accessToken = createAccessToken({ sub: userId });
+
+      await db.query('COMMIT');
+
+      setRefreshCookie(res, refreshRaw);
+      return res.sendSuccess({ user_id: userId, access_token: accessToken });
+    } catch (err) {
+      await db.query('ROLLBACK');
+      throw err;
+    }
+  } catch (err) {
+    console.error('OAuth callback error:', err);
+    return res.sendError(RC('INTERNAL_SERVER_ERROR'), 'OAuth callback failed');
+  }
+});
+
 module.exports = router;
+
