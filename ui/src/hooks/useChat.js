@@ -273,8 +273,9 @@ export function useChat(profile, updateProfile, addMessage, auth) {
         if (!webhookUrl || typeof webhookUrl !== 'string') {
           throw new Error('Invalid webhook URL');
         }
-        if (!webhookUrl.startsWith('http://') && !webhookUrl.startsWith('https://')) {
-          throw new Error('Webhook URL must be HTTP or HTTPS');
+        // Allow both absolute URLs (http/https) and relative URLs (starting with /)
+        if (!webhookUrl.startsWith('http://') && !webhookUrl.startsWith('https://') && !webhookUrl.startsWith('/')) {
+          throw new Error('Webhook URL must be HTTP, HTTPS, or a relative path');
         }
         if (!message || typeof message !== 'string') {
           throw new Error('Invalid message');
@@ -342,6 +343,24 @@ export function useChat(profile, updateProfile, addMessage, auth) {
         }
         setIsLoading(false);
         return;
+      }
+      
+      // Check if credits are running low for non-paid users (show warning with QR)
+      if (!isPaidUser && userCredits <= config.credits_low_threshold && !qrAlreadyShown && hasAllRequiredFields(currentProfile)) {
+        addMessage({
+          id: Date.now() + Math.random(),
+          text: `⚠️ Your credits are running low (${userCredits} remaining). To ensure uninterrupted service, consider adding more credits.`,
+          sender: 'bot',
+          timestamp: new Date()
+        });
+        addMessage({
+          id: Date.now() + Math.random() + 1,
+          image: '/payment/PayQR.jpeg',
+          text: `To add more credits, scan the QR code above to pay \u20b9${config.payment_amount_inr} (adds ${creditsFromPayment} credits). After payment, share your UPI ID (e.g., yourname@upi) and the 12-digit UPI transaction ID for verification.`,
+          sender: 'bot',
+          timestamp: new Date()
+        });
+        markPaymentQRAsShown();
       }
       
       // Check if user is submitting payment info

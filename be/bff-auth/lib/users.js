@@ -55,6 +55,10 @@ router.post('/profile', async (req, res) => {
                 // If the client provided any updatable fields, forward them to platform sync/update
                 const normalizedLastLoginLocation = (req.body.last_login_location === undefined || req.body.last_login_location === null) ? undefined : String(req.body.last_login_location);
                 const updatePayload = {};
+                if (typeof name !== 'undefined' && name) updatePayload.name = name;
+                if (typeof dateOfBirth !== 'undefined' && dateOfBirth) updatePayload.dateOfBirth = dateOfBirth;
+                if (typeof timeOfBirth !== 'undefined' && timeOfBirth) updatePayload.timeOfBirth = timeOfBirth;
+                if (typeof placeOfBirth !== 'undefined' && placeOfBirth) updatePayload.placeOfBirth = placeOfBirth;
                 if (typeof normalizedLastLoginLocation !== 'undefined') updatePayload.last_login_location = normalizedLastLoginLocation;
                 if (typeof lat !== 'undefined') updatePayload.lat = lat ? parseFloat(lat) : null;
                 if (typeof lon !== 'undefined') updatePayload.lon = lon ? parseFloat(lon) : null;

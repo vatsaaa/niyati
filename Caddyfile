@@ -34,9 +34,9 @@ http://{$DOMAIN:localhost}, http://nonexperientially-nonascetical-agnes.ngrok-fr
         -Server
     }
 
-    # CORS headers for API routes
-    @api path /api/*
-    header @api {
+    # CORS headers for API routes and webhook
+    @api_and_webhook path /api/* /webhook/*
+    header @api_and_webhook {
         Access-Control-Allow-Origin "https://nonexperientially-nonascetical-agnes.ngrok-free.dev"
         Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS"
         Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With"

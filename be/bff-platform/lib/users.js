@@ -68,12 +68,12 @@ router.post('/sync', async (req, res) => {
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CASE WHEN $9 THEN now() ELSE NULL END, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, now(), now())
       ON CONFLICT (phone_number) DO UPDATE SET
         name = COALESCE(EXCLUDED.name, users.name),
-        date_of_birth = EXCLUDED.date_of_birth,
-        time_of_birth = EXCLUDED.time_of_birth,
-        place_of_birth = EXCLUDED.place_of_birth,
-        lat = EXCLUDED.lat,
-        lon = EXCLUDED.lon,
-        timezone = EXCLUDED.timezone,
+        date_of_birth = COALESCE(EXCLUDED.date_of_birth, users.date_of_birth),
+        time_of_birth = COALESCE(EXCLUDED.time_of_birth, users.time_of_birth),
+        place_of_birth = COALESCE(EXCLUDED.place_of_birth, users.place_of_birth),
+        lat = COALESCE(EXCLUDED.lat, users.lat),
+        lon = COALESCE(EXCLUDED.lon, users.lon),
+        timezone = COALESCE(EXCLUDED.timezone, users.timezone),
         consent_given = COALESCE(EXCLUDED.consent_given, users.consent_given),
         last_login_location = COALESCE(EXCLUDED.last_login_location, users.last_login_location),
         last_login_lat = COALESCE(EXCLUDED.last_login_lat, users.last_login_lat),
