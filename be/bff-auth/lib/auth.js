@@ -1,29 +1,41 @@
 const express = require('express');
 const { createRawToken, hashToken, findRefreshTokenByHash, rotateRefreshToken, revokeRefreshToken, storeRefreshToken } = require('./refreshTokens');
 const jwt = require('jsonwebtoken');
-const { config, ErrorCodes } = require('../commons');
+const config = require('../commons/config');
+function _responses() { return require('../commons/lib/responses'); }
+function RC(codeName) { const r = _responses(); return r && r.ErrorCodes && r.ErrorCodes[codeName] ? r.ErrorCodes[codeName] : codeName; }
 const { createRawToken: prCreateRaw, hashToken: prHash, storePasswordReset, findByHash, markUsed } = require('./passwordReset');
 const { sendMail } = require('./emailProvider');
 const { authenticate } = require('./authMiddleware');
 const crypto = require('crypto');
+const { handleCallback, fetchUserInfo } = require('../src/socialLogin');
 
 const router = express.Router();
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 
 const DEFAULT_BCRYPT_ROUNDS = process.env.BCRYPT_ROUNDS ? parseInt(process.env.BCRYPT_ROUNDS, 10) : 10;
 
 // Input validation helpers
 function isValidEmail(email) {
   if (!email || typeof email !== 'string') return false;
-  // Basic email validation - consider using a library like validator.js for production
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  return emailRegex.test(email) && email.length <= 255;
+  // Trim and lowercase for consistency
+  const normalized = email.trim().toLowerCase();
+  if (normalized.length < 3 || normalized.length > 255) return false;
+  // More robust email validation
+  const emailRegex = /^[a-zA-Z0-9.!#$%&'*+\/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
+  return emailRegex.test(normalized);
 }
 
 function isValidPassword(password) {
   if (!password || typeof password !== 'string') return false;
-  // Minimum 8 characters - adjust policy as needed
-  return password.length >= 8 && password.length <= 128;
+  // Minimum 8 characters, maximum 128 to prevent DoS
+  if (password.length < 8 || password.length > 128) return false;
+  // Optional: Add complexity requirements (uncomment if needed)
+  // const hasUpper = /[A-Z]/.test(password);
+  // const hasLower = /[a-z]/.test(password);
+  // const hasDigit = /[0-9]/.test(password);
+  // return hasUpper && hasLower && hasDigit;
+  return true;
 }
 
 // Timing-safe string comparison to prevent timing attacks
@@ -48,9 +60,9 @@ function createAccessToken(payload, opts = {}) {
   if (!secret) {
     throw new Error('ACCESS_TOKEN_SECRET not configured');
   }
-  
+
   const expiresIn = opts.expiresIn || process.env.ACCESS_TOKEN_EXPIRES || '15m';
-  
+
   return jwt.sign(payload, secret, {
     expiresIn,
     algorithm: 'HS256', // Explicitly specify algorithm
@@ -59,32 +71,54 @@ function createAccessToken(payload, opts = {}) {
   });
 }
 
+// Helper: set refresh token cookie
+function setRefreshCookie(res, token) {
+  const cookieOptions = {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    // Allow explicit opt-in for cross-site cookies (ngrok/tunneling).
+    // To enable cross-site cookies (needed when the app is served from a different host),
+    // set environment variable `ALLOW_CROSS_SITE_COOKIES=true` in production environment.
+    sameSite: process.env.ALLOW_CROSS_SITE_COOKIES === 'true' ? 'none' : (process.env.NODE_ENV === 'production' ? 'lax' : 'lax'),
+    path: '/api/v1/auth',
+    maxAge: process.env.REFRESH_TOKEN_TTL_MS ? parseInt(process.env.REFRESH_TOKEN_TTL_MS, 10) : 30 * 24 * 60 * 60 * 1000
+  };
+  res.cookie('refresh_token', token, cookieOptions);
+}
+
 // POST /auth/token
 // Accepts { refresh_token } in body (or cookie in future)
 router.post('/token', async (req, res) => {
   try {
-    const raw = req.body && (req.body.refresh_token || req.body.token);
-    if (!raw || typeof raw !== 'string') {
-      return res.sendError(ErrorCodes.BAD_REQUEST, 'Invalid refresh token');
+    const raw = (req.body && req.body.refresh_token) || (req.cookies && req.cookies.refresh_token);
+    if (!raw || typeof raw !== 'string' || raw.length === 0) {
+      return res.sendError(RC('BAD_REQUEST'), 'Invalid refresh token');
+    }
+    if (raw.length > 500) {
+      return res.sendError(RC('BAD_REQUEST'), 'Refresh token exceeds maximum length');
     }
 
     const db = req.app.get('db');
-    if (!db) return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Database not configured');
+    if (!db) return res.sendError(RC('INTERNAL_SERVER_ERROR'), 'Database not configured');
 
     const tokenHash = hashToken(raw);
     const row = await findRefreshTokenByHash(db, tokenHash, true); // Update last_used_at
-    
+
     // Use consistent error message to prevent token enumeration
     const invalidTokenMsg = 'Invalid or expired refresh token';
-    
-    if (!row) return res.sendError(ErrorCodes.UNAUTHORIZED, invalidTokenMsg);
+
+    if (!row) return res.sendError(RC('UNAUTHORIZED'), invalidTokenMsg);
     if (row.revoked) {
       // Token reuse detected - revoke all tokens for this user as security measure
-      await db.query('UPDATE refresh_tokens SET revoked = true WHERE user_id = $1', [row.user_id]);
-      return res.sendError(ErrorCodes.UNAUTHORIZED, invalidTokenMsg);
+      try {
+        await db.query('UPDATE refresh_tokens SET revoked = true, updated_at = now() WHERE user_id = $1 AND revoked = false', [row.user_id]);
+      } catch (revokeErr) {
+        console.error('Failed to revoke tokens:', revokeErr);
+      }
+      return res.sendError(RC('UNAUTHORIZED'), invalidTokenMsg);
     }
     if (new Date(row.expires_at) < new Date()) {
-      return res.sendError(ErrorCodes.UNAUTHORIZED, invalidTokenMsg);
+      return res.sendError(RC('UNAUTHORIZED'), invalidTokenMsg);
     }
 
     // Detect potential token reuse (same token used within suspicious timeframe)
@@ -92,7 +126,7 @@ router.post('/token', async (req, res) => {
       const timeSinceLastUse = Date.now() - new Date(row.last_used_at).getTime();
       if (timeSinceLastUse < 1000) { // Less than 1 second - likely replay attack
         await db.query('UPDATE refresh_tokens SET revoked = true WHERE user_id = $1', [row.user_id]);
-        return res.sendError(ErrorCodes.UNAUTHORIZED, invalidTokenMsg);
+          return res.sendError(RC('UNAUTHORIZED'), invalidTokenMsg);
       }
     }
 
@@ -106,10 +140,12 @@ router.post('/token', async (req, res) => {
     // Issue access token (JWT) with short expiry
     const accessToken = createAccessToken({ sub: row.user_id });
 
-    return res.sendSuccess({ access_token: accessToken, token_type: 'bearer', expires_in: 15 * 60, refresh_token: newRaw });
+    setRefreshCookie(res, newRaw);
+
+    return res.sendSuccess({ access_token: accessToken, token_type: 'bearer', expires_in: 15 * 60 });
   } catch (err) {
     console.error('Token rotation error:', err);
-    return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Authentication failed');
+      return res.sendError(_responses().ErrorCodes.INTERNAL_SERVER_ERROR, 'Authentication failed');
   }
 });
 
@@ -117,20 +153,28 @@ router.post('/token', async (req, res) => {
 // Accepts { refresh_token } to revoke
 router.post('/logout', async (req, res) => {
   try {
-    const raw = req.body && req.body.refresh_token;
-    if (!raw) return res.sendError(ErrorCodes.BAD_REQUEST, 'Missing refresh token');
+    const raw = (req.body && req.body.refresh_token) || (req.cookies && req.cookies.refresh_token);
+    if (!raw || typeof raw !== 'string') {
+      return res.sendError(RC('BAD_REQUEST'), 'Missing refresh token');
+    }
 
     const db = req.app.get('db');
-    if (!db) return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Database not configured');
+    if (!db) return res.sendError(RC('INTERNAL_SERVER_ERROR'), 'Database not configured');
 
     const tokenHash = hashToken(raw);
     const row = await findRefreshTokenByHash(db, tokenHash);
-    if (!row) return res.sendSuccess({ revoked: false });
+    if (!row) {
+      // Clear cookie anyway
+      res.clearCookie('refresh_token', { path: '/api/v1/auth' });
+      return res.sendSuccess({ revoked: false });
+    }
 
     await revokeRefreshToken(db, row.id);
+    res.clearCookie('refresh_token', { path: '/api/v1/auth' });
     return res.sendSuccess({ revoked: true });
   } catch (err) {
-    return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, err.message);
+    console.error('Logout error:', err?.message || err);
+    return res.sendError(RC('INTERNAL_SERVER_ERROR'), 'Logout failed');
   }
 });
 
@@ -139,29 +183,30 @@ router.post('/logout', async (req, res) => {
 router.post('/register', async (req, res) => {
   try {
     const { email, password, name } = req.body || {};
-    
+
     // Validate email
     if (!isValidEmail(email)) {
-      return res.sendError(ErrorCodes.VALIDATION_ERROR, 'Invalid email format');
+        return res.sendError(_responses().ErrorCodes.VALIDATION_ERROR, 'Invalid email format');
     }
-    
+
     // Validate password strength
     if (!isValidPassword(password)) {
-      return res.sendError(ErrorCodes.VALIDATION_ERROR, 'Password must be at least 8 characters');
+        return res.sendError(_responses().ErrorCodes.VALIDATION_ERROR, 'Password must be at least 8 characters');
     }
-    
+
     // Validate name if provided
     if (name && (typeof name !== 'string' || name.length > 100)) {
-      return res.sendError(ErrorCodes.VALIDATION_ERROR, 'Name must be less than 100 characters');
+      return res.sendError(RC('VALIDATION_ERROR'), 'Name must be less than 100 characters');
     }
 
     const db = req.app.get('db');
-    if (!db) return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Database not configured');
+    if (!db) return res.sendError(RC('INTERNAL_SERVER_ERROR'), 'Database not configured');
 
-    // Check for existing user
-    const existing = await db.query('SELECT id FROM users WHERE lower(email) = lower($1) LIMIT 1', [email]);
+    // Check for existing user (normalize email)
+    const normalizedEmail = email.toLowerCase().trim();
+    const existing = await db.query('SELECT id FROM users WHERE lower(email) = $1 LIMIT 1', [normalizedEmail]);
     if (existing.rowCount > 0) {
-      return res.sendError(ErrorCodes.CONFLICT, 'Email already registered');
+      return res.sendError(RC('CONFLICT'), 'Email already registered');
     }
 
     const passwordHash = await bcrypt.hash(password, DEFAULT_BCRYPT_ROUNDS);
@@ -172,11 +217,13 @@ router.post('/register', async (req, res) => {
     // Create refresh token
     const { raw: refreshRaw } = await createAndStoreRefreshForUser(db, userId);
 
+    setRefreshCookie(res, refreshRaw);
+
     const accessToken = createAccessToken({ sub: userId });
-    return res.sendSuccess({ user_id: userId, access_token: accessToken, refresh_token: refreshRaw });
+    return res.sendSuccess({ user_id: userId, access_token: accessToken });
   } catch (err) {
     console.error('Registration error:', err);
-    return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Registration failed');
+       return res.sendError(_responses().ErrorCodes.INTERNAL_SERVER_ERROR, 'Registration failed');
   }
 });
 
@@ -186,41 +233,43 @@ router.post('/register', async (req, res) => {
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body || {};
-    
+
     // Consistent error message to prevent user enumeration
     const invalidCredsMsg = 'Invalid email or password';
-    
+
     if (!isValidEmail(email) || !password) {
-      return res.sendError(ErrorCodes.UNAUTHORIZED, invalidCredsMsg);
+        return res.sendError(RC('UNAUTHORIZED'), invalidCredsMsg);
     }
 
     const db = req.app.get('db');
-    if (!db) return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Database not configured');
+      if (!db) return res.sendError(_responses().ErrorCodes.INTERNAL_SERVER_ERROR, 'Database not configured');
 
     const userRes = await db.query('SELECT id, password_hash FROM users WHERE lower(email) = lower($1) LIMIT 1', [email]);
-    
+
     // Always perform bcrypt comparison even if user not found (timing attack prevention)
     const user = userRes.rows[0];
     const hashToCompare = user?.password_hash || '$2b$10$invalidhashfortimingatttackprevention';
     const ok = await bcrypt.compare(password, hashToCompare);
-    
+
     if (!user || !ok) {
-      return res.sendError(ErrorCodes.UNAUTHORIZED, invalidCredsMsg);
+        return res.sendError(RC('UNAUTHORIZED'), invalidCredsMsg);
     }
 
     // Create refresh token
     const { raw: refreshRaw } = await createAndStoreRefreshForUser(db, user.id);
     const accessToken = createAccessToken({ sub: user.id });
-    
+
+    setRefreshCookie(res, refreshRaw);
+
     // Update last_login timestamp (non-blocking)
     db.query('UPDATE users SET last_login = now() WHERE id = $1', [user.id]).catch(err => {
       console.error('Failed to update last_login:', err);
     });
 
-    return res.sendSuccess({ user_id: user.id, access_token: accessToken, refresh_token: refreshRaw });
+    return res.sendSuccess({ user_id: user.id, access_token: accessToken });
   } catch (err) {
     console.error('Login error:', err);
-    return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Authentication failed');
+      return res.sendError(_responses().ErrorCodes.INTERNAL_SERVER_ERROR, 'Authentication failed');
   }
 });
 
@@ -230,7 +279,7 @@ router.post('/login', async (req, res) => {
 router.post('/request-password-reset', async (req, res) => {
   try {
     const { email } = req.body || {};
-    
+
     if (!isValidEmail(email)) {
       // Still return success to prevent email enumeration
       return res.sendSuccess({ requested: true });
@@ -246,7 +295,7 @@ router.post('/request-password-reset', async (req, res) => {
     }
 
     const user = userRes.rows[0];
-    
+
     // Check for recent reset requests to prevent spam
     const recentReset = await db.query(
       'SELECT id FROM password_resets WHERE user_id = $1 AND created_at > now() - interval \'5 minutes\' LIMIT 1',
@@ -256,14 +305,14 @@ router.post('/request-password-reset', async (req, res) => {
       // Silently succeed but don't send another email
       return res.sendSuccess({ requested: true });
     }
-    
+
     const raw = prCreateRaw();
     const tokenHash = prHash(raw);
     const expiresAt = new Date(Date.now() + (process.env.PASSWORD_RESET_TTL_MS ? parseInt(process.env.PASSWORD_RESET_TTL_MS, 10) : 1000 * 60 * 60));
     await storePasswordReset(db, { userId: user.id, tokenHash, expiresAt });
 
     const resetUrl = `${process.env.FRONTEND_BASE || ''}/reset-password?token=${encodeURIComponent(raw)}`;
-    
+
     // Send email asynchronously (non-blocking)
     sendMail({
       to: user.email,
@@ -287,15 +336,15 @@ router.post('/request-password-reset', async (req, res) => {
 router.post('/reset-password', async (req, res) => {
   try {
     const { token, new_password } = req.body || {};
-    
+
     const invalidTokenMsg = 'Invalid or expired reset token';
-    
+
     if (!token || typeof token !== 'string') {
-      return res.sendError(ErrorCodes.BAD_REQUEST, invalidTokenMsg);
+      return res.sendError(RC('BAD_REQUEST'), invalidTokenMsg);
     }
-    
+
     if (!isValidPassword(new_password)) {
-      return res.sendError(ErrorCodes.VALIDATION_ERROR, 'Password must be at least 8 characters');
+      return res.sendError(RC('VALIDATION_ERROR'), 'Password must be at least 8 characters');
     }
 
     const db = req.app.get('db');
@@ -303,7 +352,7 @@ router.post('/reset-password', async (req, res) => {
 
     const tokenHash = prHash(token);
     const row = await findByHash(db, tokenHash);
-    
+
     if (!row || row.used || new Date(row.expires_at) < new Date()) {
       return res.sendError(ErrorCodes.UNAUTHORIZED, invalidTokenMsg);
     }
@@ -315,10 +364,10 @@ router.post('/reset-password', async (req, res) => {
       const passwordHash = await bcrypt.hash(new_password, DEFAULT_BCRYPT_ROUNDS);
       await db.query('UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2', [passwordHash, row.user_id]);
       await markUsed(db, row.id);
-      
+
       // Revoke all existing refresh tokens for security
       await db.query('UPDATE refresh_tokens SET revoked = true WHERE user_id = $1', [row.user_id]);
-      
+
       await db.query('COMMIT');
     } catch (err) {
       await db.query('ROLLBACK');
@@ -406,12 +455,16 @@ router.get('/me', async (req, res) => {
     if (auth.startsWith('Bearer ')) {
       const token = auth.slice(7);
       try {
-        const secret = process.env.ACCESS_TOKEN_SECRET || 'dev-secret';
+        const secret = process.env.ACCESS_TOKEN_SECRET;
+        if (!secret) {
+          logger.error({ msg: 'ACCESS_TOKEN_SECRET not configured' });
+          return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Authentication not configured');
+        }
         const payload = jwt.verify(token, secret);
         const userId = payload.sub;
         const userRes = await db.query('SELECT id, email, name, avatar_url, created_at, updated_at, last_login FROM users WHERE id = $1 LIMIT 1', [userId]);
         if (userRes.rowCount === 0) return res.sendError(ErrorCodes.NOT_FOUND, 'User not found');
-          return res.sendSuccess({ user: userRes.rows[0] });
+        return res.sendSuccess({ user: userRes.rows[0] });
       } catch (err) {
         return res.sendError(ErrorCodes.UNAUTHORIZED, 'Invalid access token');
       }
@@ -432,4 +485,71 @@ router.get('/me', async (req, res) => {
   }
 });
 
+// POST /auth/oauth/callback
+// Body: { provider, code, code_verifier, redirect_uri }
+router.post('/oauth/callback', async (req, res) => {
+  try {
+    const { provider, code, code_verifier: codeVerifier, redirect_uri: redirectUri } = req.body || {};
+    if (!provider || !code) return res.sendError(RC('BAD_REQUEST'), 'provider and code required');
+
+    const db = req.app.get('db');
+    if (!db) return res.sendError(RC('INTERNAL_SERVER_ERROR'), 'Database not configured');
+
+    // Exchange code for tokens
+    const tokens = await handleCallback({ code, provider, codeVerifier, redirectUri });
+
+    // Fetch user info
+    const userInfo = await fetchUserInfo(provider, tokens) || {};
+    const providerId = userInfo.sub || userInfo.id || userInfo.user_id || userInfo.sub_jwk;
+    const email = userInfo.email || null;
+    const name = userInfo.name || userInfo.displayName || null;
+    const avatar = userInfo.picture || userInfo.avatar_url || null;
+
+    if (!providerId) return res.sendError(RC('BAD_REQUEST'), 'Unable to determine provider user id');
+
+    // Find existing oauth account
+    const existing = await db.query('SELECT user_id FROM oauth_accounts WHERE provider = $1 AND provider_id = $2 LIMIT 1', [provider, providerId]);
+    let userId;
+
+    await db.query('BEGIN');
+    try {
+      if (existing.rowCount > 0) {
+        userId = existing.rows[0].user_id;
+      } else {
+        // If a local user exists with same email, link to that user. Otherwise create new user.
+        if (email) {
+          const userRes = await db.query('SELECT id FROM users WHERE lower(email) = lower($1) LIMIT 1', [email]);
+          if (userRes.rowCount > 0) {
+            userId = userRes.rows[0].id;
+          }
+        }
+
+        if (!userId) {
+          const insert = await db.query('INSERT INTO users (email, name, avatar_url, created_at, updated_at) VALUES ($1, $2, $3, now(), now()) RETURNING id', [email, name, avatar]);
+          userId = insert.rows[0].id;
+        }
+
+        // Insert oauth_accounts link
+        await db.query('INSERT INTO oauth_accounts (user_id, provider, provider_id, token_meta, created_at) VALUES ($1, $2, $3, $4, now())', [userId, provider, providerId, tokens ? JSON.stringify(tokens) : null]);
+      }
+
+      // Create refresh and access tokens
+      const { raw: refreshRaw } = await createAndStoreRefreshForUser(db, userId);
+      const accessToken = createAccessToken({ sub: userId });
+
+      await db.query('COMMIT');
+
+      setRefreshCookie(res, refreshRaw);
+      return res.sendSuccess({ user_id: userId, access_token: accessToken });
+    } catch (err) {
+      await db.query('ROLLBACK');
+      throw err;
+    }
+  } catch (err) {
+    console.error('OAuth callback error:', err);
+    return res.sendError(RC('INTERNAL_SERVER_ERROR'), 'OAuth callback failed');
+  }
+});
+
 module.exports = router;
+

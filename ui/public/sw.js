@@ -3,7 +3,7 @@
  * Advanced caching strategies for optimal offline experience
  */
 
-const VERSION = '1.0.0';
+const VERSION = '1.0.3';
 const CACHE_STATIC = `niyati-static-v${VERSION}`;
 const CACHE_DYNAMIC = `niyati-dynamic-v${VERSION}`;
 const CACHE_API = `niyati-api-v${VERSION}`;
@@ -93,7 +93,7 @@ self.addEventListener('fetch', (event) => {
 
   // Handle navigation requests (HTML pages)
   if (request.mode === 'navigate') {
-    event.respondWith(handleNavigationRequest(request));
+    event.respondWith(handleNavigationRequest(request, event));
     return;
   }
 
@@ -121,12 +121,23 @@ self.addEventListener('fetch', (event) => {
 
 /**
  * Network-first strategy for navigation (HTML) requests
+ * @param {Request} request
+ * @param {FetchEvent} [event] - optional, to access preloadResponse
  */
-async function handleNavigationRequest(request) {
+async function handleNavigationRequest(request, event) {
   try {
-    const preloadResponse = await self.registration?.navigationPreload;
-    if (preloadResponse) {
-      return preloadResponse;
+    // Try navigation preload first if available
+    let preloadResponse;
+    if (event && event.preloadResponse) {
+      try {
+        preloadResponse = await event.preloadResponse;
+        if (preloadResponse && preloadResponse.ok) {
+          return preloadResponse;
+        }
+      } catch (preloadError) {
+        // Preload failed, fall through to network fetch
+        console.log('[SW] Preload failed, trying network:', preloadError);
+      }
     }
 
     const networkResponse = await fetch(request);
@@ -147,7 +158,8 @@ async function handleNavigationRequest(request) {
     }
 
     // Fallback to offline page
-    return caches.match(OFFLINE_URL);
+    const offlineResponse = await caches.match(OFFLINE_URL);
+    return offlineResponse || new Response('Offline', { status: 503, statusText: 'Service Unavailable' });
   }
 }
 

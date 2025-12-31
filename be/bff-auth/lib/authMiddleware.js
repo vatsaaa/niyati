@@ -1,5 +1,7 @@
 const jwt = require('jsonwebtoken');
-const { config, ErrorCodes } = require('../commons');
+const config = require('../commons/config');
+function _responses() { return require('../commons/lib/responses'); }
+function RC(codeName) { const r = _responses(); return r && r.ErrorCodes && r.ErrorCodes[codeName] ? r.ErrorCodes[codeName] : codeName; }
 
 // Validate critical auth environment variables on startup
 function validateAuthConfig() {
@@ -31,12 +33,12 @@ function authenticate(req, res, next) {
   const auth = req.headers.authorization || '';
   let token;
   if (auth.startsWith('Bearer ')) token = auth.slice(7);
-  if (!token) return res.sendError(ErrorCodes.UNAUTHORIZED, 'Authentication required');
+  if (!token) return res.sendError(RC('UNAUTHORIZED'), 'Authentication required');
 
   const secret = process.env.ACCESS_TOKEN_SECRET;
   if (!secret) {
     console.error('ACCESS_TOKEN_SECRET not configured');
-    return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Server configuration error');
+    return res.sendError(RC('INTERNAL_SERVER_ERROR'), 'Server configuration error');
   }
 
   try {
@@ -47,7 +49,7 @@ function authenticate(req, res, next) {
     
     // Validate required claims
     if (!payload.sub) {
-      return res.sendError(ErrorCodes.UNAUTHORIZED, 'Invalid token claims');
+      return res.sendError(RC('UNAUTHORIZED'), 'Invalid token claims');
     }
     
     req.user = { id: payload.sub, ...payload };
@@ -55,17 +57,17 @@ function authenticate(req, res, next) {
   } catch (err) {
     // Log specific error types for debugging without exposing to client
     if (err.name === 'TokenExpiredError') {
-      return res.sendError(ErrorCodes.UNAUTHORIZED, 'Token expired');
+      return res.sendError(RC('UNAUTHORIZED'), 'Token expired');
     }
-    return res.sendError(ErrorCodes.UNAUTHORIZED, 'Invalid access token');
+    return res.sendError(RC('UNAUTHORIZED'), 'Invalid access token');
   }
 }
 
 function requireRole(role) {
   return (req, res, next) => {
-    if (!req.user) return res.sendError(ErrorCodes.UNAUTHORIZED, 'Missing authentication');
+    if (!req.user) return res.sendError(RC('UNAUTHORIZED'), 'Missing authentication');
     const roles = req.user.roles || [];
-    if (!roles.includes(role)) return res.sendError(ErrorCodes.FORBIDDEN, 'Insufficient role');
+    if (!roles.includes(role)) return res.sendError(RC('FORBIDDEN'), 'Insufficient role');
     return next();
   };
 }

@@ -1,7 +1,10 @@
 const axios = require('axios');
 const NodeCache = require('node-cache');
 const crypto = require('crypto');
-const { logger, sanitize } = require('../commons');
+const { logger, sanitize, config } = require('../commons');
+
+// Centralized astrology API URL from config (can be overridden via ASTRO_API_URL env var)
+const ASTRO_API_BASE_URL = config.astrology.baseUrl;
 
 const cache = new NodeCache({ stdTTL: 60 * 60 * 24, checkperiod: 120 }); // 24h cache
 
@@ -64,7 +67,7 @@ function logError(tag, payload) {
  * @private
  */
 async function callProvider(profile) {
-  const configured = process.env.ASTRO_API_URL || 'https://json.freeastrologyapi.com';
+  const configured = ASTRO_API_BASE_URL;
   const key = process.env.ASTRO_API_KEY;
   if (!configured) throw new Error('no_provider_configured');
 
@@ -229,7 +232,7 @@ async function compute(profile) {
   const cached = cache.get(cacheKey);
   if (cached) return cached;
 
-  const url = process.env.ASTRO_API_URL;
+  const url = ASTRO_API_BASE_URL;
   if (!url) {
     const mock = makeMockResponse(profile);
     cache.set(cacheKey, mock);
@@ -278,7 +281,7 @@ module.exports = { compute, _cache: cache };
  */
 async function geoDetails(query) {
   // query can be { q: 'Pune, India' } or { lat, lon } or a placeOfBirth object
-  const configured = process.env.ASTRO_API_URL || 'https://json.freeastrologyapi.com';
+  const configured = ASTRO_API_BASE_URL;
   const key = process.env.ASTRO_API_KEY;
   const base = configured.replace(/\/$/, '');
   if (!configured) {
@@ -427,7 +430,7 @@ async function planets(payloadOrProfile) {
         { name: 'Moon', sign: 'MockMoon', degree: (baseDeg + 30) % 360 },
         { name: 'Mercury', sign: 'MockMercury', degree: (baseDeg + 60) % 360 }
       ];
-      try { cache.set(makeCacheKey(payloadOrProfile || {}), mock, 60 * 60); } catch (e) {}
+      try { cache.set(makeCacheKey(payloadOrProfile || {}), mock, 60 * 60); } catch (e) { }
       return mock;
     } catch (e) {
       // bubble validation errors so tests that expect rejection receive them
@@ -436,7 +439,7 @@ async function planets(payloadOrProfile) {
   }
   // generate or accept a request-level correlation id to include in logs
   const _reqId = (payloadOrProfile && payloadOrProfile._reqId) || genReqId();
-  const configured = process.env.ASTRO_API_URL || 'https://json.freeastrologyapi.com';
+  const configured = ASTRO_API_BASE_URL;
   const key = process.env.ASTRO_API_KEY;
   const base = configured.replace(/\/$/, '');
   if (!configured) throw new Error('no_provider_configured');
@@ -444,68 +447,67 @@ async function planets(payloadOrProfile) {
   const headers = { 'Content-Type': 'application/json' };
   if (key) headers['x-api-key'] = key;
 
-  // If a full payload is provided, use it. Otherwise try to build from profile-like object.
+  // Normalize the input payload
   let payload = payloadOrProfile || {};
   if (payload && payload.profile) payload = payload.profile;
 
-  // Accept several profile shapes: { dob, timeOfBirth, placeOfBirth } or { dob, time, place }
-  const hasDob = !!(payload && payload.dob);
-  const hasTime = !!(payload && (payload.timeOfBirth || payload.time));
-  const hasPlace = !!(payload && (payload.placeOfBirth || payload.place));
+  // Check if payload is already in numeric format (has year, latitude, longitude)
+  const hasNumericFormat = !!(payload && payload.year && (payload.latitude !== undefined || payload.lat !== undefined));
 
-  if (hasDob && hasPlace && (hasTime || payload.hours !== undefined)) {
-    const [year, month, date] = (payload.dob || '').split('-').map(s => parseInt(s, 10));
-    const timeStr = payload.timeOfBirth || payload.time || '00:00:00';
-    const parts = ('' + timeStr).split(':').map(s => parseInt(s, 10));
-    const hours = parts[0] || 0, minutes = parts[1] || 0, seconds = parts[2] || 0;
-    const place = payload.placeOfBirth || payload.place || {};
-    const latitude = (place && (place.lat || place.latitude)) || 0;
-    const longitude = (place && (place.lng || place.lon || place.longitude)) || 0;
-    const countryCode = (place && place.countryCode) || (place && place.country) || undefined;
-    const timezone = parseFloat(process.env.ASTRO_DEFAULT_TIMEZONE || (countryCode === 'IN' ? '5.5' : '0'));
-    payload = {
-      year: year || new Date().getUTCFullYear(),
-      month: month || (new Date().getUTCMonth() + 1),
-      date: date || new Date().getUTCDate(),
-      hours,
-      minutes,
-      seconds,
-      latitude,
-      longitude,
-      timezone,
-      settings: payload.settings || { observation_point: 'topocentric', ayanamsha: 'lahiri' }
-    };
+  // If already numeric, ensure we use standard field names (latitude/longitude, not lat/lon)
+  if (hasNumericFormat) {
+    // Normalize field names if needed
+    if (payload.lat !== undefined && payload.latitude === undefined) {
+      payload.latitude = payload.lat;
+      delete payload.lat;
+    }
+    if (payload.lon !== undefined && payload.longitude === undefined) {
+      payload.longitude = payload.lon;
+      delete payload.lon;
+    }
+    if (payload.lng !== undefined && payload.longitude === undefined) {
+      payload.longitude = payload.lng;
+      delete payload.lng;
+    }
+    logDebug('planets:numeric_format_detected', { reqId: _reqId, payload });
+  } else {
+    // Transform from profile format to numeric format
+    const hasDob = !!(payload && payload.dob);
+    const hasTime = !!(payload && (payload.timeOfBirth || payload.time));
+    const hasPlace = !!(payload && (payload.placeOfBirth || payload.place));
+
+    if (hasDob && hasPlace && (hasTime || payload.hours !== undefined)) {
+      const [year, month, date] = (payload.dob || '').split('-').map(s => parseInt(s, 10));
+      const timeStr = payload.timeOfBirth || payload.time || '00:00:00';
+      const parts = ('' + timeStr).split(':').map(s => parseInt(s, 10));
+      const hours = parts[0] || 0, minutes = parts[1] || 0, seconds = parts[2] || 0;
+      const place = payload.placeOfBirth || payload.place || {};
+      const latitude = (place && (place.latitude || place.lat)) || 0;
+      const longitude = (place && (place.longitude || place.lon || place.lng)) || 0;
+      const countryCode = (place && place.countryCode) || (place && place.country) || undefined;
+      const timezone = parseFloat(process.env.ASTRO_DEFAULT_TIMEZONE || (countryCode === 'IN' ? '5.5' : '0'));
+      payload = {
+        year: year || new Date().getUTCFullYear(),
+        month: month || (new Date().getUTCMonth() + 1),
+        date: date || new Date().getUTCDate(),
+        hours,
+        minutes,
+        seconds,
+        latitude,
+        longitude,
+        timezone,
+        settings: payload.settings || { observation_point: 'topocentric', ayanamsha: 'lahiri' }
+      };
+      logDebug('planets:profile_transformed', { reqId: _reqId, payload });
+    }
   }
 
   const candidates = ['/planets', '/v1/planets', '/planets/extended', '/v1/planets/extended'];
   let lastErr = null;
 
-  // Prepare alternate payload shapes: numeric/extended (already in `payload`) and a simple user-style payload
-  const simplePayload = (function buildSimple() {
-    // If original input looked like profile (payloadOrProfile), try to reconstruct a simple payload
-    try {
-      if (payloadOrProfile && payloadOrProfile.name && payloadOrProfile.dob) {
-        return {
-          name: payloadOrProfile.name,
-          dob: payloadOrProfile.dob,
-          time: payloadOrProfile.timeOfBirth || payloadOrProfile.time || payloadOrProfile.time_of_birth || undefined,
-          place: payloadOrProfile.placeOfBirth || payloadOrProfile.place || undefined
-        };
-      }
-      // If we have numeric year/month/date/hours, convert to dob/time/place
-      if (payload && payload.year && payload.month && payload.date) {
-        const dob = `${payload.year.toString().padStart(4,'0')}-${(payload.month||0).toString().padStart(2,'0')}-${(payload.date||0).toString().padStart(2,'0')}`;
-        const time = `${(payload.hours||0).toString().padStart(2,'0')}:${(payload.minutes||0).toString().padStart(2,'0')}:${(payload.seconds||0).toString().padStart(2,'0')}`;
-        return { dob, time, place: { lat: payload.latitude, lng: payload.longitude } };
-      }
-    } catch (e) {
-      // fallthrough
-    }
-    return null;
-  })();
-
+  // Only try the numeric payload - no need for multiple variants
   const variants = [payload];
-  if (simplePayload) variants.push(simplePayload);
+
   // Simple in-memory caching to reduce repeated provider calls for identical inputs
   try {
     const cacheKeyPlanets = makeCacheKey(payload || payloadOrProfile || {});
@@ -518,9 +520,9 @@ async function planets(payloadOrProfile) {
     // ignore cache failures
   }
 
-  // Retry/backoff configuration
-  const MAX_RETRIES = parseInt(process.env.ASTRO_RETRY_MAX || '2', 10); // number of retry attempts on 429/5xx
-  const RETRY_BASE_MS = parseInt(process.env.ASTRO_RETRY_BASE_MS || '500', 10);
+  // Retry/backoff configuration from centralized config
+  const MAX_RETRIES = config.astrology.retryMax;
+  const RETRY_BASE_MS = config.astrology.retryBaseMs;
   const jitter = (ms) => Math.floor(ms * (0.5 + Math.random() * 0.5));
   const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
@@ -621,7 +623,7 @@ module.exports = { compute, _cache: cache, geoDetails, planets };
  * });
  */
 async function navamsa(payloadOrProfile) {
-  const configured = process.env.ASTRO_API_URL || 'https://json.freeastrologyapi.com';
+  const configured = ASTRO_API_BASE_URL;
   const key = process.env.ASTRO_API_KEY;
   const base = configured.replace(/\/$/, '');
   if (!configured) throw new Error('no_provider_configured');
@@ -729,7 +731,7 @@ async function divisional(n, payloadOrProfile) {
     err.code = 'invalid_divisional';
     throw err;
   }
-  const configured = process.env.ASTRO_API_URL || 'https://json.freeastrologyapi.com';
+  const configured = ASTRO_API_BASE_URL;
   const key = process.env.ASTRO_API_KEY;
   const base = configured.replace(/\/$/, '');
   if (!configured) throw new Error('no_provider_configured');
@@ -774,7 +776,7 @@ async function divisional(n, payloadOrProfile) {
   // Try the configured base, then fallback bases commonly used by providers
   const fallbackBases = [
     base,
-    'https://json.freeastrologyapi.com',
+    ASTRO_API_BASE_URL,
     'https://json.apiastro.com'
   ].filter((b, idx, arr) => b && arr.indexOf(b) === idx);
 
@@ -790,20 +792,20 @@ async function divisional(n, payloadOrProfile) {
             const r2 = await axios.post(retryUrl, payload, { headers, timeout: 12000, validateStatus: null });
             if (r2.status >= 200 && r2.status < 300) return { status: 'ok', source: retryUrl, data: r2.data };
             lastErr = r2;
-              logger.warn(sanitize({ msg: 'divisional retry non-2xx', retryUrl, status: r2.status, data: r2.data }));
+            logger.warn(sanitize({ msg: 'divisional retry non-2xx', retryUrl, status: r2.status, data: r2.data }));
           } catch (err2) {
             lastErr = err2;
-              if (err2 && err2.response) logger.warn(sanitize({ msg: 'divisional retry failed', url, status: err2.response.status, data: err2.response.data }));
-              else logger.warn(sanitize({ msg: 'divisional retry failed', url, message: err2 && err2.message }));
+            if (err2 && err2.response) logger.warn(sanitize({ msg: 'divisional retry failed', url, status: err2.response.status, data: err2.response.data }));
+            else logger.warn(sanitize({ msg: 'divisional retry failed', url, message: err2 && err2.message }));
           }
         } else {
           lastErr = resp;
-            logger.warn(sanitize({ msg: 'divisional candidate non-2xx', url, status: resp.status, data: resp.data }));
+          logger.warn(sanitize({ msg: 'divisional candidate non-2xx', url, status: resp.status, data: resp.data }));
         }
       } catch (err) {
         lastErr = err;
-          if (err && err.response) logger.warn(sanitize({ msg: 'divisional request failed', url, status: err.response.status, data: err.response.data }));
-          else logger.warn(sanitize({ msg: 'divisional request failed', url, message: err && err.message }));
+        if (err && err.response) logger.warn(sanitize({ msg: 'divisional request failed', url, status: err.response.status, data: err.response.data }));
+        else logger.warn(sanitize({ msg: 'divisional request failed', url, message: err && err.message }));
       }
     }
   }
@@ -835,7 +837,7 @@ async function divisional(n, payloadOrProfile) {
  * // chart.data contains SVG code for rendering
  */
 async function horoscopeSvg(payloadOrProfile) {
-  const configured = process.env.ASTRO_API_URL || 'https://json.freeastrologyapi.com';
+  const configured = ASTRO_API_BASE_URL;
   const key = process.env.ASTRO_API_KEY;
   const base = configured.replace(/\/$/, '');
   if (!configured) throw new Error('no_provider_configured');
@@ -921,10 +923,10 @@ async function horoscopeSvg(payloadOrProfile) {
             }
           }
         }
-        } else {
-          lastErr = resp;
-          logger.warn(sanitize({ msg: 'horoscopeSvg candidate non-2xx', url, status: resp.status, data: resp.data }));
-        }
+      } else {
+        lastErr = resp;
+        logger.warn(sanitize({ msg: 'horoscopeSvg candidate non-2xx', url, status: resp.status, data: resp.data }));
+      }
     } catch (err) {
       lastErr = err;
       if (err && err.response) logger.warn(sanitize({ msg: 'horoscopeSvg request failed', url, status: err.response.status, data: err.response.data }));

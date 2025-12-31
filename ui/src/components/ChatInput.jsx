@@ -6,7 +6,8 @@ const ChatInput = ({
   onChange, 
   onSubmit, 
   isLoading,
-  placeholder = "Ask about your birth chart, compatibility, or life path..." 
+  placeholder = "Ask about your birth chart, compatibility, or life path...",
+  inputRef
 }) => {
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -14,15 +15,25 @@ const ChatInput = ({
     onSubmit(e);
   };
 
+  // Intercept Enter key: Enter (without Shift) sends, Shift+Enter inserts newline
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      if (!isLoading && value.trim()) onSubmit(e);
+    }
+  };
+
   return (
     <div className="p-4 bg-slate-900/90 border-t border-slate-700 rounded-b-2xl">
       <form onSubmit={handleSubmit} className="flex gap-2">
-        <input
-          type="text"
+        <textarea
+          ref={inputRef}
+          rows={1}
           value={value}
           onChange={(e) => onChange(e.target.value)}
+          onKeyDown={handleKeyDown}
           placeholder={placeholder}
-          className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-slate-200 focus:outline-none focus:border-purple-500 transition-colors"
+          className="flex-1 resize-none bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-slate-200 focus:outline-none focus:border-purple-500 transition-colors leading-5"
           disabled={isLoading}
         />
         <button

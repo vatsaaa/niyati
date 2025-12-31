@@ -5,34 +5,106 @@ const cors = require('cors');
 const helmet = require('helmet');
 const compression = require('compression');
 const dotenv = require('dotenv');
+const { Pool } = require('pg');
+const fs = require('fs');
 
 // Load env from repo root .env by default
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
-// Use shared commons from be/commons
-const commons = require('../commons');
-const { logger, sanitize, attachResponseHelpers } = commons;
+// Use specific commons utilities to avoid circular re-export imports
+const { logger } = require('../commons/lib/logger');
+const { attachResponseHelpers } = require('../commons/lib/responses');
+const { sanitize } = require('../commons/lib/sanitize');
 
 // import the auth router from local copy
 const authRouter = require('../lib/auth');
+const usersRouter = require('../lib/users');
 const telemetryRouter = require('../lib/telemetry');
 
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
 
 app.use(helmet());
-app.use(cors());
+// Configure CORS to allow specific origins and credentials for cross-site tunnels (ngrok)
+const allowedOrigins = (process.env.CORS_ALLOWED || '')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+app.use(cors({
+  origin: (origin, cb) => {
+    // Allow non-browser or same-origin requests (no origin)
+    if (!origin) return cb(null, true);
+    if (allowedOrigins.length === 0) return cb(null, true);
+    return allowedOrigins.includes(origin) ? cb(null, true) : cb(new Error('Not allowed by CORS'));
+  },
+  credentials: true
+}));
 app.use(compression());
+app.use(require('cookie-parser')());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: false }));
 
 // Attach response helpers and logger from commons
 app.use(attachResponseHelpers);
 
+// Fail-fast environment validation
+try {
+  // validateEnv is intentionally required from lib to validate early
+  const { validateEnv } = require('../lib/validateEnv');
+  validateEnv();
+} catch (e) {
+  // If validation fails, log and rethrow to stop startup
+  console.error('Environment validation failed during bootstrap:', e && e.message);
+  throw e;
+}
+
+// Database initialization
+if (process.env.DATABASE_URL) {
+  let connectionString = process.env.DATABASE_URL;
+
+  // Handle Docker Secret for password (prod)
+  if (process.env.POSTGRES_PASSWORD_FILE && fs.existsSync(process.env.POSTGRES_PASSWORD_FILE)) {
+    try {
+      const password = fs.readFileSync(process.env.POSTGRES_PASSWORD_FILE, 'utf8').trim();
+      const dbUrl = new URL(connectionString);
+      dbUrl.password = password;
+      connectionString = dbUrl.toString();
+      logger.info({ msg: 'Using database password from secret file' });
+    } catch (e) {
+      logger.warn({ msg: 'Failed to read POSTGRES_PASSWORD_FILE', err: e });
+    }
+  }
+
+  const pool = new Pool({
+    connectionString: connectionString,
+    max: 20, // Maximum pool size
+    idleTimeoutMillis: 30000, // Close idle clients after 30s
+    connectionTimeoutMillis: 10000, // Return error after 10s if connection cannot be established
+  });
+  
+  pool.on('error', (err, client) => {
+    logger.error({ msg: 'Unexpected error on idle client', err: err?.message || err });
+    // Don't exit immediately, log and let the app attempt recovery
+  });
+  
+  // Verify connection on startup
+  pool.query('SELECT 1').then(() => {
+    logger.info({ msg: 'Database pool initialized and verified' });
+  }).catch((err) => {
+    logger.error({ msg: 'Failed to verify database connection', err: err?.message || err });
+    process.exit(1);
+  });
+  
+  app.set('db', pool);
+} else {
+  logger.warn({ msg: 'DATABASE_URL not set, DB features disabled' });
+}
+
 // Mount auth and telemetry routes
 const API_VERSION = process.env.API_VERSION || 'v1';
 const apiRouter = express.Router();
 apiRouter.use('/auth', authRouter);
+apiRouter.use('/users', usersRouter);
 apiRouter.use('/telemetry', telemetryRouter);
 app.use(`/api/${API_VERSION}`, apiRouter);
 
@@ -41,6 +113,24 @@ app.get('/', (req, res) => res.json({ status: 'ok', service: 'bff-auth', version
 // Health endpoint
 app.get('/api/v1/telemetry/health', (req, res) => res.json({ status: 'ok', service: 'bff-auth' }));
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   logger.info({ msg: `BFF Auth listening on http://localhost:${PORT}` });
+});
+
+// Graceful shutdown handler
+process.on('SIGTERM', async () => {
+  logger.info({ msg: 'SIGTERM received, shutting down gracefully' });
+  server.close(async () => {
+    const db = app.get('db');
+    if (db) {
+      await db.end().catch(err => logger.error({ msg: 'Error closing DB pool', err }));
+    }
+    process.exit(0);
+  });
+  
+  // Force shutdown after 30s
+  setTimeout(() => {
+    logger.error({ msg: 'Forced shutdown after timeout' });
+    process.exit(1);
+  }, 30000);
 });

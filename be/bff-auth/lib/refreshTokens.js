@@ -31,13 +31,15 @@ async function findRefreshTokenByHash(db, tokenHash, updateLastUsed = false) {
   const sql = `SELECT id, user_id, token_hash, expires_at, revoked, created_at, last_used_at FROM refresh_tokens WHERE token_hash = $1 LIMIT 1`;
   const res = await db.query(sql, [tokenHash]);
   const row = res.rows[0] || null;
-  
-  // Update last_used_at if requested and token exists
+
+  // If requested, update last_used_at in DB but preserve the original value
   if (row && updateLastUsed) {
+    const originalLastUsed = row.last_used_at || null;
     await db.query('UPDATE refresh_tokens SET last_used_at = now() WHERE id = $1', [row.id]);
-    row.last_used_at = new Date();
+    // Return the original last_used_at so callers can detect suspicious quick re-use
+    row.last_used_at = originalLastUsed;
   }
-  
+
   return row;
 }
 

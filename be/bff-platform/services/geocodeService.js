@@ -70,7 +70,9 @@ async function callMapsCo(path, params = {}, opts = {}) {
       } catch (err) {
         attempt++;
         const status = err && err.response && err.response.status;
-        const isTransient = !err.response || RETRY.TRANSIENT_ERROR_CODES.includes(status);
+        // Treat unknown response errors and common transient HTTP errors as retryable
+        const transientStatusCodes = [429, 502, 503, 504];
+        const isTransient = !err.response || transientStatusCodes.includes(status);
         logger.debug('geocode:request_attempt_failed', sanitize({ url: requestUrl, attempt, status, message: err && err.message }));
         if (!isTransient || attempt > RETRIES) throw err;
         const delay = Math.min(BASE_DELAY_MS * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 100), MAX_DELAY_MS);
@@ -142,8 +144,18 @@ async function search(q, opts = {}) {
     logger.debug('geocode:search_incoming', sanitize({ q, params }));
     const data = await callMapsCo('/search', params, opts);
     if (!Array.isArray(data) || !data.length) return { status: 'error', reason: 'no_results' };
-    const suggestions = (Array.isArray(data) ? data : []).slice(0, params.limit).map(item => mapItemToSuggestion(item));
-    const result = { status: suggestions.length === 1 ? 'ok' : 'ambiguous', source: process.env.GEOCODE_MAPS_BASE || 'geocode.maps.co', suggestions, place: suggestions[0] };
+    
+    // Map to suggestions and sort by importance (highest first)
+    let suggestions = (Array.isArray(data) ? data : []).slice(0, params.limit).map(item => mapItemToSuggestion(item));
+    suggestions = suggestions.sort((a, b) => {
+      const impA = (a.raw && a.raw.importance) || 0;
+      const impB = (b.raw && b.raw.importance) || 0;
+      return impB - impA; // Descending order - most important first
+    });
+    
+    // Best match is the one with highest importance
+    const bestMatch = suggestions[0];
+    const result = { status: suggestions.length === 1 ? 'ok' : 'ambiguous', source: config.geocode.baseUrl, suggestions, place: bestMatch };
     logger.debug('geocode:search_result', sanitize({ q, result }));
     return result;
   } catch (err) {
@@ -179,7 +191,7 @@ async function reverse(lat, lon, opts = {}) {
     const arr = Array.isArray(data) ? data : [data];
     const suggestions = arr.slice(0, params.limit).map(item => mapItemToSuggestion(item));
     logger.debug('geocode:reverse_result', sanitize({ lat, lon, suggestions }));
-    return { status: suggestions.length ? 'ok' : 'error', source: process.env.GEOCODE_MAPS_BASE || 'geocode.maps.co', suggestions, place: suggestions[0] };
+    return { status: suggestions.length ? 'ok' : 'error', source: config.geocode.baseUrl, suggestions, place: suggestions[0] };
   } catch (err) {
     logger.error('geocode:reverse_failed', sanitize({ lat, lon, error: err && err.message }));
     return { status: 'error', reason: 'provider_error' };
@@ -203,7 +215,7 @@ async function lookup(osm_ids, opts = {}) {
     const data = await callMapsCo('/lookup', params, opts);
     const arr = Array.isArray(data) ? data : [data];
     const suggestions = arr.slice(0, params.limit).map(item => mapItemToSuggestion(item));
-    return { status: suggestions.length ? 'ok' : 'error', source: process.env.GEOCODE_MAPS_BASE || 'geocode.maps.co', suggestions, place: suggestions[0] };
+    return { status: suggestions.length ? 'ok' : 'error', source: config.geocode.baseUrl, suggestions, place: suggestions[0] };
   } catch (err) {
     return { status: 'error', reason: 'provider_error' };
   }
@@ -235,7 +247,7 @@ async function structuredSearch(params = {}, opts = {}) {
     const data = await callMapsCo('/search', p, opts);
     const suggestions = (Array.isArray(data) ? data : []).slice(0, p.limit).map(item => mapItemToSuggestion(item));
     logger.debug('geocode:structured_result', sanitize({ params: p, suggestions }));
-    return { status: suggestions.length ? 'ok' : 'error', source: process.env.GEOCODE_MAPS_BASE || 'geocode.maps.co', suggestions, place: suggestions[0] };
+    return { status: suggestions.length ? 'ok' : 'error', source: config.geocode.baseUrl, suggestions, place: suggestions[0] };
   } catch (err) {
     logger.error('geocode:structured_failed', sanitize({ params: p, error: err && err.message }));
     return { status: 'error', reason: 'provider_error' };

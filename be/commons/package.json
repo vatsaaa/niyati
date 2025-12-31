@@ -4,6 +4,9 @@
   "private": true,
   "main": "index.js",
   "description": "Shared utilities and configuration for Niyati BFF services",
+  "scripts": {
+    "test": "jest --config jest.config.cjs --runInBand"
+  },
   "dependencies": {
     "pino": "^8.17.0",
     "express-rate-limit": "^7.1.5",

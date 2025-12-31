@@ -84,3 +84,8 @@ docker-compose.override.yml
 *.log.gz
 
 # Keep lockfiles in source control (do not ignore package-lock.json/yarn.lock by default)
+
+# Playwright (UI)
+/ui/test-results/
+/ui/playwright-report/
+

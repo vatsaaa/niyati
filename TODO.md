@@ -1,359 +1,82 @@
-# Work breakdown
-
-## Production Readiness Checklist
-
-### Optional Enhancements (post-launch)
-- [ ] **Monitoring & logging** — Add Sentry for errors, Prometheus/Grafana for metrics
-- [ ] **Orchestration (K8s)** — Plan migration when scaling/HA is required
-
-### Pre-Deployment Checklist
-- [ ] Create production secrets in `/etc/niyati/secrets/` on server
-- [ ] Set `DOMAIN` and `CADDY_EMAIL` environment variables
-- [ ] Configure DNS A record pointing to server IP
-- [ ] Test backup restore workflow
-- [ ] Run migrations in staging environment
-- [ ] Update CORS origins in production config
-- [ ] Run security audit (`npm audit`)
-- [ ] Verify all health checks pass
-
----
-
-## Astrology API integration (server/client safe steps)
-
-- [ ] 4.5 Display basic astrological summary component (30-90m, Medium)
-	- Create `AstrologySummary` component to show sun/moon/ascendant + short textual summary. Add unit/snapshot tests for rendering.
-- [ ] 4.6 Error handling & rate-limit/backoff (30-90m, Medium)
-	- Show friendly messages on failure, retry with exponential backoff, and use cached results when appropriate.
-
-- [ ] 4.7 (Optional) Visualizations (charts/positions) (60-240m, High)
-	- If desired, add small charts (SVG) showing planet positions or provide external link to detailed chart. Keep this optional for later.
-
-## Numerology (deterministic, testable)
-
-- [ ] 5.1 Implement numerology algorithm (Pythagorean) (30-90m, Medium)
-	- Implement a pure function that maps full name and DoB to core numerology numbers. Make algorithm configurable (Pythagorean vs Chaldean) if needed.
-
-- [ ] 5.2 Unit tests for numerology (15-60m, Low)
-	- Add deterministic tests with known examples to ensure correctness.
-
-- [ ] 5.3 Numerology UI component (20-60m, Medium)
-	- Add a compact card to show the user's core numerology number and a short interpretation.
-
-- [ ] 5.4 Hook numerology into profile flow (15-45m, Low)
-	- When profile data is present or updated, compute numerology and display in profile/astrology area.
-
-## Backend / Persisting Users (security-sensitive)
-
-- [ ] 8.1 Persist first-login details to MongoDB (40-120m, Medium)
-		- Description: When a user logs in for the first time, the client should persist whatever verified/tentative profile data we have (phone, country, name, dob, placeOfBirth, verified flags and explicit consent) into a server-side `users` collection in MongoDB. This allows recognizing returning users (avoid re-asking) and provides a central place for optional server-side features (caching astrology results, etc.). Do NOT store PII in the DB without explicit consent; the server must enforce consent checks.
-		- Subtasks:
-			- Design MongoDB schema for `users` collection: fields should include `phone` (E.164), `countryCode`, `dialCode`, `name`, `dob` (ISO), `placeOfBirth`, `verified` (object), `consentGiven` (boolean), `consentGivenAt` (timestamp), `profileHash`, `createdAt`, `updatedAt`.
-			- Add server endpoint `POST /api/users/upsert-firstlogin` (or similar) that accepts phone + profile and performs an idempotent upsert by `phone`. The endpoint must require `consentGiven=true` and validate inputs on the server before persisting.
-			- Add environment configuration: `MONGO_URL`, `MONGO_DB`, `MONGO_USERS_COLLECTION`, and document them in README.
-			- Implement server-side validation, logging, and basic rate-limiting to avoid abuse.
-			- Add indexing on `phone` (unique) and optionally `profileHash` for fast lookup.
-			- Create an opt-in migration/import script to bulk-import existing client-side `niyati_profile` entries (only after consent migration plan is defined).
-			- Add unit/integration tests for the upsert flow and consent enforcement.
-			- Update `PRIVACY.md` with DB retention policy, deletion flow (how users can request deletion), and export instructions.
-		- Acceptance criteria:
-			- First-time login with explicit consent results in a server-side user document in MongoDB.
-			- Revisiting users are recognized by phone and client UI pre-fills profile fields; no repeated prompts for already-verified fields.
-			- Server refuses to persist PII if `consentGiven` is false or missing.
-
-## User details completion
-
-TODO:
-- User said "I was born on 11th day of November 2005" the date was not resolved correctly. Add better date parsing / NLU to extract DoB from chat messages
-
----
-
-# BFF (Backend-for-Frontend) Improvements
-1. Security & Production Readiness
-Add rate limiting to prevent abuse (especially for /api/geocode and /api/astrology endpoints)
-Remove or disable /api/astrology/probe in production - it's a debug endpoint that could expose implementation details
-Add request body size validation beyond the 500kb limit (validate actual payload structure)
-Add CORS origin whitelist instead of allowing all origins in production
-Add graceful shutdown handler to close connections properly
-2. Error Handling & Resilience
-Add global error handler middleware to catch unhandled errors and return consistent responses
-Add 404 handler for undefined routes
-Validate environment variables at startup and fail fast if critical ones are missing
-Add health check endpoint (/health) that checks cache, and optionally provider connectivity
-3. Performance & Monitoring
-Add response time logging middleware
-Add request/response compression (gzip/brotli)
-Consider adding Redis for distributed caching instead of in-memory node-cache (for horizontal scaling)
-Add metrics endpoint (optional) for Prometheus/similar
-4. Code Quality
-Extract magic numbers to constants (e.g., cache TTLs, retry counts)
-Add JSDoc comments to service methods for better IDE support
-Consider TypeScript for better type safety (optional, larger change)
-Consolidate duplicate sanitization logic - both logger.js and astrologyService.js have similar sanitize functions
-5. Dependencies
-Replace deprecated body-parser - Express has built-in body parsing now (express.json(), express.urlencoded())
-Add helmet CSP configuration for better security headers
-Consider adding express-validator for input validation
-UI (React App) Improvements
-1. Performance
-Memoize expensive computations using useMemo:
-filteredCountries recalculates on every render
-getUserCountry() is called multiple times
-Debounce country search input to reduce filtering operations
-Lazy load Privacy modal content only when first opened (already done partially)
-Split large App.jsx into smaller components (ProfileHeader, ChatMessage, LoginForm, etc.)
-2. State Management
-Consolidate localStorage operations into custom hooks (useLocalStorage)
-Consider React Context for shared state (profile, phone, countries) instead of prop drilling
-Add error boundaries to catch rendering errors gracefully
-Move complex extraction logic (extractProfileFields, normalizeDateString) to separate utility files
-3. User Experience
-Add loading states for long operations (geocoding, astrology calculations)
-Add optimistic updates when sending messages
-Add retry button for failed operations instead of just showing error messages
-Add input validation feedback (real-time validation messages)
-Add accessibility attributes (ARIA labels, roles, keyboard navigation)
-4. Code Quality
-Extract magic strings to constants (localStorage keys, API endpoints, cache TTLs)
-Add PropTypes or TypeScript for component props validation
-Reduce function complexity - some functions are 50-100+ lines (split into smaller helpers)
-Remove commented/dead code if any exists
-Add unit tests for utility functions (date parsing, hashing, extraction)
-5. Security
-Sanitize user input before displaying in chat (prevent XSS)
-Validate phone numbers more strictly using libphonenumber or similar
-Add CSP meta tags in index.html
-Review DOMPurify configuration to ensure it's strict enough
-6. Caching & Offline
-Add service worker for offline support (optional)
-Add cache versioning to invalidate old cached data when app updates
-Add cache size limits to prevent localStorage from filling up
-Consider IndexedDB for larger data instead of localStorage
-Shared / Cross-Cutting Improvements
-1. API Communication
-Add request timeout configuration (currently hardcoded in various places)
-Standardize error response format across all endpoints
-Add API versioning (/api/v1/geocode) for future compatibility
-Add request ID propagation from UI through to BFF logs (partially done)
-2. Configuration
-Add environment-specific configs (dev, staging, prod)
-Document all environment variables in README with examples
-Add config validation at app startup
-Consider feature flags for experimental features
-3. Testing
-Add integration tests for critical flows (login → profile → astrology)
-Add E2E tests using Playwright/Cypress
-Add API contract tests between UI and BFF
-Add load/stress tests for BFF endpoints
-4. Documentation
-Add API documentation (OpenAPI/Swagger for BFF)
-Add component documentation (Storybook for UI components - optional)
-Add architecture diagrams showing data flow
-Document cache strategy and TTL decisions
-5. DevOps
-Add Docker support for consistent development environments
-Add CI/CD pipeline (GitHub Actions)
-Add pre-commit hooks (lint, format, test)
-Add dependency vulnerability scanning
-Priority Recommendations (Quick Wins)
-If you want to implement improvements incrementally, I'd recommend this order:
-
-High Priority (Security & Stability):
-
-Replace body-parser with Express built-in parsers
-Add global error handler to BFF
-Add rate limiting to BFF endpoints
-Disable /api/astrology/probe in production
-Add environment variable validation at startup
-Medium Priority (Performance & UX):
-6. Memoize filteredCountries in UI
-7. Extract large App.jsx into smaller components
-8. Add loading states for async operations
-9. Add health check endpoint to BFF
-10. Consolidate duplicate sanitization logic
-
-Lower Priority (Nice to Have):
-11. Add TypeScript gradually
-12. Add unit/integration tests
-13. Add service worker for offline support
-14. Consider Redis for distributed caching
-
----
-
-# 🚀 Development Roadmap & Enhancement Guide
-
-This guide outlines strategic enhancements, feature additions, and technical improvements to evolve Niyati into a comprehensive astrology platform.
-
-## 📋 Table of Contents
-
-1. [Immediate Priorities](#immediate-priorities)
-2. [Testing Infrastructure](#testing-infrastructure)
-3. [User Authentication & Accounts](#user-authentication--accounts)
-4. [Chat History & Persistence](#chat-history--persistence)
-5. [Advanced Astrology Features](#advanced-astrology-features)
-6. [UI/UX Enhancements](#uiux-enhancements)
-7. [AI/ML Integration](#aiml-integration)
-8. [Social & Community Features](#social--community-features)
-9. [Monetization Features](#monetization-features)
-10. [Technical Debt & Refactoring](#technical-debt--refactoring)
-
----
-
-## Immediate Priorities
-
-- [ ] Increase test coverage to meet goals (80%+ services, 90%+ routes, 95%+ utilities)
-- [ ] Add more edge case and error scenario tests
-- [ ] Set up continuous integration pipeline
-
----
-
-## User Authentication & Accounts
-
-**Available Services:**
-- Auth BFF: http://localhost:3001 (see README.md for API endpoints)
-- PostgreSQL: Running with migrations applied
-- Complete documentation in `/docs/auth/README.md`
-
-**Future Enhancements:**
-- [ ] Connect UI to auth endpoints (currently uses phone-only localStorage auth)
-- [ ] Add user profile sync between localStorage and server
-- [ ] Implement multi-device session management
-
----
-
-## Chat History & Persistence
-
-### Current State
-- Messages stored only in component state
-- Lost on page refresh
-- No history across sessions
-
-### Implementation Plan
-
-**Database Schema:**
-```sql
-CREATE TABLE conversations (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-  title VARCHAR(255),
-  created_at TIMESTAMP DEFAULT NOW(),
-  updated_at TIMESTAMP DEFAULT NOW()
-);
-
-CREATE TABLE messages (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
-  role VARCHAR(20) NOT NULL,
-  content TEXT NOT NULL,
-  metadata JSONB,
-  created_at TIMESTAMP DEFAULT NOW()
-);
-```
-
----
-
-## Advanced Astrology Features
-
-### Feature Set
-
-1. **Detailed Birth Chart Analysis** - Planets, houses, aspects
-2. **Daily Horoscope** - Cached daily readings per sign
-3. **Compatibility Matching** - Compare two birth charts
-4. **Transit Predictions** - Current planetary transits
-5. **Vedic Astrology Support** - Sidereal zodiac calculations
-
----
-
-## UI/UX Enhancements
-
-1. **Conversation Sidebar** - History and navigation
-2. **Rich Astrology Visualizations** - Birth chart wheels using D3.js
-3. **Dark/Light Theme Toggle** - User preference
-4. **Accessibility Improvements** - ARIA labels, keyboard navigation
-5. **Voice Input/Output** - Speech recognition and TTS
-
----
-
-## AI/ML Integration
-
-1. **Custom AI Model Fine-Tuning** - Train on astrology-specific datasets
-2. **Sentiment Analysis** - Personalize responses based on user mood
-3. **Recommendation Engine** - Suggest topics based on chart and history
-4. **Voice Input/Output** - Natural conversation interface
-
----
-
-## Social & Community Features
-
-1. **User Profiles (Public)** - Shareable profiles with sun/moon signs
-2. **Share Readings** - Generate shareable links
-3. **Community Forum** - Discussion boards by topic
-4. **Follow System** - Connect with other users
-
----
-
-## Monetization Features
-
-### 1. Subscription Tiers
-
-**Tier Structure:**
-- **Free:** 10 messages/month, basic daily horoscope
-- **Premium ($9.99/mo):** Unlimited messages, detailed birth chart, transit notifications
-- **Professional ($29.99/mo):** All premium + compatibility readings, expert consultations
-
-### 2. Credit System
-- Purchase credits
-- Pay-per-reading model
-
-### 3. One-on-One Consultations
-- Marketplace for professional astrologers
-- Scheduling and payment integration
-
----
-
-## Technical Debt & Refactoring
-
-1. **Migrate to TypeScript** - Type safety and better DX
-2. **Add GraphQL API** - Flexible data fetching
-3. **Implement Caching Strategy** - Multi-layer (memory + Redis)
-4. **Add Request Validation** - Schema validation with Joi
-5. **Improve Error Handling** - Structured error classes
-6. **API Documentation** - Swagger/OpenAPI
-7. **Database Migrations** - Version-controlled schema changes
-8. **Feature Flags** - Gradual rollout capability
-
----
-
-## Priority Roadmap
-
-### Q1 2026 (Jan-Mar)
-- [ ] Increase test coverage to goals
-- [ ] Implement user authentication & accounts
-- [ ] Add chat history persistence
-- [ ] Set up staging environment
-
-### Q2 2026 (Apr-Jun)
-- [ ] Advanced astrology features (birth chart, daily horoscope)
-- [ ] UI/UX enhancements (sidebar, visualizations)
-- [ ] API documentation (Swagger)
-
-### Q3 2026 (Jul-Sep)
-- [ ] Subscription system with Stripe
-- [ ] Credit-based messaging
-- [ ] Social features (sharing, profiles)
-- [ ] Migration to TypeScript
-
-### Q4 2026 (Oct-Dec)
-- [ ] Community forum
-- [ ] One-on-one consultations marketplace
-- [ ] Mobile apps (React Native)
-- [ ] Scale to 10,000+ users
-
----
-
-## Next Immediate Steps
-
-1. **Run tests to establish baseline coverage** (this week)
-2. **Implement basic authentication** (2 weeks)
-3. **Add chat persistence** (1 week)
-4. **Deploy to staging** (1 week)
-5. **Gather user feedback and iterate**
+# Project To-Do List
+
+## 🚀 Immediate Priorities
+
+### 1. User Authentication (Backend)
+- [ ] **Social Login**: Implement OAuth callbacks for Google & Instagram in `bff-auth` service.
+  - *Context*: UI buttons are implemented but require backend endpoints (`/api/v1/auth/google`, `/api/v1/auth/instagram`).
+  - *Requirement*: Configure `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, etc. in `.env`.
+ 
+
+### 2. Chat Persistence
+- [ ] We will not be persisting chat history for now. Instead we are looking to implement it in a way that the chats for a user are stored in RAG database through the LLM wrapped in n8n workflow.
+
+### 3. Monetization & Features
+- [ ] **Numerology**: Implement Pythagorean numerology calculator (Function + UI component).
+- [ ] **Premium Features**: Define and implement premium features for paid users (e.g., generate kundali, advanced astrology reports, upay, numerology etc.).
+
+## 📝 Notes
+- **Architecture**: The project currently uses `niyati-bff-auth` (Postgres) and `niyati-bff-platform` (Astrology logic). Frontend is `ui-service` (Vite/React).
+- **Secrets**: Production secrets are managed via Docker Swarm/Compose secrets (e.g., `/run/secrets/postgres_password`).
+
+1. If user asks anything beyond their own future astrology, numerology etc. related questions, politely refuse to answer such questions. For questions beyond the purpose "I am sorry, I am designed to answer only astrology, numerology and upay related questions. Please ask me something related to these topics."
+2. Add "Edit/Save" icon just below the "Logout/Reset" icon. User clicks it to edit displayed user details, by double clicking cells. How will data be saved to DB?
+3. Returning user sees unwanted message "Hi <user name>, welcome back!". Instead a message should be constructed based on the user details fetched from DB and sent to N8N.
+From there we let N8N to respond with a personalised message, based on previous interactions which would be saved in a RAG database along with the user details as the RAG key. 
+If the returning user had asked about love life last time, the message could be "Hi <user name>! I see you are logging in from <current location>. How is the weather there? And I recall your queries about love life, hope things are looking sunny." or for user asking about career, the message could be "Hi <user name>, the weather in <current location> is supporting? I hope your focus on career is showing healthy shoots?". This will require storing some context about previous interactions in RAG database. This will as well require calling weather API to get current location weather details.
+4. Instead of storing in DB a returning user is a paid subscriber or not we should store how many credits the user has. 
+Free users (first time or returning) get 10 credits per month. Free users can ask questions about the current day's horoscope (i.e. horosope of the day) which consumes 2 credits each.
+In addition to the 10 monthly credits, paid users get 1 credit for every INR 10/- paid. Paid users can ask questions about current day's horoscope (2 credits), and further questions about future concerns they have e.g. career, health, job, love marriage etc. Each such question consumes 4 credits.
+When a question has been answered the remaining credits should be updated in the database. When credits reach zero user should be informed "You have exhausted your credits, consider upgrading to paid subscription to continue asking questions."
+We would like to display the remaining credits in the UI somewhere prominently, if there is reasonable space on the UI.
+5. Identify if the user is logging in from the same location or a different location. 
+- First message to user should include location and some banter e.g., "Hi Anu, welcome back! How is the weather in <location> today?"
+- If current location is different from last login location, then first message could be like "Hi Anu, today you are logging in from <new location>, how is it different from <old location>?"
+Current location can be fetched from the browser using JS geolocation API. Last login location can be stored in the user details table in DB.
+Current location should be saved in the user details table in DB on every login as the last login location for the next time.
+6. Implement rate limiting to prevent abuse of the chatbot service. Limit free users to 5 queries per day and paid users to 50 queries per day.
+7. Implement a feedback mechanism where users give a thumbs up or thumbs down for the answers they receive.
+8. Add support for multiple languages, starting with Hindi.
+9. Implement RAG (Retrieval-Augmented Generation) to improve the accuracy of responses by integrating a knowledge base. Whatever user details we collect should be stored in RAG database as the key along with previous user queries and responses as context to improve future responses.
+10. Need a few tools implemented in n8n workflows to support astrology calculations, e.g., age calculator with simple logic: (today - day of birth) / 365.25 (or something similar).
+11. Add analytics to track user interactions, popular questions, and usage patterns.
+
+
+
+
+
+docker compose -f docker-compose.yml -f docker-compose.prod.yml ps --services --all
+
+
+docker compose -f docker-compose.yml -f docker-compose.prod.yml down
+
+docker compose -f docker-compose.yml -f docker-compose.prod.yml build --pull
+
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --remove-orphans
+
+cd /Users/ankur/projects/niyati && docker compose -f docker-compose.yml -f docker-compose.prod.yml down --remove-orphans && docker image rm -f niyati/bff-platform:production niyati/bff-auth:production niyati/ui:production niyati/worker:ci-${GITHUB_SHA:-latest} || true && docker image prune -f || true
+
+docker compose -f docker-compose.yml -f docker-compose.prod.yml build --pull
+
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --remove-orphans
+
+docker compose stop ui-service && docker compose rm -f ui-service && docker rmi $(docker images -q 'niyati*ui*' 2>/dev/null || echo "") 2>/dev/null; docker compose build ui-service && docker compose up -d ui-service
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+want the ui-service managed by compose (and avoid future port conflicts), remove the ports: entry for ui-service in docker-compose.prod.yml (so Caddy will proxy to it) and then bring it up with compose
+
+CADDY_EMAIL

@@ -77,7 +77,7 @@ router.post('/planets', async (req, res) => {
     const data = await astrologyService.planets(payload);
     try {
       const incomingReqId = req._niyati_reqId || reqIdFromReq(req) || (req.headers && req.headers['x-request-id']);
-      const previewSource = process.env.ASTRO_API_URL || 'https://json.freeastrologyapi.com';
+      const previewSource = config.astrology.baseUrl;
       let bodyPreview = '';
       try {
         const s = JSON.stringify(data);
@@ -85,7 +85,7 @@ router.post('/planets', async (req, res) => {
       } catch (e) {}
       logger.info(sanitize({ msg: 'astrology.route.planets_result', reqId: incomingReqId, source: previewSource, bodyPreview }));
     } catch (e) {}
-    return res.json({ status: 'ok', source: process.env.ASTRO_API_URL || 'https://json.freeastrologyapi.com', data });
+    return res.json({ status: 'ok', source: config.astrology.baseUrl, data });
   } catch (err) {
     try { const incomingReqId = req._niyati_reqId || reqIdFromReq(req) || (req.headers && req.headers['x-request-id']); logger.error(sanitize({ msg: 'astrology.route.planets_result', reqId: incomingReqId, error: err && (err.message || err.original) })); } catch (e) { logger.error(sanitize({ msg: 'Astrology planets error', error: err && (err.message || err.original) })); }
     return res.sendError(ErrorCodes.PROVIDER_ERROR, 'Provider error');
@@ -195,7 +195,7 @@ router.post('/probe', async (req, res) => {
     return res.sendError(ErrorCodes.NOT_FOUND, 'Probe endpoint not enabled');
   }
 
-  const base = (process.env.ASTRO_API_URL || 'https://json.freeastrologyapi.com').replace(/\/$/, '');
+  const base = config.astrology.baseUrl.replace(/\/$/, '');
   const key = process.env.ASTRO_API_KEY;
   
   // Use proper payload format based on the working endpoints

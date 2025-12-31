@@ -14,6 +14,22 @@
  * }
  */
 
+/**
+ * @typedef {import('express').Response} ExpressResponse
+ * @typedef {import('express').Request} ExpressRequest
+ * @typedef {import('express').NextFunction} NextFunction
+ *
+ * @typedef {Object} ResponseHelpersOptions
+ * @property {string} [reqId]
+ * @property {number} [statusCode]
+ * @property {any} [details]
+ *
+ * @typedef {ExpressResponse & {
+ *   sendError: (code: string, message: string, options?: ResponseHelpersOptions) => ExpressResponse,
+ *   sendSuccess: (data: any, options?: { reqId?: string, meta?: any, statusCode?: number }) => ExpressResponse
+ * }} ExpressResponseWithHelpers
+ */
+
 // Error codes enum for consistency
 const ErrorCodes = {
   // Client errors (4xx)
@@ -26,13 +42,13 @@ const ErrorCodes = {
   VALIDATION_ERROR: 'VALIDATION_ERROR',
   MISSING_REQUIRED_FIELD: 'MISSING_REQUIRED_FIELD',
   INVALID_INPUT: 'INVALID_INPUT',
-  
+
   // Server errors (5xx)
   INTERNAL_SERVER_ERROR: 'INTERNAL_SERVER_ERROR',
   SERVICE_UNAVAILABLE: 'SERVICE_UNAVAILABLE',
   GATEWAY_TIMEOUT: 'GATEWAY_TIMEOUT',
   PROVIDER_ERROR: 'PROVIDER_ERROR',
-  
+
   // Business logic errors
   NO_RESULTS: 'NO_RESULTS',
   CONFLICT: 'CONFLICT',
@@ -50,12 +66,12 @@ const ErrorStatusCodes = {
   [ErrorCodes.VALIDATION_ERROR]: 400,
   [ErrorCodes.MISSING_REQUIRED_FIELD]: 400,
   [ErrorCodes.INVALID_INPUT]: 400,
-  
+
   [ErrorCodes.INTERNAL_SERVER_ERROR]: 500,
   [ErrorCodes.SERVICE_UNAVAILABLE]: 503,
   [ErrorCodes.GATEWAY_TIMEOUT]: 504,
   [ErrorCodes.PROVIDER_ERROR]: 502,
-  
+
   [ErrorCodes.NO_RESULTS]: 404,
   [ErrorCodes.AMBIGUOUS_RESULTS]: 200 // Still successful, just needs disambiguation
   ,
@@ -74,8 +90,19 @@ const ErrorStatusCodes = {
  * @returns {object} Standardized error response
  */
 function createErrorResponse(code, message, options = {}) {
-  const { details, reqId, statusCode } = options;
+  // Input validation
+  if (!code || typeof code !== 'string') {
+    code = ErrorCodes.INTERNAL_SERVER_ERROR;
+  }
+  if (!message || typeof message !== 'string') {
+    message = 'An error occurred';
+  }
+  if (!options || typeof options !== 'object') {
+    options = {};
+  }
   
+  const { details, reqId, statusCode } = options;
+
   return {
     status: 'error',
     error: {
@@ -97,9 +124,9 @@ function createErrorResponse(code, message, options = {}) {
 function sendError(res, code, message, options = {}) {
   const { reqId, statusCode } = options;
   const httpStatus = statusCode || ErrorStatusCodes[code] || 500;
-  
+
   const errorResponse = createErrorResponse(code, message, options);
-  
+
   return res.status(httpStatus).json(errorResponse);
 }
 
@@ -111,7 +138,7 @@ function sendError(res, code, message, options = {}) {
  */
 function createSuccessResponse(data, options = {}) {
   const { reqId, meta } = options;
-  
+
   return {
     status: 'ok',
     data,
@@ -128,9 +155,9 @@ function createSuccessResponse(data, options = {}) {
  */
 function sendSuccess(res, data, options = {}) {
   const { statusCode = 200 } = options;
-  
+
   const successResponse = createSuccessResponse(data, options);
-  
+
   return res.status(statusCode).json(successResponse);
 }
 
@@ -139,16 +166,29 @@ function sendSuccess(res, data, options = {}) {
  */
 function attachResponseHelpers(req, res, next) {
   const reqId = req._niyati_reqId;
-  
+
   // Attach convenience methods to response object
+  /**
+   * Send a standardized error response
+   * @param {string} code
+   * @param {string} message
+   * @param {ResponseHelpersOptions} [options]
+   * @returns {ExpressResponse}
+   */
   res.sendError = (code, message, options = {}) => {
     return sendError(res, code, message, { ...options, reqId });
   };
-  
+
+  /**
+   * Send a standardized success response
+   * @param {any} data
+   * @param {{ reqId?: string, meta?: any, statusCode?: number }} [options]
+   * @returns {ExpressResponse}
+   */
   res.sendSuccess = (data, options = {}) => {
     return sendSuccess(res, data, { ...options, reqId });
   };
-  
+
   next();
 }
 

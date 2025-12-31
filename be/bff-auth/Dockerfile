@@ -1,16 +1,17 @@
 FROM node:20-alpine AS base
 
 WORKDIR /app
-RUN apk add --no-cache dumb-init
+# Ensure native modules can be built inside the image (python + build tools)
+RUN apk add --no-cache dumb-init python3 build-base
 
 COPY bff-auth/package*.json ./
 
 FROM base AS development
 RUN npm install
-# Copy commons (shared libraries)
-COPY commons/ /app/commons/
-# Copy service-specific code
+# Copy service-specific code first
 COPY bff-auth/ /app/
+# Copy commons (shared libraries) afterwards so repository commons wins
+COPY commons/ /app/commons/
 RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001 && chown -R nodejs:nodejs /app
 USER nodejs
 EXPOSE 3001
@@ -22,10 +23,10 @@ CMD ["npm", "run", "dev"]
 FROM base AS production
 ENV NODE_ENV=production
 RUN npm ci --only=production && npm cache clean --force
-# Copy commons (shared libraries)
-COPY commons/ /app/commons/
-# Copy service-specific code
+# Copy service-specific code first
 COPY bff-auth/ /app/
+# Copy commons (shared libraries) afterwards so repository commons wins
+COPY commons/ /app/commons/
 RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001 && chown -R nodejs:nodejs /app
 USER nodejs
 EXPOSE 3001

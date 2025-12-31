@@ -43,20 +43,46 @@ if [ ! -d "$MIG_DIR" ]; then
   echo "Migrations directory $MIG_DIR not present; nothing to do." && exit 0
 fi
 
+# Create migrations tracking table if it doesn't exist
+psql "$CONN" -v ON_ERROR_STOP=1 <<'EOF'
+CREATE TABLE IF NOT EXISTS migrations (
+  id SERIAL PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+EOF
+
 applied=0
+skipped=0
 for f in "$MIG_DIR"/*.up.sql; do
   if [ ! -e "$f" ]; then
     break
   fi
-  echo "Applying migration: $f"
+  
+  # Extract just the filename from the path
+  fname=$(basename "$f")
+  
+  # Check if migration was already applied
+  already_applied=$(psql "$CONN" -tAc "SELECT 1 FROM migrations WHERE name = '$fname' LIMIT 1")
+  
+  if [ "$already_applied" = "1" ]; then
+    echo "Skipping (already applied): $fname"
+    skipped=$((skipped+1))
+    continue
+  fi
+  
+  echo "Applying migration: $fname"
   psql "$CONN" -v ON_ERROR_STOP=1 -f "$f"
+  
+  # Record migration as applied
+  psql "$CONN" -v ON_ERROR_STOP=1 -c "INSERT INTO migrations (name) VALUES ('$fname')"
   applied=$((applied+1))
 done
 
-if [ "$applied" -eq 0 ]; then
+if [ "$applied" -eq 0 ] && [ "$skipped" -eq 0 ]; then
   echo "No .up.sql migration files found in $MIG_DIR"
 else
-  echo "Applied $applied migration(s)"
+  echo "Applied $applied migration(s), skipped $skipped already-applied"  
 fi
 
 echo "=== migration runner: finished ==="

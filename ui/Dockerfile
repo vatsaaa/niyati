@@ -19,6 +19,20 @@ FROM deps AS builder
 # Set production environment for optimized build
 ENV NODE_ENV=production
 
+# Accept build-time arguments for Vite env vars (VITE_* are baked into the bundle)
+ARG VITE_BFF_BASE_URL=""
+ARG VITE_N8N_WEBHOOK_URL
+ARG VITE_APP_VERSION="0.1.0"
+ARG VITE_DEBUG_MODE="false"
+ARG VITE_VERBOSE_LOGGING="false"
+
+# Set them as environment variables for the build
+ENV VITE_BFF_BASE_URL=$VITE_BFF_BASE_URL
+ENV VITE_N8N_WEBHOOK_URL=$VITE_N8N_WEBHOOK_URL
+ENV VITE_APP_VERSION=$VITE_APP_VERSION
+ENV VITE_DEBUG_MODE=$VITE_DEBUG_MODE
+ENV VITE_VERBOSE_LOGGING=$VITE_VERBOSE_LOGGING
+
 # Copy source code
 COPY . .
 
@@ -70,10 +84,8 @@ COPY nginx.conf /etc/nginx/nginx.conf
 # Copy built assets from builder stage
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-# Create non-root user for nginx
-RUN addgroup -g 1001 -S nginx && \
-    adduser -S nginx -u 1001 -G nginx && \
-    chown -R nginx:nginx /usr/share/nginx/html && \
+# Use existing nginx user and set permissions
+RUN chown -R nginx:nginx /usr/share/nginx/html && \
     chown -R nginx:nginx /var/cache/nginx && \
     chown -R nginx:nginx /var/log/nginx && \
     touch /var/run/nginx.pid && \

@@ -1,5 +1,34 @@
 // Configuration loader - loads environment-specific config based on NODE_ENV
 
+/**
+ * @typedef {import('./default')} DefaultConfig
+ *
+ * @typedef {Object} ConfigGetOptions
+ * @property {string} configPath
+ * @property {string} envVarName
+ * @property {any} defaultValue
+ *
+ * @typedef {Object} AppConfig
+ * @property {DefaultConfig} raw
+ * @property {string} env
+ * @property {boolean} isDevelopment
+ * @property {boolean} isStaging
+ * @property {boolean} isProduction
+ * @property {boolean} isTest
+ * @property {(path:string, envVar:string, defaultValue:any)=>any} get
+ * @property {Object} server
+ * @property {Object} cors
+ * @property {Object} rateLimit
+ * @property {Object} cache
+ * @property {Object} retry
+ * @property {Object} logging
+ * @property {Object} compression
+ * @property {Object} features
+ * @property {Object} geocode
+ * @property {Object} astrology
+ * @property {Object} n8n
+ */
+
 const path = require('path');
 
 // Determine current environment
@@ -49,6 +78,7 @@ function getConfigValue(configPath, envVarName, defaultValue) {
 }
 
 // Export config with convenient getters
+/** @type {AppConfig} */
 module.exports = {
   // Raw config object
   raw: config,
@@ -120,5 +150,18 @@ module.exports = {
     baseUrl: getConfigValue('geocode.baseUrl', 'GEOCODE_MAPS_BASE', 'https://geocode.maps.co'),
     userAgent: getConfigValue('geocode.userAgent', 'GEOCODE_USER_AGENT', 'niyati-bff/1.0'),
     timeout: getConfigValue('geocode.timeout', 'GEOCODE_TIMEOUT', 6000)
+  },
+  
+  astrology: {
+    baseUrl: getConfigValue('astrology.baseUrl', 'ASTRO_API_URL', 'https://json.freeastrologyapi.com'),
+    timeout: getConfigValue('astrology.timeout', 'ASTRO_TIMEOUT', 10000),
+    retryMax: getConfigValue('astrology.retryMax', 'ASTRO_RETRY_MAX', 2),
+    retryBaseMs: getConfigValue('astrology.retryBaseMs', 'ASTRO_RETRY_BASE_MS', 500)
+  },
+  
+  // n8n webhook configuration
+  n8n: {
+    webhookUrl: getConfigValue('n8n.webhookUrl', 'N8N_WEBHOOK_URL', ''),
+    token: getConfigValue('n8n.token', 'N8N_TOKEN', '')
   }
 };

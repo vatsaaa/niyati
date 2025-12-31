@@ -1,5 +1,6 @@
 const axios = require('axios');
-const { logger, sanitize } = require('../src/lib/logger');
+const logger = console;
+const sanitize = (v) => v;
 
 const base = process.env.BFF_BASE || 'http://localhost:3000';
 

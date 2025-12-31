@@ -6,7 +6,7 @@ Usage: set `DATABASE_URL` env var or rely on default `postgresql://postgres:post
 */
 
 const { Client } = require('pg');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 
 const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/niyati_test';

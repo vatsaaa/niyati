@@ -20,7 +20,8 @@ function loadUserProfileFromStorage() {
       user_timeOfBirth: '', 
       user_currentLocation: '', 
       user_verified: {}, 
-      user_consentGiven: false 
+      user_consentGiven: false,
+      user_isPaid: false
     };
   } catch (e) {
     return { 
@@ -53,7 +54,8 @@ export const useProfile = () => {
       user_timeOfBirth: '',
       user_currentLocation: '', 
       user_verified: {}, 
-      user_consentGiven: false 
+      user_consentGiven: false,
+      user_isPaid: false
     };
     setProfile(emptyProfile);
     localStorage.setItem('niyati_user_profile', JSON.stringify(emptyProfile));
@@ -161,10 +163,14 @@ export const useMessages = () => {
         console.error("Failed to parse history", e);
       }
     }
-    // Default welcome message
+    // If user is returning (has phone stored), don't show the generic greeting.
+    const isReturning = !!localStorage.getItem('niyati_user_phone_number') || !!localStorage.getItem('niyati_user_profile');
+    if (isReturning) return [];
+
+    // Default welcome message for first-time visitors
     return [{
       id: 1,
-      text: "Hello! I am Niyati. I see you have returned. What is on your mind today?",
+      text: "Hello! I am Niyati. What is on your mind today?",
       sender: 'bot',
       timestamp: new Date()
     }];
@@ -194,18 +200,27 @@ export const useMessages = () => {
       localStorage.setItem('niyati_chat_history', JSON.stringify(updated));
       return updated;
     });
+    // Log messages for observability
+    try {
+      if (newMessage && newMessage.sender === 'bot') {
+        console.log('NIYATI', newMessage.text || JSON.stringify(newMessage));
+      }
+    } catch (e) {
+      // ignore logging errors
+    }
     return newMessage;
   };
 
   const clearMessages = () => {
-    const welcomeMsg = {
+    const isReturning = !!localStorage.getItem('niyati_user_phone_number') || !!localStorage.getItem('niyati_user_profile');
+    const welcomeMsg = isReturning ? [] : [{
       id: 1,
       text: "Hello! I am Niyati. What is on your mind today?",
       sender: 'bot',
       timestamp: new Date()
-    };
-    setMessages([welcomeMsg]);
-    localStorage.setItem('niyati_chat_history', JSON.stringify([welcomeMsg]));
+    }];
+    setMessages(welcomeMsg);
+    localStorage.setItem('niyati_chat_history', JSON.stringify(welcomeMsg));
   };
 
   return { messages, addMessage, clearMessages, setMessages };
