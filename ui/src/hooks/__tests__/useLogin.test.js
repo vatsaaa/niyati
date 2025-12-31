@@ -17,7 +17,7 @@ describe('useLogin', () => {
   });
 
   it('calls processCompleteProfile when profile is complete', async () => {
-    const profile = { user_name: 'T', user_dob: '1990-01-01', user_placeOfBirth: 'X', user_timeOfBirth: '00:00:00' };
+    const profile = { user_name: 'T', user_dob: '1990-01-01', user_placeOfBirth: 'X', user_timeOfBirth: '00:00:00', user_consentGiven: true };
     bffFetch.mockResolvedValue({ ok: true, json: async () => ({ status: 'ok', data: { location: { city: 'C' } } }) });
 
     const auth = { login: vi.fn(), countries: [], phoneNumber: '+911234', phone: '+911234' };

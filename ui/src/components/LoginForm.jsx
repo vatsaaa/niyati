@@ -55,8 +55,15 @@ const LoginForm = ({
         if (res && res.ok) {
           const payload = await res.json();
           if (payload && payload.status === 'ok' && payload.data && payload.data.returning) {
+            // Ensure the consent checkbox value is forwarded for returning users
+            const identified = payload.data.user || {};
+            try {
+              identified.consent_given = !!consentChecked;
+            } catch (e) {
+              // ignore
+            }
             // Pass identified user and config back to parent login handler
-            return onLogin(tempPhone, selectedCountry, payload.data.user || null, payload.data.config || null);
+            return onLogin(tempPhone, selectedCountry, identified, payload.data.config || null);
           }
         }
       } catch (e) {

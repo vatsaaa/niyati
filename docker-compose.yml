@@ -6,9 +6,10 @@ services:
   # PostgreSQL Database
   postgres:
     image: postgres:15-alpine
-    container_name: niyati-postgres
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+    expose:
+      - "5432"
+    profiles:
+      - dev
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-niyati}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-niyati_dev_pass}
@@ -39,26 +40,38 @@ services:
   # Redis Cache
   redis:
     image: redis:7-alpine
-    container_name: niyati-redis
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
+    expose:
+      - "6379"
+    profiles:
+      - dev
     command: ["redis-server", "--save", "60", "1", "--appendonly", "no"]
     volumes:
       - redis-data:/data
     networks:
       - niyati
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # MailHog - Email testing
   mailhog:
     image: mailhog/mailhog:latest
-    container_name: niyati-mailhog
-    ports:
-      - "${MAILHOG_WEB_PORT:-8025}:8025"
-      - "${MAILHOG_SMTP_PORT:-1025}:1025"
+    expose:
+      - "8025"
+      - "1025"
+    profiles:
+      - dev
     networks:
       - niyati
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:8025 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
   # BFF Auth Service
   bff-auth:
@@ -66,13 +79,11 @@ services:
       context: ./be
       dockerfile: bff-auth/Dockerfile
       target: ${BUILD_TARGET:-development}
-    image: niyati/bff-auth:${BUILD_TARGET:-development}
-    container_name: niyati-bff-auth
-    ports:
-      - "${BFF_AUTH_PORT:-3001}:${BFF_AUTH_PORT:-3001}"
+    image: niyati/bff-auth:${IMAGE_TAG:-local}
+    expose:
+      - "${BFF_AUTH_PORT:-3001}"
     env_file:
       - .env
-      - .env.bff.auth
     environment:
       - NODE_ENV=${NODE_ENV:-development}
       - LOG_PRETTY_PRINT=${LOG_PRETTY_PRINT:-true}
@@ -82,14 +93,12 @@ services:
       - niyati
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:${BFF_AUTH_PORT:-3001}/api/v1/telemetry/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      test: ["CMD-SHELL", "/usr/local/bin/healthcheck-http.sh http://localhost:${BFF_AUTH_PORT:-3001}/api/v1/telemetry/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
-    depends_on:
-      postgres:
-        condition: service_healthy
+    # readiness is handled by the service entrypoint (wait-for-db.sh) and healthchecks
 
   # BFF Platform Service
   bff-platform:
@@ -97,13 +106,11 @@ services:
       context: ./be
       dockerfile: bff-platform/Dockerfile
       target: ${BUILD_TARGET:-development}
-    image: niyati/bff-platform:${BUILD_TARGET:-development}
-    container_name: niyati-bff-platform
-    ports:
-      - "${BFF_PLATFORM_PORT:-3000}:${BFF_PLATFORM_PORT:-3000}"
+    image: niyati/bff-platform:${IMAGE_TAG:-local}
+    expose:
+      - "${BFF_PLATFORM_PORT:-3000}"
     env_file:
       - .env
-      - .env.bff.platform
     environment:
       - NODE_ENV=${NODE_ENV:-development}
       - LOG_PRETTY_PRINT=${LOG_PRETTY_PRINT:-true}
@@ -113,14 +120,12 @@ services:
       - niyati
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:${BFF_PLATFORM_PORT:-3000}/api/v1/telemetry/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      test: ["CMD-SHELL", "/usr/local/bin/healthcheck-http.sh http://localhost:${BFF_PLATFORM_PORT:-3000}/api/v1/telemetry/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
-    depends_on:
-      postgres:
-        condition: service_healthy
+    # readiness is handled by the service entrypoint (wait-for-db.sh) and healthchecks
 
   # UI Service
   ui-service:
@@ -132,19 +137,19 @@ services:
         - VITE_BFF_BASE_URL=${VITE_BFF_BASE_URL:-}
         - VITE_N8N_WEBHOOK_URL=${VITE_N8N_WEBHOOK_URL}
         - VITE_DEBUG_MODE=${VITE_DEBUG_MODE:-false}
-    image: niyati/ui:${BUILD_TARGET:-development}
-    container_name: niyati-ui
-    ports:
-      - "${UI_PORT:-5173}:80"
+    image: niyati/ui:${IMAGE_TAG:-local}
+    expose:
+      - "80"
     env_file:
-      - .env.ui
+      - .env
     environment:
       - NODE_ENV=${NODE_ENV:-development}
+      - VITE_API_URL=/api
     networks:
       - niyati
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:80"]
+      test: ["CMD-SHELL", "/usr/local/bin/healthcheck-http.sh http://127.0.0.1:80"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -153,13 +158,28 @@ services:
       - bff-platform
       - bff-auth
 
+  # Caddy gateway (routes /api -> bff-platform, everything else -> ui-service)
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - ui-service
+      - bff-platform
+    networks:
+      - niyati
+
   # Background Worker (optional, production)
   worker:
     build:
       context: ./be/worker
       dockerfile: Dockerfile
     image: niyati/worker:latest
-    container_name: niyati-worker
     environment:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379}
       - REDIS_HOST=redis
@@ -170,21 +190,29 @@ services:
       - EMAIL_FROM=${EMAIL_FROM}
     networks:
       - niyati
-    restart: unless-stopped
-    depends_on:
-      - redis
+    restart: on-failure
+    healthcheck:
+      test: ["CMD-SHELL", "node /usr/src/app/healthcheck.js"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    # readiness is handled by the service entrypoint (wait-for-db.sh) and healthchecks
     profiles:
       - production
 
 networks:
   niyati:
     driver: bridge
-    name: niyati
+    # Leave `name` unset so Compose generates a stack-scoped network name
+    # This avoids collisions when running multiple stacks on the same host
 
 volumes:
   postgres-data:
     driver: local
   redis-data:
     driver: local
-  bff-node-modules:
-  ui-node-modules:
+  caddy_data:
+    driver: local
+  caddy_config:
+    driver: local
+  

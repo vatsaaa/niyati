@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { logger, sanitize, reqIdFromReq, ErrorCodes } = require('../commons');
+const { logger, sanitize, reqIdFromReq, ErrorCodes } = require('../../commons');
 
 // Telemetry rate-limiter (token bucket) with sampling fallback.
 // Environment variables:
@@ -95,7 +95,7 @@ router.get('/health', (req, res) => {
 // GET /api/telemetry/info
 // System information endpoint
 router.get('/info', (req, res) => {
-  const { config } = require('../commons');
+  const { config } = require('../../commons');
   
   res.json({
     status: 'ok',

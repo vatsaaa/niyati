@@ -560,7 +560,10 @@ export function useChat(profile, updateProfile, addMessage, auth) {
         queryCost,
         profile: { name: latestProfile.user_name, dob: latestProfile.user_dob, place: latestProfile.user_placeOfBirth, time: latestProfile.user_timeOfBirth }
       });
-      if (phoneNumber && hasAllRequiredFields(latestProfile)) {
+      // Allow deduction for returning users even if some profile fields are missing
+      const persistedPhone = (() => { try { return localStorage.getItem('niyati_user_phone_number'); } catch (e) { return null; } })();
+      const isReturningNow = (currentProfile.user_verified && (currentProfile.user_verified.id || currentProfile.user_verified.phoneNumber)) || !!persistedPhone;
+      if (phoneNumber && (hasAllRequiredFields(latestProfile) || isReturningNow)) {
         const newCredits = await deductCredits(phoneNumber, queryCost);
         console.log('[useChat] Credit deduction result:', { newCredits, previousCredits: latestProfile.user_credits });
         if (newCredits !== null) {

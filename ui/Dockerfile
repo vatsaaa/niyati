@@ -44,8 +44,8 @@ FROM node:20-alpine AS development
 
 WORKDIR /app
 
-# Install dumb-init
-RUN apk add --no-cache dumb-init
+# Install dumb-init and curl for reliable healthchecks
+RUN apk add --no-cache dumb-init curl
 
 # Copy package files and install deps
 COPY package*.json ./
@@ -64,9 +64,11 @@ USER nodejs
 # Expose Vite dev server port
 EXPOSE 5173
 
-# Health check
+# Copy healthcheck helper and use it for clearer exit codes
+COPY be/scripts/healthcheck-http.sh /usr/local/bin/healthcheck-http.sh
+RUN chmod +x /usr/local/bin/healthcheck-http.sh
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:5173 || exit 1
+  CMD ["sh", "-c", "/usr/local/bin/healthcheck-http.sh http://localhost:5173"]
 
 # Start Vite dev server with host binding for Docker
 ENTRYPOINT ["dumb-init", "--"]

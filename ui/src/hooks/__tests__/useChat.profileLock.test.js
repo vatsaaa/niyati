@@ -2,8 +2,9 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, act } from '@testing-library/react';
+import { render } from '@testing-library/react';
 import React, { forwardRef, useImperativeHandle } from 'react';
+import { act } from 'react';
 
 vi.mock('../../utils/profileExtractor', () => ({ extractProfileFields: vi.fn(async () => ({})) }));
 vi.mock('../../services/geo', () => ({ resolveLocationAndTimezone: vi.fn() }));

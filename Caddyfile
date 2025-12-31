@@ -1,3 +1,8 @@
+# Production (example)
+#niyati.ai {
+#    reverse_proxy /api/* bff-platform:3000
+#    reverse_proxy ui-service:80
+#}
 # Caddyfile - Production reverse proxy with automatic HTTPS
 # Caddy automatically obtains and renews Let's Encrypt certificates
 {
@@ -13,7 +18,7 @@
 
 # HTTP server on port 80 - no automatic redirect to HTTPS (ngrok handles HTTPS)
 # Accept both localhost and ngrok domain
-http://{$DOMAIN:localhost}, http://nonexperientially-nonascetical-agnes.ngrok-free.dev {
+http://localhost:5173, http://{$DOMAIN:localhost}, http://nonexperientially-nonascetical-agnes.ngrok-free.dev {
 
     # Enable gzip compression
     encode gzip
@@ -37,7 +42,9 @@ http://{$DOMAIN:localhost}, http://nonexperientially-nonascetical-agnes.ngrok-fr
     # CORS headers for API routes and webhook
     @api_and_webhook path /api/* /webhook/*
     header @api_and_webhook {
-        Access-Control-Allow-Origin "https://nonexperientially-nonascetical-agnes.ngrok-free.dev"
+        # Remove any upstream Access-Control-Allow-Origin and set a reflected Origin
+        -Access-Control-Allow-Origin
+        Access-Control-Allow-Origin "{http.request.header.Origin}"
         Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS"
         Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With"
         Access-Control-Allow-Credentials "true"
@@ -48,7 +55,9 @@ http://{$DOMAIN:localhost}, http://nonexperientially-nonascetical-agnes.ngrok-fr
     @options method OPTIONS
     handle @options {
         header {
-            Access-Control-Allow-Origin "https://nonexperientially-nonascetical-agnes.ngrok-free.dev"
+            # Remove any upstream Access-Control-Allow-Origin and set reflected Origin for preflight
+            -Access-Control-Allow-Origin
+            Access-Control-Allow-Origin "{http.request.header.Origin}"
             Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS"
             Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With"
             Access-Control-Allow-Credentials "true"
@@ -67,6 +76,20 @@ http://{$DOMAIN:localhost}, http://nonexperientially-nonascetical-agnes.ngrok-fr
     # This ensures POST /api/v1/users/deduct-credits (implemented in bff-platform)
     # is forwarded to the platform service instead of bff-auth which returns 404.
     handle /api/v1/users/deduct-credits {
+        reverse_proxy bff-platform:{$BFF_PLATFORM_PORT:3000} {
+            # Health check
+            health_uri /api/v1/telemetry/health
+            health_interval 30s
+            health_timeout 10s
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # Route platform-only add-credits to bff-platform (implemented in platform)
+    handle /api/v1/users/add-credits {
         reverse_proxy bff-platform:{$BFF_PLATFORM_PORT:3000} {
             # Health check
             health_uri /api/v1/telemetry/health

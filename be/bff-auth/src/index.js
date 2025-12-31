@@ -8,13 +8,14 @@ const dotenv = require('dotenv');
 const { Pool } = require('pg');
 const fs = require('fs');
 
-// Load env from repo root .env by default
-dotenv.config({ path: path.resolve(process.cwd(), '.env') });
+// Load env from repo root .env by default (skip in tests to avoid overriding Jest's NODE_ENV)
+if (process.env.NODE_ENV !== 'test') {
+  dotenv.config({ path: path.resolve(process.cwd(), '.env') });
+}
 
-// Use specific commons utilities to avoid circular re-export imports
-const { logger } = require('../commons/lib/logger');
-const { attachResponseHelpers } = require('../commons/lib/responses');
-const { sanitize } = require('../commons/lib/sanitize');
+// Use repository-relative commons to ensure consistent requires inside container
+const commons = require('../commons');
+const { logger, attachResponseHelpers, sanitize } = commons;
 
 // import the auth router from local copy
 const authRouter = require('../lib/auth');
@@ -44,8 +45,11 @@ app.use(require('cookie-parser')());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: false }));
 
-// Attach response helpers and logger from commons
-app.use(attachResponseHelpers);
+// Attach response helpers and logger from commons (defensive wrapper in case of partial export)
+app.use((req, res, next) => {
+  if (typeof attachResponseHelpers === 'function') return attachResponseHelpers(req, res, next);
+  return next();
+});
 
 // Fail-fast environment validation
 try {

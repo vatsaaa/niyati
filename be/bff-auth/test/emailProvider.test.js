@@ -1,3 +1,8 @@
+// Ensure `nodemailer` is mocked before modules that `require` it are loaded
+jest.mock('nodemailer', () => ({
+  createTransport: () => ({ sendMail: jest.fn().mockResolvedValue({ messageId: 'x' }) })
+}), { virtual: true });
+
 const ORIGINAL_ENV = process.env;
 
 describe('emailProvider.sendMail', () => {
@@ -26,6 +31,8 @@ describe('emailProvider.sendMail', () => {
     // Provide SMTP env so getTransport returns a transport; mock nodemailer.createTransport
     process.env.SMTP_HOST = 'smtp.example';
     process.env.SMTP_USER = 'user';
+    // Ensure EMAIL_FROM is not set for this test
+    delete process.env.EMAIL_FROM;
     jest.mock('nodemailer', () => ({ createTransport: () => ({ sendMail: jest.fn().mockResolvedValue({ messageId: 'x' }) }) }), { virtual: true });
     const { sendMail } = require('../lib/emailProvider');
     await expect(sendMail({ to: 'a@b.com', subject: 'x' })).rejects.toThrow('EMAIL_FROM');

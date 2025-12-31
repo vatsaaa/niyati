@@ -1,0 +1,27 @@
+services:
+  n8n:
+    image: node:20-alpine
+    volumes:
+      - ./scripts/mock-n8n.js:/app/mock-n8n.js
+    command: node /app/mock-n8n.js
+    ports:
+      - "5678:5678"
+    networks:
+      - niyati
+  postgres:
+    ports:
+      - "55432:5432"
+    networks:
+      - niyati
+  # Override UI service to use local webhook instead of ngrok for CI
+  ui-service:
+    build:
+      context: ./ui
+      args:
+        - VITE_N8N_WEBHOOK_URL=/webhook/chat
+        - VITE_BFF_BASE_URL=
+        - VITE_DEBUG_MODE=true
+
+networks:
+  niyati:
+    external: false

@@ -294,6 +294,104 @@ POSTGRES_PASSWORD=<strong-password>
 
 ## 🌍 Environment Configuration
 
+---
+
+## 🏭 Production Setup & Code Review
+
+### 1. Production Startup Flow
+
+- **Primary method:** Use Docker Compose with the production override file:
+    - `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d`
+- **Entrypoints:** Each service (`bff-platform`, `bff-auth`, `ui`, `worker`, `n8n`) has a `Dockerfile` and is orchestrated via Compose.
+- **Reverse Proxy:** Caddy is used as the production HTTP(S) reverse proxy, handling SSL, routing `/api/*` to the correct backend, and serving the UI.
+
+### 2. Key Production Files & Conventions
+
+- **docker-compose.prod.yml:**
+    - Sets up production-optimized images, disables dev-only services, and configures persistent volumes.
+    - Healthchecks for all services use `/api/v1/telemetry/health`.
+    - Environment variables are loaded from `.env` files (not checked in; see `.env.example`).
+
+- **Caddyfile:**
+    - Handles HTTPS, domain routing, and static asset serving.
+    - Proxies `/api/*` to the correct backend service (platform or auth).
+
+- **be/scripts/run_migrations.sh:**
+    - Waits for Postgres, then applies all SQL migrations in `be/migrations`.
+    - Should be run as an init container or startup script for the platform service.
+
+- **be/bff-platform/lib/validateEnv.js:**
+    - Strictly validates required environment variables at startup.
+    - Any missing/invalid env will cause the service to exit (fail-fast).
+
+- **Logging:**
+    - Uses `pino` for structured logs.
+    - `LOG_PRETTY_PRINT` should be `false` in production for JSON logs.
+
+### 3. Production-Readiness Checklist
+
+- **Environment Variables:**
+    - All secrets (JWT, DB, SMTP, etc.) must be set via `.env` files or Docker secrets.
+    - No secrets should be hardcoded or checked into the repo.
+
+- **Database:**
+    - PostgreSQL must be running and accessible to the backend services.
+    - Migrations must be applied before app starts serving traffic.
+
+- **Redis:**
+    - Required for background jobs (worker) and some session flows.
+
+- **MailHog:**
+    - Used for email testing in dev; in production, configure a real SMTP provider.
+
+- **Ollama/n8n:**
+    - Ollama (local LLM) and n8n (workflow automation) are required for AI chat flows.
+
+- **Healthchecks:**
+    - All services expose `/api/v1/telemetry/health` for readiness/liveness.
+    - Caddy should be configured to use these for upstream health.
+
+- **Static Assets:**
+    - UI is built with Vite and served as static files by Caddy.
+
+- **Security:**
+    - HTTPS enforced at the proxy layer.
+    - CORS is locked down in production (see Caddyfile and backend CORS config).
+
+### 4. Deployment Steps (Summary)
+
+1. **Build images:**
+     - `docker compose -f docker-compose.yml -f docker-compose.prod.yml build --no-cache`
+
+2. **Set up secrets:**
+     - Populate `.env`, `.env.bff.auth`, `.env.bff.platform`, `.env.ui` with production values.
+
+3. **Run migrations:**
+     - `docker compose run --rm bff-platform /app/scripts/run_migrations.sh`
+
+4. **Start services:**
+     - `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --force-recreate`
+
+5. **Verify health:**
+     - Check `/api/v1/telemetry/health` for all services.
+
+6. **Monitor logs:**
+     - Use `docker compose logs -f` or a log aggregation solution.
+
+### 5. Best Practices & Gotchas
+
+- **Never run with dev overrides or `LOG_PRETTY_PRINT=true` in production.**
+- **Always use the production Compose file for correct volumes, secrets, and healthchecks.**
+- **Ensure all migrations are applied before exposing the app.**
+- **Monitor health endpoints and logs for early error detection.**
+- **Rotate secrets and use Docker secrets or a vault for sensitive values.**
+- **If using a cloud provider, ensure persistent storage for Postgres and Redis.**
+
+**Summary:**
+Your production setup is robust, using Docker Compose, strict env validation, healthchecks, and a reverse proxy. The main requirements are to ensure all secrets are set, migrations are run, and the correct Compose files are used. No code changes are needed for production; just follow the documented deployment flow.
+
+---
+
 | Setting | Development | Production |
 |---------|-------------|------------|
 | Log Level | `debug` | `info` |

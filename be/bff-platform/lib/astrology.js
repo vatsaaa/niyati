@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const astrologyService = require('../services/astrologyService');
 const axios = require('axios');
-const { logger, sanitize, reqIdFromReq, config, ErrorCodes } = require('../commons');
+const { logger, sanitize, reqIdFromReq, config, ErrorCodes } = require('../../commons');
 
 // POST /api/astrology/compute
 // Accepts { profile: { name, dob, timeOfBirth, placeOfBirth: { city, countryCode, lat, lng } } }

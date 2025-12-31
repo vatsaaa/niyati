@@ -34,21 +34,8 @@ test('ui identify -> chat -> credits deducted', async ({ page, baseURL }) => {
         consoleLogs.push({ type: 'unknown', text: String(msg) });
       }
     });
-    // Proxy API requests (UI served at :5173) to the backend at :3000 so the UI's relative
-    // /api calls succeed when not using a reverse proxy in front of the UI.
-    await page.route('**/api/**', async route => {
-      const req = route.request();
-      try {
-        // Rewrite UI dev server host (both localhost and 127.0.0.1) to backend:3000
-        const target = req.url().replace(/(127\.0\.0\.1|localhost):5173/, 'localhost:3000');
-        const fetched = await route.fetch({ url: target });
-        const body = await fetched.text();
-        await route.fulfill({ status: fetched.status(), headers: fetched.headers(), body });
-      } catch (err) {
-        await route.continue();
-      }
-    });
-    // Intercept the external n8n webhook in REAL mode and return a deterministic bot reply
+    // In REAL mode behind Caddy (CI), we do NOT intercept /api/** calls — Caddy reverse proxies them.
+    // Only intercept the external n8n webhook in REAL mode and return a deterministic bot reply
     await page.route('**/webhook/**', async route => {
       const reply = { output: "Hello — I see your profile. Here's today's horoscope: You will feel a gentle clarity today.\n" };
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(reply) });
