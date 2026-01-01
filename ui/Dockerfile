@@ -64,43 +64,35 @@ USER nodejs
 # Expose Vite dev server port
 EXPOSE 5173
 
-# Copy healthcheck helper and use it for clearer exit codes
-COPY be/scripts/healthcheck-http.sh /usr/local/bin/healthcheck-http.sh
-RUN chmod +x /usr/local/bin/healthcheck-http.sh
+# Simple healthcheck using curl (no external script needed)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD ["sh", "-c", "/usr/local/bin/healthcheck-http.sh http://localhost:5173"]
+  CMD curl -f http://localhost:5173 || exit 1
 
 # Start Vite dev server with host binding for Docker
 ENTRYPOINT ["dumb-init", "--"]
 CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
 
-# Stage 4: Production with Nginx
-FROM nginx:alpine AS production
+# Stage 4: Production - output built assets to shared volume
+# Caddy will serve these directly
+FROM alpine:3.19 AS production
 
-# Install curl for healthcheck
-RUN apk add --no-cache curl
+# Create non-root user
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S nodejs -u 1001
 
-# Copy custom nginx config
-COPY nginx.conf /etc/nginx/nginx.conf
+WORKDIR /app
 
-# Copy built assets from builder stage
-COPY --from=builder /app/dist /usr/share/nginx/html
+# Copy built assets from builder stage to a staging location
+COPY --from=builder --chown=nodejs:nodejs /app/dist /app/dist-source
 
-# Use existing nginx user and set permissions
-RUN chown -R nginx:nginx /usr/share/nginx/html && \
-    chown -R nginx:nginx /var/cache/nginx && \
-    chown -R nginx:nginx /var/log/nginx && \
-    touch /var/run/nginx.pid && \
-    chown -R nginx:nginx /var/run/nginx.pid
+# Create a script to copy files to the volume mount point on startup
+RUN echo '#!/bin/sh' > /entrypoint.sh && \
+    echo 'cp -r /app/dist-source/* /app/dist/' >> /entrypoint.sh && \
+    echo 'echo "UI files copied to shared volume"' >> /entrypoint.sh && \
+    echo 'tail -f /dev/null' >> /entrypoint.sh && \
+    chmod +x /entrypoint.sh
 
-USER nginx
+USER nodejs
 
-# Expose HTTP port
-EXPOSE 80
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-  CMD curl -f http://localhost/ || exit 1
-
-# Start nginx
-CMD ["nginx", "-g", "daemon off;"]
+# The /app/dist directory will be mounted as a volume
+CMD ["/entrypoint.sh"]

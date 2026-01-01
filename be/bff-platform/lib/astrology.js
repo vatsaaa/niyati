@@ -24,7 +24,7 @@ router.post('/compute', async (req, res) => {
       } catch (e) {}
       logger.info(sanitize({ msg: 'astrology.route.compute_result', reqId: incomingReqId, source: previewSource, bodyPreview }));
     } catch (e) {}
-    return res.json(result);
+    return res.sendSuccess(result);
   } catch (err) {
     try { logger.error(sanitize({ msg: 'astrology.route.compute_result', reqId: incomingReqId, error: err && (err.message || err.original) })); } catch (e) { logger.error(sanitize({ msg: 'Astrology compute error', error: err && err.message })); }
     return res.sendError(ErrorCodes.PROVIDER_ERROR, 'Provider error');
@@ -58,7 +58,7 @@ router.post('/geo-details', async (req, res) => {
       } catch (e) {}
       logger.info(sanitize({ msg: 'astrology.route.geo_details_result', reqId: incomingReqId, source: previewSource, bodyPreview }));
     } catch (e) {}
-    return res.json(result);
+    return res.sendSuccess(result);
   } catch (err) {
     try { logger.error(sanitize({ msg: 'astrology.route.geo_details_result', reqId: incomingReqId, error: err && (err.message || err.original) })); } catch (e) { logger.error(sanitize({ msg: 'Astrology geo-details error', error: err && err.message })); }
     return res.sendError(ErrorCodes.PROVIDER_ERROR, 'Provider error');
@@ -85,7 +85,7 @@ router.post('/planets', async (req, res) => {
       } catch (e) {}
       logger.info(sanitize({ msg: 'astrology.route.planets_result', reqId: incomingReqId, source: previewSource, bodyPreview }));
     } catch (e) {}
-    return res.json({ status: 'ok', source: config.astrology.baseUrl, data });
+    return res.sendSuccess({ source: config.astrology.baseUrl, data });
   } catch (err) {
     try { const incomingReqId = req._niyati_reqId || reqIdFromReq(req) || (req.headers && req.headers['x-request-id']); logger.error(sanitize({ msg: 'astrology.route.planets_result', reqId: incomingReqId, error: err && (err.message || err.original) })); } catch (e) { logger.error(sanitize({ msg: 'Astrology planets error', error: err && (err.message || err.original) })); }
     return res.sendError(ErrorCodes.PROVIDER_ERROR, 'Provider error');
@@ -110,7 +110,7 @@ router.post('/navamsa', async (req, res) => {
       } catch (e) {}
       logger.info(sanitize({ msg: 'astrology.route.navamsa_result', reqId: incomingReqId, source: previewSource, bodyPreview }));
     } catch (e) {}
-    return res.json(result);
+    return res.sendSuccess(result);
   } catch (err) {
     try { logger.error(sanitize({ msg: 'astrology.route.navamsa_result', reqId: incomingReqId, error: err && (err.message || err.original) })); } catch (e) { logger.error(sanitize({ msg: 'Astrology navamsa error', error: err && (err.message || err.original) })); }
     return res.sendError(ErrorCodes.PROVIDER_ERROR, 'Provider error');
@@ -136,7 +136,7 @@ router.post('/divisional', async (req, res) => {
       } catch (e) {}
       logger.info(sanitize({ msg: 'astrology.route.divisional_result', reqId: incomingReqId, source: previewSource, bodyPreview }));
     } catch (e) {}
-    return res.json(result);
+    return res.sendSuccess(result);
   } catch (err) {
     try { logger.error(sanitize({ msg: 'astrology.route.divisional_result', reqId: incomingReqId, error: err && (err.message || err.original) })); } catch (e) { logger.error(sanitize({ msg: 'Astrology divisional error', error: err && (err.message || err.original) })); }
     if (err && err.code === 'invalid_divisional') return res.sendError(ErrorCodes.INVALID_INPUT, 'Invalid divisional');
@@ -173,7 +173,7 @@ router.post('/horoscope-svg', async (req, res) => {
     } catch (e) {
       // best-effort logging shouldn't break response
     }
-    return res.json(result);
+    return res.sendSuccess(result);
   } catch (err) {
     // Log failure with the same route tag for easy searching; include reqId and error details
     try {
@@ -228,7 +228,7 @@ router.post('/probe', async (req, res) => {
       results.push({ path: p, url, error: err.message, response: err.response && err.response.data });
     }
   }
-  return res.json({ tried: candidates, results });
+  return res.sendSuccess({ tried: candidates, results });
 });
 
 module.exports = router;

@@ -92,6 +92,16 @@ test('ui identify -> chat -> credits deducted', async ({ page, baseURL }) => {
   const initialCreditsText = await creditsLocator.textContent();
   const initialCredits = parseInt(initialCreditsText, 10) || 10;
 
+  // Wait for profile to be fully populated in localStorage (returning user flow)
+  await page.waitForFunction(() => {
+    try {
+      const stored = localStorage.getItem('niyati_user_profile');
+      if (!stored) return false;
+      const p = JSON.parse(stored);
+      return p.user_verified && (p.user_verified.id || p.user_verified.phoneNumber);
+    } catch (e) { return false; }
+  }, { timeout: 5000 });
+
   // Type a chat message and submit
   const textarea = page.locator('textarea');
   // If running REAL, first provide profile details so the client can extract and persist them,

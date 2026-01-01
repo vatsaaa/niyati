@@ -1,6 +1,53 @@
 # Docker Compose for Niyati - Base Configuration
 # This file contains all service definitions with sensible defaults
 # Use with override files for environment-specific customization
+#
+# Environment-specific overrides:
+#   Development: docker compose up -d (uses docker-compose.override.yml)
+#   Production:  docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#   CI:          docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d
+
+# =============================================================================
+# YAML ANCHORS & EXTENSIONS (DRY Configuration)
+# =============================================================================
+
+# Shared healthcheck defaults for HTTP-based services
+x-healthcheck-http: &healthcheck-http
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 40s
+
+# Shared healthcheck for infrastructure services (faster checks)
+x-healthcheck-infra: &healthcheck-infra
+  interval: 10s
+  timeout: 5s
+  retries: 5
+  start_period: 10s
+
+# Common Node.js service settings
+x-node-service: &node-service
+  restart: unless-stopped
+  networks:
+    - niyati
+
+# Shared BFF build configuration
+x-bff-build: &bff-build
+  context: ./be
+  target: ${BUILD_TARGET:-development}
+
+# Shared BFF environment variables (reduces duplication across auth/platform)
+x-bff-environment: &bff-environment
+  NODE_ENV: ${NODE_ENV:-development}
+  LOG_PRETTY_PRINT: ${LOG_PRETTY_PRINT:-true}
+  LOG_LEVEL: ${LOG_LEVEL:-debug}
+  CORS_ALLOWED: ${CORS_ALLOWED:-http://localhost:5173}
+  ALLOW_CROSS_SITE_COOKIES: ${ALLOW_CROSS_SITE_COOKIES:-false}
+  API_VERSION: ${API_VERSION:-v1}
+
+# =============================================================================
+# SERVICES
+# =============================================================================
 
 services:
   # PostgreSQL Database
@@ -8,8 +55,6 @@ services:
     image: postgres:15-alpine
     expose:
       - "5432"
-    profiles:
-      - dev
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-niyati}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-niyati_dev_pass}
@@ -24,10 +69,7 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-niyati} -d ${POSTGRES_DB:-niyati_dev}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
+      <<: *healthcheck-infra
     command:
       - "postgres"
       - "-c"
@@ -42,8 +84,6 @@ services:
     image: redis:7-alpine
     expose:
       - "6379"
-    profiles:
-      - dev
     command: ["redis-server", "--save", "60", "1", "--appendonly", "no"]
     volumes:
       - redis-data:/data
@@ -52,11 +92,9 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      <<: *healthcheck-infra
 
-  # MailHog - Email testing
+  # MailHog - Email testing (development only)
   mailhog:
     image: mailhog/mailhog:latest
     expose:
@@ -69,134 +107,123 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:8025 || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
+      <<: *healthcheck-infra
 
   # BFF Auth Service
   bff-auth:
+    <<: *node-service
     build:
-      context: ./be
+      <<: *bff-build
       dockerfile: bff-auth/Dockerfile
-      target: ${BUILD_TARGET:-development}
     image: niyati/bff-auth:${IMAGE_TAG:-local}
     expose:
       - "${BFF_AUTH_PORT:-3001}"
     env_file:
       - .env
     environment:
-      - NODE_ENV=${NODE_ENV:-development}
-      - LOG_PRETTY_PRINT=${LOG_PRETTY_PRINT:-true}
-      - PORT=${BFF_AUTH_PORT:-3001}
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-niyati}:${POSTGRES_PASSWORD:-niyati_dev_pass}@postgres:5432/${POSTGRES_DB:-niyati_dev}
-    networks:
-      - niyati
-    restart: unless-stopped
+      <<: *bff-environment
+      PORT: ${BFF_AUTH_PORT:-3001}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-niyati}:${POSTGRES_PASSWORD:-niyati_dev_pass}@postgres:5432/${POSTGRES_DB:-niyati_dev}
     healthcheck:
       test: ["CMD-SHELL", "/usr/local/bin/healthcheck-http.sh http://localhost:${BFF_AUTH_PORT:-3001}/api/v1/telemetry/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    # readiness is handled by the service entrypoint (wait-for-db.sh) and healthchecks
+      <<: *healthcheck-http
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   # BFF Platform Service
   bff-platform:
+    <<: *node-service
     build:
-      context: ./be
+      <<: *bff-build
       dockerfile: bff-platform/Dockerfile
-      target: ${BUILD_TARGET:-development}
     image: niyati/bff-platform:${IMAGE_TAG:-local}
     expose:
       - "${BFF_PLATFORM_PORT:-3000}"
     env_file:
       - .env
     environment:
-      - NODE_ENV=${NODE_ENV:-development}
-      - LOG_PRETTY_PRINT=${LOG_PRETTY_PRINT:-true}
-      - PORT=${BFF_PLATFORM_PORT:-3000}
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-niyati}:${POSTGRES_PASSWORD:-niyati_dev_pass}@postgres:5432/${POSTGRES_DB:-niyati_dev}
-    networks:
-      - niyati
-    restart: unless-stopped
+      <<: *bff-environment
+      PORT: ${BFF_PLATFORM_PORT:-3000}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-niyati}:${POSTGRES_PASSWORD:-niyati_dev_pass}@postgres:5432/${POSTGRES_DB:-niyati_dev}
     healthcheck:
       test: ["CMD-SHELL", "/usr/local/bin/healthcheck-http.sh http://localhost:${BFF_PLATFORM_PORT:-3000}/api/v1/telemetry/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    # readiness is handled by the service entrypoint (wait-for-db.sh) and healthchecks
+      <<: *healthcheck-http
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
-  # UI Service
+  # UI Service - builds static assets for Caddy to serve
   ui-service:
+    <<: *node-service
     build:
       context: ./ui
       dockerfile: Dockerfile
       target: ${BUILD_TARGET:-development}
       args:
-        - VITE_BFF_BASE_URL=${VITE_BFF_BASE_URL:-}
-        - VITE_N8N_WEBHOOK_URL=${VITE_N8N_WEBHOOK_URL}
-        - VITE_DEBUG_MODE=${VITE_DEBUG_MODE:-false}
+        VITE_BFF_BASE_URL: ${VITE_BFF_BASE_URL:-}
+        VITE_N8N_WEBHOOK_URL: ${VITE_N8N_WEBHOOK_URL}
+        VITE_DEBUG_MODE: ${VITE_DEBUG_MODE:-false}
     image: niyati/ui:${IMAGE_TAG:-local}
-    expose:
-      - "80"
     env_file:
       - .env
     environment:
-      - NODE_ENV=${NODE_ENV:-development}
-      - VITE_API_URL=/api
-    networks:
-      - niyati
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "/usr/local/bin/healthcheck-http.sh http://127.0.0.1:80"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+      NODE_ENV: ${NODE_ENV:-development}
+      VITE_API_URL: /api
+    volumes:
+      - ui-dist:/app/dist
+    # No healthcheck needed for production (it just holds files)
+    # Development target has its own healthcheck in the Dockerfile
     depends_on:
-      - bff-platform
-      - bff-auth
+      bff-platform:
+        condition: service_healthy
+      bff-auth:
+        condition: service_healthy
 
-  # Caddy gateway (routes /api -> bff-platform, everything else -> ui-service)
+  # Caddy gateway - serves UI static files and proxies API requests
   caddy:
     image: caddy:2-alpine
-    restart: unless-stopped
+    <<: *node-service
     ports:
-      - "5173:5173"
+      - "${CADDY_HTTP_PORT:-5173}:5173"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+      - ui-dist:/srv:ro
     depends_on:
       - ui-service
       - bff-platform
-    networks:
-      - niyati
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:5173 || exit 1"]
+      <<: *healthcheck-infra
 
   # Background Worker (optional, production)
   worker:
+    <<: *node-service
     build:
       context: ./be/worker
       dockerfile: Dockerfile
-    image: niyati/worker:latest
-    environment:
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - SMTP_HOST=${SMTP_HOST}
-      - SMTP_PORT=${SMTP_PORT}
-      - SMTP_SECURE=${SMTP_SECURE}
-      - EMAIL_FROM=${EMAIL_FROM}
-    networks:
-      - niyati
+    image: niyati/worker:${IMAGE_TAG:-local}
     restart: on-failure
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_SECURE: ${SMTP_SECURE}
+      EMAIL_FROM: ${EMAIL_FROM}
     healthcheck:
       test: ["CMD-SHELL", "node /usr/src/app/healthcheck.js"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    # readiness is handled by the service entrypoint (wait-for-db.sh) and healthchecks
+      <<: *healthcheck-http
+    depends_on:
+      redis:
+        condition: service_healthy
     profiles:
       - production
 
@@ -214,5 +241,7 @@ volumes:
   caddy_data:
     driver: local
   caddy_config:
+    driver: local
+  ui-dist:
     driver: local
   

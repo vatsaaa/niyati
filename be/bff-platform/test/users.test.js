@@ -1,5 +1,5 @@
 const request = require('supertest');
-const express = require('express');
+const { createTestApp, createMockDb } = require('@test-helpers');
 
 describe('bff-platform users routes', () => {
   let app;
@@ -18,22 +18,22 @@ describe('bff-platform users routes', () => {
     });
 
     const router = require('../lib/users');
-    app = express();
-    app.use(express.json());
-    const { attachResponseHelpers } = require('../../commons/lib/responses');
-    app.use('/api/v1/users', attachResponseHelpers, router);
+    const { app: testApp } = createTestApp('/api/v1/users', router);
+    app = testApp;
   });
 
   afterEach(() => jest.restoreAllMocks());
 
   test('POST /sync returns 200 for valid profile', async () => {
-    const fakeDb = { async query(sql, params) { return { rows: [{ id: 1, phone_number: params[0] }], rowCount: 1 }; } };
+    const fakeDb = createMockDb(async (sql, params) => { 
+      return { rows: [{ id: 1, phone_number: params[0] }], rowCount: 1 }; 
+    });
     app.set('db', fakeDb);
     const res = await request(app).post('/api/v1/users/sync').set('X-Service-Token', process.env.SERVICE_TOKEN || '').send({ phoneNumber: '+1234', consentGiven: true });
     expect(res.statusCode).toBe(200);
     expect(res.body.status).toBe('ok');
   });
-
+createMockDb({ rows: [], rowCount: 0 })
   test('POST /identify returns returning false when not found', async () => {
     const fakeDb = { async query(sql, params) { return { rows: [], rowCount: 0 }; } };
     app.set('db', fakeDb);
@@ -43,15 +43,13 @@ describe('bff-platform users routes', () => {
   });
 
   test('POST /sync creates a new user with default credits and returns user object', async () => {
-    const fakeDb = {
-      async query(sql, params) {
-        // Simulate INSERT ... RETURNING behavior
-        if (sql.trim().toUpperCase().startsWith('INSERT INTO USERS')) {
-          return { rows: [{ id: 99, phone_number: params[0], credits: 10 }], rowCount: 1 };
-        }
-        return { rows: [], rowCount: 0 };
+    const fakeDb = createMockDb(async (sql, params) => {
+      // Simulate INSERT ... RETURNING behavior
+      if (sql.trim().toUpperCase().startsWith('INSERT INTO USERS')) {
+        return { rows: [{ id: 99, phone_number: params[0], credits: 10 }], rowCount: 1 };
       }
-    };
+      return { rows: [], rowCount: 0 };
+    });
     app.set('db', fakeDb);
     const res = await request(app).post('/api/v1/users/sync').set('X-Service-Token', process.env.SERVICE_TOKEN || '').send({ phoneNumber: '+919999999999', consentGiven: true });
     expect(res.statusCode).toBe(200);
@@ -75,7 +73,7 @@ describe('bff-platform users routes', () => {
       total_paid_amount: 0,
       last_login_location: 'Mumbai'
     };
-    const fakeDb = { async query(sql, params) { return { rows: [sampleUser], rowCount: 1 }; } };
+    const fakeDb = createMockDb({ rows: [sampleUser], rowCount: 1 });
     app.set('db', fakeDb);
     const res = await request(app).post('/api/v1/users/identify').send({ phoneNumber: '+91-8888888888' });
     expect(res.statusCode).toBe(200);

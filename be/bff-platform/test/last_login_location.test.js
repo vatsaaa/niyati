@@ -1,5 +1,5 @@
 const request = require('supertest');
-const express = require('express');
+const { createTestApp, createMockDb } = require('@test-helpers');
 
 describe('bff-platform users last_login_location persistence', () => {
   let app;
@@ -18,10 +18,8 @@ describe('bff-platform users last_login_location persistence', () => {
     });
 
     const router = require('../lib/users');
-    app = express();
-    app.use(express.json());
-    const { attachResponseHelpers } = require('../../commons/lib/responses');
-    app.use('/api/v1/users', attachResponseHelpers, router);
+    const { app: testApp } = createTestApp('/api/v1/users', router);
+    app = testApp;
   });
 
   afterEach(() => jest.restoreAllMocks());
@@ -30,13 +28,11 @@ describe('bff-platform users last_login_location persistence', () => {
     const providedPhone = '+919700000000';
     const providedLastLoc = 'Bengaluru';
 
-    const fakeDb = {
-      async query(sql, params) {
-        // last_login_location is expected at params[11]
-        expect(params[11]).toBe(providedLastLoc);
-        return { rows: [{ id: 42, phone_number: params[0], last_login_location: params[11] }], rowCount: 1 };
-      }
-    };
+    const fakeDb = createMockDb(async (sql, params) => {
+      // last_login_location is expected at params[11]
+      expect(params[11]).toBe(providedLastLoc);
+      return { rows: [{ id: 42, phone_number: params[0], last_login_location: params[11] }], rowCount: 1 };
+    });
 
     app.set('db', fakeDb);
 

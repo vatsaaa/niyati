@@ -15,12 +15,11 @@ if (process.env.NODE_ENV !== 'test') {
 
 // Use repository-relative commons to ensure consistent requires inside container
 const commons = require('../commons');
-const { logger, attachResponseHelpers, sanitize } = commons;
+const { logger, attachResponseHelpers, sanitize, createTelemetryRouter } = commons;
 
 // import the auth router from local copy
 const authRouter = require('../lib/auth');
 const usersRouter = require('../lib/users');
-const telemetryRouter = require('../lib/telemetry');
 
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
@@ -53,9 +52,9 @@ app.use((req, res, next) => {
 
 // Fail-fast environment validation
 try {
-  // validateEnv is intentionally required from lib to validate early
-  const { validateEnv } = require('../lib/validateEnv');
-  validateEnv();
+  // validateEnv is intentionally required from commons to validate early
+  const { validateEnv } = require('../commons/lib/validateEnv');
+  validateEnv({ service: 'bff-auth' });
 } catch (e) {
   // If validation fails, log and rethrow to stop startup
   console.error('Environment validation failed during bootstrap:', e && e.message);
@@ -107,15 +106,22 @@ if (process.env.DATABASE_URL) {
 // Mount auth and telemetry routes
 const API_VERSION = process.env.API_VERSION || 'v1';
 const apiRouter = express.Router();
+
+// Initialize telemetry router with service-specific config
+const telemetryRouter = createTelemetryRouter({
+  serviceName: 'bff-auth',
+  packageJsonPath: '../package.json'
+});
+
 apiRouter.use('/auth', authRouter);
 apiRouter.use('/users', usersRouter);
 apiRouter.use('/telemetry', telemetryRouter);
 app.use(`/api/${API_VERSION}`, apiRouter);
 
-app.get('/', (req, res) => res.json({ status: 'ok', service: 'bff-auth', version: API_VERSION }));
+app.get('/', (req, res) => res.sendSuccess({ service: 'bff-auth', version: API_VERSION }));
 
 // Health endpoint
-app.get('/api/v1/telemetry/health', (req, res) => res.json({ status: 'ok', service: 'bff-auth' }));
+app.get('/api/v1/telemetry/health', (req, res) => res.sendSuccess({ service: 'bff-auth' }));
 
 const server = app.listen(PORT, () => {
   logger.info({ msg: `BFF Auth listening on http://localhost:${PORT}` });

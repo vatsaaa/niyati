@@ -157,14 +157,25 @@ http://localhost:5173, http://{$DOMAIN:localhost}, http://nonexperientially-nona
         }
     }
 
-    # UI - serve everything else
+    # UI - serve static files from /srv or proxy to Vite dev server
+    # In production: /srv contains built files from ui-service
+    # In development: proxy to ui-service running Vite on port 5173
     handle /* {
-        reverse_proxy ui-service:80 {
-            # Production server: nginx
-            header_up Host {host}
-            header_up X-Real-IP {remote_host}
-            header_up X-Forwarded-For {remote_host}
-            header_up X-Forwarded-Proto {scheme}
+        # Try static files first, fall back to proxy for dev server
+        @has_static file /srv/index.html
+        handle @has_static {
+            root * /srv
+            try_files {path} /index.html
+            file_server
+        }
+        # Fall back to proxying to Vite dev server
+        handle {
+            reverse_proxy ui-service:5173 {
+                header_up Host {host}
+                header_up X-Real-IP {remote_host}
+                header_up X-Forwarded-For {remote_host}
+                header_up X-Forwarded-Proto {scheme}
+            }
         }
     }
 

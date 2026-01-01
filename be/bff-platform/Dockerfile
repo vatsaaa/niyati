@@ -4,6 +4,12 @@ WORKDIR /app
 # Install dumb-init and netcat for wait-for-db functionality
 RUN apk add --no-cache dumb-init netcat-openbsd curl
 
+# Copy shared helper scripts (once in base, inherited by all stages)
+COPY scripts/wait-for-db.sh /usr/local/bin/wait-for-db.sh
+COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY scripts/healthcheck-http.sh /usr/local/bin/healthcheck-http.sh
+RUN chmod +x /usr/local/bin/wait-for-db.sh /usr/local/bin/entrypoint.sh /usr/local/bin/healthcheck-http.sh
+
 COPY bff-platform/package*.json ./
 
 FROM base AS development
@@ -15,11 +21,6 @@ COPY commons/ /app/commons/
 # FIX: Create a symlink at /commons to satisfy the "../../commons" relative import
 # originating from /app/src/index.js
 RUN ln -s /app/commons /commons
-# Copy helper scripts
-COPY scripts/wait-for-db.sh /usr/local/bin/wait-for-db.sh
-COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
-COPY scripts/healthcheck-http.sh /usr/local/bin/healthcheck-http.sh
-RUN chmod +x /usr/local/bin/wait-for-db.sh /usr/local/bin/entrypoint.sh /usr/local/bin/healthcheck-http.sh
 RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001 && chown -R nodejs:nodejs /app
 USER nodejs
 EXPOSE 3000
@@ -38,11 +39,6 @@ COPY commons/ /app/commons/
 # FIX: Create a symlink at /commons to satisfy the "../../commons" relative import
 # originating from /app/src/index.js
 RUN ln -s /app/commons /commons
-# Copy helper scripts
-COPY scripts/wait-for-db.sh /usr/local/bin/wait-for-db.sh
-COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
-COPY scripts/healthcheck-http.sh /usr/local/bin/healthcheck-http.sh
-RUN chmod +x /usr/local/bin/wait-for-db.sh /usr/local/bin/entrypoint.sh /usr/local/bin/healthcheck-http.sh
 RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001 && chown -R nodejs:nodejs /app
 USER nodejs
 EXPOSE 3000

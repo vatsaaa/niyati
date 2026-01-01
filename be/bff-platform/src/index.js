@@ -13,12 +13,11 @@ if (process.env.NODE_ENV !== 'test') {
 
 // Use shared commons from be/commons
 const commons = require('../../commons');
-const { logger, attachResponseHelpers } = commons;
+const { logger, attachResponseHelpers, createTelemetryRouter } = commons;
 
 // Import platform routers from local copies
 const geocodeRouter = require('../lib/geocode');
 const astrologyRouter = require('../lib/astrology');
-const telemetryRouter = require('../lib/telemetry');
 // chrono-node for server-side natural language date parsing
 let chrono;
 try {
@@ -101,8 +100,8 @@ if (process.env.DATABASE_URL) {
   // Only run during real process startup (not when required by tests or other modules)
   if (process.env.NODE_ENV !== 'test' && require.main === module) {
     try {
-      const { validateEnv } = require('../lib/validateEnv');
-      validateEnv();
+      const { validateEnv } = require('../commons/lib/validateEnv');
+      validateEnv({ service: 'bff-platform' });
     } catch (e) {
       console.error('Environment validation failed during bootstrap (bff-platform):', e && e.message);
       throw e;
@@ -111,6 +110,12 @@ if (process.env.DATABASE_URL) {
 
   // Also expose ErrorCodes for consistent error codes usage in this file
   const { ErrorCodes } = commons;
+
+// Initialize telemetry router with service-specific config
+const telemetryRouter = createTelemetryRouter({
+  serviceName: 'bff-platform',
+  packageJsonPath: '../package.json'
+});
 
 const API_VERSION = process.env.API_VERSION || 'v1';
 const apiRouter = express.Router();

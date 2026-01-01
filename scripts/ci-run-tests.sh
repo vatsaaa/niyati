@@ -1,175 +1,183 @@
 #!/usr/bin/env bash
-set -e
+# =============================================================================
+# CI Test Runner for Niyati
+# =============================================================================
+# Runs the full test suite including backend unit tests and E2E tests in a
+# CI environment using Docker Compose.
+#
+# Usage: ./scripts/ci-run-tests.sh
+# =============================================================================
 
-REPO_ROOT="$(pwd)"
-echo "Starting CI test script from ${REPO_ROOT}"
+# Load common library
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lib/common.sh"
 
-# 1. Start the Stack (Force CI configuration)
-echo "🚀 Starting Docker Stack for CI (with mock n8n)..."
-# don't fail the script if one container reports unhealthy; continue and verify readiness below
-docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --build || true
+# Configuration
+PROJECT_ROOT="$(find_project_root "$SCRIPT_DIR")"
+cd "$PROJECT_ROOT"
 
-# 1b. Restart Caddy to ensure it picks up any Caddyfile changes
-# (needed because caddy might be "Running" from a previous session while Caddyfile was edited)
-echo "🔄 Restarting Caddy to ensure latest Caddyfile is loaded..."
-docker compose -f docker-compose.yml -f docker-compose.ci.yml restart caddy || true
+COMPOSE_CMD="docker compose -f docker-compose.yml -f docker-compose.ci.yml"
 
-# 2. Wait for Postgres inside compose
-echo "⏳ Waiting for Postgres inside compose..."
+log_info "Starting CI test script from ${PROJECT_ROOT}"
+
+# =============================================================================
+# STEP 1: Start the Stack
+# =============================================================================
+
+log_step "🚀 Starting Docker Stack for CI (with mock n8n)..."
+# Don't fail the script if one container reports unhealthy; continue and verify readiness below
+$COMPOSE_CMD up -d --build || true
+
+# Restart Caddy to ensure it picks up any Caddyfile changes
+log_step "🔄 Restarting Caddy to ensure latest Caddyfile is loaded..."
+$COMPOSE_CMD restart caddy || true
+
+# =============================================================================
+# STEP 2: Wait for Postgres
+# =============================================================================
+
+log_step "⏳ Waiting for Postgres inside compose..."
 for i in $(seq 1 60); do
-  docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T postgres pg_isready -U ${POSTGRES_USER:-niyati} -d ${POSTGRES_DB:-niyati_dev} >/dev/null 2>&1 || true
-  docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T postgres pg_isready -U ${POSTGRES_USER:-niyati} -d ${POSTGRES_DB:-niyati_dev} >/dev/null 2>&1 && break || sleep 1
+    $COMPOSE_CMD exec -T postgres pg_isready -U ${POSTGRES_USER:-niyati} -d ${POSTGRES_DB:-niyati_dev} >/dev/null 2>&1 && break || sleep 1
 done
 
-# 3. Run migrations and seeds inside the postgres container
-echo "📦 Applying migrations inside compose Postgres..."
+# =============================================================================
+# STEP 3: Run Migrations and Seeds
+# =============================================================================
+
+log_step "📦 Applying migrations inside compose Postgres..."
 for f in $(ls -1 be/migrations/*.up.sql | sort); do
-  echo "Applying $f"
-  cat "$f" | docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T postgres psql -U ${POSTGRES_USER:-niyati} -d ${POSTGRES_DB:-niyati_dev}
+    log_debug "Applying $f"
+    cat "$f" | $COMPOSE_CMD exec -T postgres psql -U ${POSTGRES_USER:-niyati} -d ${POSTGRES_DB:-niyati_dev}
 done
 
-if [ -f be/seed_ci.sql ]; then
-  echo "Applying be/seed_ci.sql inside compose Postgres..."
-  cat be/seed_ci.sql | docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T postgres psql -U ${POSTGRES_USER:-niyati} -d ${POSTGRES_DB:-niyati_dev} || { echo "Failed to apply be/seed_ci.sql"; exit 5; }
+if [[ -f be/seed_ci.sql ]]; then
+    log_step "Applying be/seed_ci.sql inside compose Postgres..."
+    cat be/seed_ci.sql | $COMPOSE_CMD exec -T postgres psql -U ${POSTGRES_USER:-niyati} -d ${POSTGRES_DB:-niyati_dev} || { log_error "Failed to apply be/seed_ci.sql"; exit 5; }
 else
-  echo "be/seed_ci.sql not found, skipping seed step"
+    log_warn "be/seed_ci.sql not found, skipping seed step"
 fi
 
-# 4. Ensure devDependencies inside bff-platform container so tests (supertest, jest) are present.
-echo "🛠️ Installing devDependencies inside bff-platform container..."
-docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T bff-platform npm install --include=dev || true
+# =============================================================================
+# STEP 4: Install devDependencies
+# =============================================================================
 
+log_step "🛠️ Installing devDependencies inside bff-platform container..."
+$COMPOSE_CMD exec -T bff-platform npm install --include=dev || true
 
-# 5. Run bff-platform tests LOCALLY against compose Postgres (exposed on 55432)
-echo "🧪 Running bff-platform tests locally against compose Postgres..."
+# =============================================================================
+# STEP 5: Run Backend Tests
+# =============================================================================
+
+log_step "🧪 Running bff-platform tests locally against compose Postgres..."
 cd be/bff-platform
 npm ci --include=dev
-DATABASE_URL="postgresql://${POSTGRES_USER:-niyati}:${POSTGRES_PASSWORD:-niyati_dev_pass}@127.0.0.1:55432/${POSTGRES_DB:-niyati_dev}" NODE_ENV=test npm test || { echo "bff-platform tests failed"; exit 2; }
+DATABASE_URL="postgresql://${POSTGRES_USER:-niyati}:${POSTGRES_PASSWORD:-niyati_dev_pass}@127.0.0.1:55432/${POSTGRES_DB:-niyati_dev}" NODE_ENV=test npm test || { log_error "bff-platform tests failed"; exit 2; }
 
-# 6. Run bff-auth tests LOCALLY against compose Postgres
-echo "🧪 Running bff-auth tests locally against compose Postgres..."
+log_step "🧪 Running bff-auth tests locally against compose Postgres..."
 cd ../bff-auth
 npm ci --include=dev
-DATABASE_URL="postgresql://${POSTGRES_USER:-niyati}:${POSTGRES_PASSWORD:-niyati_dev_pass}@127.0.0.1:55432/${POSTGRES_DB:-niyati_dev}" NODE_ENV=test npm test || { echo "bff-auth tests failed"; exit 3; }
+DATABASE_URL="postgresql://${POSTGRES_USER:-niyati}:${POSTGRES_PASSWORD:-niyati_dev_pass}@127.0.0.1:55432/${POSTGRES_DB:-niyati_dev}" NODE_ENV=test npm test || { log_error "bff-auth tests failed"; exit 3; }
 
-# 7. Optional: run UI or other checks here
+cd "$PROJECT_ROOT"
 
-# --- NEW SECTION: Run E2E Tests ---
-echo "🎭 Preparing E2E Tests..."
+# =============================================================================
+# STEP 6: E2E Tests
+# =============================================================================
 
-# Get the absolute path of the repo root (try script-relative, fallback to caller cwd)
-# Use BASH_SOURCE to reliably locate the script file when possible
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" >/dev/null 2>&1 && pwd || true)"
-if [ -n "$SCRIPT_DIR" ] && [ -d "$SCRIPT_DIR" ]; then
-  SCRIPT_REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-else
-  SCRIPT_REPO_ROOT="$REPO_ROOT"
-fi
-E2E_DIR="$SCRIPT_REPO_ROOT/e2e"
+log_step "🎭 Preparing E2E Tests..."
 
-echo "📍 Repo Root (invocation): $REPO_ROOT"
-echo "📍 Repo Root (script-resolved): $SCRIPT_REPO_ROOT"
-echo "📍 Looking for E2E at: $E2E_DIR"
+E2E_DIR="$PROJECT_ROOT/e2e"
+E2E_EXIT_CODE=0
 
-if [ -d "$E2E_DIR" ]; then
-  echo "✅ E2E directory found. Running tests..."
-  cd "$E2E_DIR"
+log_debug "📍 Repo Root: $PROJECT_ROOT"
+log_debug "📍 Looking for E2E at: $E2E_DIR"
 
-  # Install deps if node_modules is missing
-  if [ ! -d "node_modules" ]; then
-    echo "📦 Installing Playwright dependencies..."
-    npm ci
-  fi
+if [[ -d "$E2E_DIR" ]]; then
+    log_success "E2E directory found. Running tests..."
+    cd "$E2E_DIR"
 
-  # Run the tests
-  export REAL=1
-  # Use 'localhost' so Caddy host-based routing and server blocks match
-  export BASE_URL=http://localhost:5173
-  # Ensure UI is reachable at BASE_URL; if not, build+serve a local UI for tests
-  UI_PID=""
-  if ! curl -sSf "${BASE_URL}/" >/dev/null 2>&1; then
-    echo "UI not reachable at ${BASE_URL}; building and serving local UI..."
-    if [ -d "$SCRIPT_REPO_ROOT/ui" ]; then
-      (cd "$SCRIPT_REPO_ROOT/ui" && npm ci && npm run build) || { echo "UI build failed"; E2E_EXIT_CODE=1; }
-      # serve the built UI on port 5173
-      # Use npx --yes to avoid interactive install prompts in CI
-      npx --yes http-server "$SCRIPT_REPO_ROOT/ui/dist" -p 5173 --silent >/tmp/ui-server.log 2>&1 &
-      UI_PID=$!
-      echo "Started local UI server (pid=${UI_PID}), waiting for it to become available..."
-      for i in $(seq 1 30); do
-        curl -sSf "${BASE_URL}/" >/dev/null 2>&1 && break || sleep 1
-      done
+    # Install deps if node_modules is missing
+    if [[ ! -d "node_modules" ]]; then
+        log_step "📦 Installing Playwright dependencies..."
+        npm ci
+    fi
+
+    # Run the tests
+    export REAL=1
+    export BASE_URL=http://localhost:5173
+
+    # Ensure UI is reachable at BASE_URL
+    UI_PID=""
+    if ! curl -sSf "${BASE_URL}/" >/dev/null 2>&1; then
+        log_warn "UI not reachable at ${BASE_URL}; building and serving local UI..."
+        if [[ -d "$PROJECT_ROOT/ui" ]]; then
+            (cd "$PROJECT_ROOT/ui" && npm ci && npm run build) || { log_error "UI build failed"; E2E_EXIT_CODE=1; }
+            npx --yes http-server "$PROJECT_ROOT/ui/dist" -p 5173 --silent >/tmp/ui-server.log 2>&1 &
+            UI_PID=$!
+            log_debug "Started local UI server (pid=${UI_PID})"
+            for i in $(seq 1 30); do
+                curl -sSf "${BASE_URL}/" >/dev/null 2>&1 && break || sleep 1
+            done
+        else
+            log_error "No ui directory found at $PROJECT_ROOT/ui"
+            E2E_EXIT_CODE=1
+        fi
+    fi
+
+    # Wait for proxied API (Caddy) to be healthy
+    log_step "⏳ Waiting for proxied API (Caddy) to report healthy..."
+    if check_url_with_retries "${BASE_URL}/api/v1/telemetry/health" 60 1; then
+        log_success "Proxied API is healthy"
     else
-      echo "No ui directory found at $SCRIPT_REPO_ROOT/ui; cannot start UI for E2E"
-      E2E_EXIT_CODE=1
+        log_error "Proxied API did not become healthy within timeout"
+        E2E_EXIT_CODE=3
     fi
-  fi
 
-  # Wait for proxied API (Caddy) AND UI to be healthy before running Playwright
-  echo "⏳ Waiting for proxied API (Caddy) to report healthy..."
-  API_READY=0
-  for i in $(seq 1 60); do
-    if curl -sSf "${BASE_URL}/api/v1/telemetry/health" >/dev/null 2>&1; then
-      echo "✅ Proxied API is healthy via ${BASE_URL}/api/v1/telemetry/health"
-      API_READY=1
-      break
+    # Wait for UI service
+    log_step "⏳ Waiting for UI service to be ready..."
+    UI_READY=0
+    for i in $(seq 1 60); do
+        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${BASE_URL}/")
+        if [[ "$HTTP_CODE" == "200" ]]; then
+            BODY_SNIPPET=$(curl -s "${BASE_URL}/" | head -c 200)
+            if echo "$BODY_SNIPPET" | grep -q "<html\|<!DOCTYPE\|<div id=\"root\""; then
+                log_success "UI service is ready"
+                UI_READY=1
+                break
+            fi
+        fi
+        echo -n "."
+        sleep 1
+    done
+
+    if [[ "$UI_READY" -ne 1 ]]; then
+        log_error "UI service did not become ready within timeout"
+        E2E_EXIT_CODE=4
     fi
-    echo -n "."
-    sleep 1
-  done
 
-  if [ "$API_READY" -ne 1 ]; then
-    echo "❌ Proxied API did not become healthy within timeout"
-    E2E_EXIT_CODE=3
-  fi
-
-  # Also wait for UI service to serve the index.html (Caddy proxies /* -> ui-service)
-  echo "⏳ Waiting for UI service to be ready (serving index.html)..."
-  UI_READY=0
-  for i in $(seq 1 60); do
-    # Check that root returns 200 and contains something that looks like HTML
-    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${BASE_URL}/")
-    if [ "$HTTP_CODE" = "200" ]; then
-      # Double-check it's actually returning HTML content, not a 200 error page
-      BODY_SNIPPET=$(curl -s "${BASE_URL}/" | head -c 200)
-      if echo "$BODY_SNIPPET" | grep -q "<html\|<!DOCTYPE\|<div id=\"root\""; then
-        echo "✅ UI service is ready (serving HTML at ${BASE_URL}/)"
-        UI_READY=1
-        break
-      fi
+    if [[ "${E2E_EXIT_CODE:-0}" -eq 0 ]]; then
+        npx playwright test --project=api
+        E2E_EXIT_CODE=$?
     fi
-    echo -n "."
-    sleep 1
-  done
-
-  if [ "$UI_READY" -ne 1 ]; then
-    echo "❌ UI service did not become ready within timeout (last HTTP code: ${HTTP_CODE})"
-    E2E_EXIT_CODE=4
-  fi
-
-  if [ "${E2E_EXIT_CODE:-0}" -eq 0 ]; then
-    npx playwright test --project=api
-    E2E_EXIT_CODE=$?
-  fi
 else
-  echo "⚠️  E2E directory NOT found at $E2E_DIR"
-  echo "   Current contents of root: $(ls "$REPO_ROOT")"
-  E2E_EXIT_CODE=1
+    log_warn "E2E directory NOT found at $E2E_DIR"
+    E2E_EXIT_CODE=1
 fi
 
-cd "$REPO_ROOT"
+cd "$PROJECT_ROOT"
 
-# 8. Cleanup: stop compose stack
+# =============================================================================
+# STEP 7: Cleanup
+# =============================================================================
 
-echo "🧹 Cleaning up compose stack..."
-# ensure we run docker compose down from repo root (we may have cd'd into subfolders)
-cd "${REPO_ROOT}"
-docker compose -f docker-compose.yml -f docker-compose.ci.yml down -v --remove-orphans || true
+log_step "🧹 Cleaning up compose stack..."
+$COMPOSE_CMD down -v --remove-orphans || true
 
-if [ "${E2E_EXIT_CODE:-0}" -ne 0 ]; then
-  echo "❌ E2E Tests Failed!"
-  exit ${E2E_EXIT_CODE}
+if [[ "${E2E_EXIT_CODE:-0}" -ne 0 ]]; then
+    log_fail "E2E Tests Failed!"
+    exit ${E2E_EXIT_CODE}
 fi
 
-echo "✅ ALL TESTS PASSED (Backend + E2E)"
+log_success "ALL TESTS PASSED (Backend + E2E)"
 

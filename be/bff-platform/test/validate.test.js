@@ -1,4 +1,4 @@
-const { validateChecks, validateEnv } = require('../lib/validateEnv');
+const { validateChecks, validateEnv } = require('../../commons/lib/validateEnv');
 
 describe('validateEnv (bff-platform)', () => {
   const savedEnv = { ...process.env };
@@ -11,7 +11,7 @@ describe('validateEnv (bff-platform)', () => {
     delete process.env.ASTRO_API_KEY;
     delete process.env.PORT;
 
-    const { errors, warnings } = validateChecks();
+    const { errors, warnings } = validateChecks({ service: 'bff-platform' });
     expect(Array.isArray(errors)).toBe(true);
     expect(errors.length).toBeGreaterThan(0);
     expect(errors.some(e => e.includes('ASTRO_API_URL') || e.includes('ASTRO_API_KEY') || e.includes('PORT'))).toBe(true);
@@ -22,6 +22,6 @@ describe('validateEnv (bff-platform)', () => {
     delete process.env.ASTRO_API_KEY;
     delete process.env.PORT;
 
-    expect(() => validateEnv()).toThrow('process.exit:1');
+    expect(() => validateEnv({ service: 'bff-platform' })).toThrow('process.exit:1');
   });
 });

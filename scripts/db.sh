@@ -1,44 +1,56 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# =============================================================================
 # Database Management Script for Niyati
+# =============================================================================
 # Provides helpers for managing PostgreSQL in Docker
+#
+# Usage: ./scripts/db.sh <command> [options]
+#
+# Commands: start, stop, restart, status, logs, psql, migrate, seed, reset,
+#           backup, restore, health
+# =============================================================================
 
-set -e
+# Load common library
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lib/common.sh"
 
-COMPOSE_FILE="docker-compose.yml"
-COMPOSE_PROD_FILE="docker-compose.prod.yml"
-CONTAINER_NAME="niyati-postgres-dev"
+# Configuration
+PROJECT_ROOT="$(find_project_root "$SCRIPT_DIR")"
+cd "$PROJECT_ROOT"
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+CONTAINER_NAME="postgres"
+COMPOSE_MODE="dev"
+PROD_MODE=false
 
-function print_usage() {
+# =============================================================================
+# USAGE
+# =============================================================================
+
+print_usage() {
     cat << EOF
-Database Management Script for Niyati
+${BOLD}Database Management Script for Niyati${NC}
 
-Usage: $0 <command> [options]
+${YELLOW}Usage:${NC} $0 <command> [options]
 
-Commands:
-  start           Start PostgreSQL container
-  stop            Stop PostgreSQL container
-  restart         Restart PostgreSQL container
-  status          Check PostgreSQL status
-  logs            View PostgreSQL logs
-  psql            Connect to PostgreSQL shell
-  migrate         Run migrations
-  seed            Seed test data
-  reset           Reset database (WARNING: destructive)
-  backup          Backup database to file
-  restore         Restore database from file
-  health          Check database health
+${YELLOW}Commands:${NC}
+  ${GREEN}start${NC}           Start PostgreSQL container
+  ${GREEN}stop${NC}            Stop PostgreSQL container
+  ${GREEN}restart${NC}         Restart PostgreSQL container
+  ${GREEN}status${NC}          Check PostgreSQL status
+  ${GREEN}logs${NC}            View PostgreSQL logs
+  ${GREEN}psql${NC}            Connect to PostgreSQL shell
+  ${GREEN}migrate${NC}         Run migrations
+  ${GREEN}seed${NC}            Seed test data
+  ${GREEN}reset${NC}           Reset database (${RED}WARNING: destructive${NC})
+  ${GREEN}backup${NC}          Backup database to file
+  ${GREEN}restore${NC}         Restore database from file
+  ${GREEN}health${NC}          Check database health
 
-Options:
+${YELLOW}Options:${NC}
   --prod          Use production configuration
   -h, --help      Show this help message
 
-Examples:
+${YELLOW}Examples:${NC}
   $0 start                    # Start dev database
   $0 start --prod             # Start prod database
   $0 psql                     # Connect to dev database
@@ -49,209 +61,190 @@ Examples:
 EOF
 }
 
-function check_env() {
-    if [ ! -f .env ]; then
-        echo -e "${YELLOW}Warning: .env file not found. Using defaults from .env.example${NC}"
-        if [ -f .env.example ]; then
-            echo "Creating .env from .env.example..."
-            cp .env.example .env
-        else
-            echo -e "${RED}Error: Neither .env nor .env.example found${NC}"
-            exit 1
-        fi
-    fi
-    source .env
-}
+# =============================================================================
+# DATABASE FUNCTIONS
+# =============================================================================
 
-function db_start() {
-    echo -e "${GREEN}Starting PostgreSQL...${NC}"
-    if [ "$PROD_MODE" = true ]; then
-        docker-compose -f $COMPOSE_FILE -f $COMPOSE_PROD_FILE up -d postgres
-        CONTAINER_NAME="niyati-postgres-prod"
-    else
-        docker-compose -f $COMPOSE_FILE up -d postgres
-    fi
-    echo -e "${GREEN}PostgreSQL started${NC}"
+db_start() {
+    log_info "Starting PostgreSQL..."
+    local compose_cmd
+    compose_cmd=$(get_compose_cmd "$COMPOSE_MODE")
+    $compose_cmd up -d postgres
+    log_success "PostgreSQL started"
     db_health
 }
 
-function db_stop() {
-    echo -e "${YELLOW}Stopping PostgreSQL...${NC}"
-    if [ "$PROD_MODE" = true ]; then
-        docker-compose -f $COMPOSE_FILE -f $COMPOSE_PROD_FILE stop postgres
-    else
-        docker-compose -f $COMPOSE_FILE stop postgres
-    fi
-    echo -e "${GREEN}PostgreSQL stopped${NC}"
+db_stop() {
+    log_warn "Stopping PostgreSQL..."
+    local compose_cmd
+    compose_cmd=$(get_compose_cmd "$COMPOSE_MODE")
+    $compose_cmd stop postgres
+    log_success "PostgreSQL stopped"
 }
 
-function db_restart() {
+db_restart() {
     db_stop
     sleep 2
     db_start
 }
 
-function db_status() {
-    echo "PostgreSQL container status:"
+db_status() {
+    log_info "PostgreSQL container status:"
     docker ps -a --filter "name=$CONTAINER_NAME" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 }
 
-function db_logs() {
-    echo "PostgreSQL logs (last 50 lines, press Ctrl+C to exit):"
-    docker logs -f --tail 50 $CONTAINER_NAME
+db_logs() {
+    log_info "PostgreSQL logs (last 50 lines, press Ctrl+C to exit):"
+    docker logs -f --tail 50 "$CONTAINER_NAME"
 }
 
-function db_psql() {
-    local DBNAME="${POSTGRES_DB:-niyati_dev}"
-    local DBUSER="${POSTGRES_USER:-niyati}"
+db_psql() {
+    local dbname="${POSTGRES_DB:-niyati_dev}"
+    local dbuser="${POSTGRES_USER:-niyati}"
     
-    echo -e "${GREEN}Connecting to PostgreSQL as $DBUSER...${NC}"
-    docker exec -it $CONTAINER_NAME psql -U $DBUSER -d $DBNAME
+    log_info "Connecting to PostgreSQL as $dbuser..."
+    docker exec -it "$CONTAINER_NAME" psql -U "$dbuser" -d "$dbname"
 }
 
-function db_migrate() {
-    echo -e "${GREEN}Running database migrations...${NC}"
+db_migrate() {
+    log_info "Running database migrations..."
     
-    local DBNAME="${POSTGRES_DB:-niyati_dev}"
-    local DBUSER="${POSTGRES_USER:-niyati}"
-    local MIGRATIONS_DIR="./be/migrations"
+    local dbname="${POSTGRES_DB:-niyati_dev}"
+    local dbuser="${POSTGRES_USER:-niyati}"
+    local migrations_dir="$PROJECT_ROOT/be/migrations"
     
-    if [ ! -d "$MIGRATIONS_DIR" ]; then
-        echo -e "${RED}Error: Migrations directory not found: $MIGRATIONS_DIR${NC}"
+    if [[ ! -d "$migrations_dir" ]]; then
+        log_error "Migrations directory not found: $migrations_dir"
         exit 1
     fi
     
-    echo -e "${YELLOW}Applying SQL migrations from $MIGRATIONS_DIR...${NC}"
+    log_step "Applying SQL migrations from $migrations_dir..."
     
     # Apply all .up.sql files in order
-    for migration in "$MIGRATIONS_DIR"/*.up.sql; do
-        if [ -f "$migration" ]; then
-            echo -e "${GREEN}Applying $(basename "$migration")...${NC}"
-            docker exec -i $CONTAINER_NAME psql -U $DBUSER -d $DBNAME < "$migration"
+    for migration in "$migrations_dir"/*.up.sql; do
+        if [[ -f "$migration" ]]; then
+            log_step "Applying $(basename "$migration")..."
+            docker exec -i "$CONTAINER_NAME" psql -U "$dbuser" -d "$dbname" < "$migration"
         fi
     done
     
-    echo -e "${GREEN}Migrations completed${NC}"
+    log_success "Migrations completed"
 }
 
-function db_seed() {
-    echo -e "${GREEN}Seeding test data...${NC}"
+db_seed() {
+    log_info "Seeding test data..."
     
-    # Check if auth service is running (it has the seed script)
-    if ! docker ps --filter "name=niyati-bff-auth" --format "{{.Names}}" | grep -q "niyati-bff-auth"; then
-        echo -e "${YELLOW}BFF Auth service not running. Starting it...${NC}"
-        if [ "$PROD_MODE" = true ]; then
-            docker-compose -f $COMPOSE_FILE -f $COMPOSE_PROD_FILE up -d bff-auth
-        else
-            docker-compose -f $COMPOSE_FILE up -d bff-auth
-        fi
+    local compose_cmd
+    compose_cmd=$(get_compose_cmd "$COMPOSE_MODE")
+    
+    # Check if auth service is running
+    if ! docker ps --filter "name=bff-auth" --format "{{.Names}}" | grep -q "bff-auth"; then
+        log_warn "BFF Auth service not running. Starting it..."
+        $compose_cmd up -d bff-auth
         sleep 5
     fi
     
-    local BFF_CONTAINER="niyati-bff-auth-dev"
-    if [ "$PROD_MODE" = true ]; then
-        BFF_CONTAINER="niyati-bff-auth-prod"
-    fi
+    local bff_container="bff-auth"
     
     # Check if seed script exists
-    if docker exec $BFF_CONTAINER test -f ../scripts/seed_test_data.js; then
-        docker exec -it $BFF_CONTAINER node ../scripts/seed_test_data.js
-        echo -e "${GREEN}Seeding completed${NC}"
+    if docker exec "$bff_container" test -f /app/scripts/seed_test_data.js 2>/dev/null; then
+        docker exec -it "$bff_container" node /app/scripts/seed_test_data.js
+        log_success "Seeding completed"
+    elif [[ -f "$PROJECT_ROOT/be/seed_ci.sql" ]]; then
+        log_step "Applying be/seed_ci.sql..."
+        local dbname="${POSTGRES_DB:-niyati_dev}"
+        local dbuser="${POSTGRES_USER:-niyati}"
+        docker exec -i "$CONTAINER_NAME" psql -U "$dbuser" -d "$dbname" < "$PROJECT_ROOT/be/seed_ci.sql"
+        log_success "Seeding completed"
     else
-        echo -e "${YELLOW}Warning: seed_test_data.js not found in be/scripts/${NC}"
-        echo -e "${YELLOW}You can seed data manually using SQL or create the seed script${NC}"
+        log_warn "No seed script found. You can seed data manually."
     fi
 }
 
-function db_reset() {
+db_reset() {
     echo -e "${RED}WARNING: This will DELETE ALL DATA in the database!${NC}"
-    read -p "Are you sure you want to continue? (yes/no): " -r
-    if [[ ! $REPLY =~ ^[Yy][Ee][Ss]$ ]]; then
-        echo "Aborted."
+    if ! confirm_action "Are you sure you want to continue?" "n"; then
+        log_info "Aborted."
         exit 0
     fi
     
-    local DBNAME="${POSTGRES_DB:-niyati_dev}"
-    local DBUSER="${POSTGRES_USER:-niyati}"
+    local dbname="${POSTGRES_DB:-niyati_dev}"
+    local dbuser="${POSTGRES_USER:-niyati}"
     
-    echo -e "${YELLOW}Dropping and recreating database...${NC}"
-    docker exec -it $CONTAINER_NAME psql -U $DBUSER -d postgres -c "DROP DATABASE IF EXISTS $DBNAME;"
-    docker exec -it $CONTAINER_NAME psql -U $DBUSER -d postgres -c "CREATE DATABASE $DBNAME OWNER $DBUSER;"
+    log_warn "Dropping and recreating database..."
+    docker exec -it "$CONTAINER_NAME" psql -U "$dbuser" -d postgres -c "DROP DATABASE IF EXISTS $dbname;"
+    docker exec -it "$CONTAINER_NAME" psql -U "$dbuser" -d postgres -c "CREATE DATABASE $dbname OWNER $dbuser;"
     
-    echo -e "${GREEN}Database reset complete. Run migrations to set up schema.${NC}"
+    log_success "Database reset complete. Run migrations to set up schema."
 }
 
-function db_backup() {
-    local BACKUP_FILE="${1:-db_backup_$(date +%Y%m%d_%H%M%S).sql}"
-    local DBNAME="${POSTGRES_DB:-niyati_dev}"
-    local DBUSER="${POSTGRES_USER:-niyati}"
+db_backup() {
+    local backup_file="${1:-db_backup_$(get_timestamp).sql}"
+    local dbname="${POSTGRES_DB:-niyati_dev}"
+    local dbuser="${POSTGRES_USER:-niyati}"
     
-    echo -e "${GREEN}Backing up database to $BACKUP_FILE...${NC}"
-    docker exec $CONTAINER_NAME pg_dump -U $DBUSER -d $DBNAME > "$BACKUP_FILE"
-    echo -e "${GREEN}Backup saved to $BACKUP_FILE${NC}"
+    log_info "Backing up database to $backup_file..."
+    docker exec "$CONTAINER_NAME" pg_dump -U "$dbuser" -d "$dbname" > "$backup_file"
+    log_success "Backup saved to $backup_file"
 }
 
-function db_restore() {
-    local BACKUP_FILE="$1"
+db_restore() {
+    local backup_file="$1"
     
-    if [ -z "$BACKUP_FILE" ]; then
-        echo -e "${RED}Error: Please specify backup file${NC}"
+    if [[ -z "$backup_file" ]]; then
+        log_error "Please specify backup file"
         echo "Usage: $0 restore <backup_file.sql>"
         exit 1
     fi
     
-    if [ ! -f "$BACKUP_FILE" ]; then
-        echo -e "${RED}Error: Backup file not found: $BACKUP_FILE${NC}"
+    if [[ ! -f "$backup_file" ]]; then
+        log_error "Backup file not found: $backup_file"
         exit 1
     fi
     
-    local DBNAME="${POSTGRES_DB:-niyati_dev}"
-    local DBUSER="${POSTGRES_USER:-niyati}"
+    local dbname="${POSTGRES_DB:-niyati_dev}"
+    local dbuser="${POSTGRES_USER:-niyati}"
     
-    echo -e "${YELLOW}Restoring database from $BACKUP_FILE...${NC}"
-    docker exec -i $CONTAINER_NAME psql -U $DBUSER -d $DBNAME < "$BACKUP_FILE"
-    echo -e "${GREEN}Database restored${NC}"
+    log_warn "Restoring database from $backup_file..."
+    docker exec -i "$CONTAINER_NAME" psql -U "$dbuser" -d "$dbname" < "$backup_file"
+    log_success "Database restored"
 }
 
-function db_health() {
-    echo -e "${GREEN}Checking database health...${NC}"
+db_health() {
+    log_info "Checking database health..."
     
-    local DBNAME="${POSTGRES_DB:-niyati_dev}"
-    local DBUSER="${POSTGRES_USER:-niyati}"
+    local dbname="${POSTGRES_DB:-niyati_dev}"
+    local dbuser="${POSTGRES_USER:-niyati}"
     
-    # Wait for database to be ready
-    echo -n "Waiting for database to be ready"
-    for i in {1..30}; do
-        if docker exec $CONTAINER_NAME pg_isready -U $DBUSER -d $DBNAME > /dev/null 2>&1; then
-            echo -e "\n${GREEN}✓ Database is healthy${NC}"
-            
-            # Show connection info
-            docker exec $CONTAINER_NAME psql -U $DBUSER -d $DBNAME -c "SELECT version();" -t
-            docker exec $CONTAINER_NAME psql -U $DBUSER -d $DBNAME -c "SELECT current_database() as database, current_user as user, pg_size_pretty(pg_database_size(current_database())) as size;" -t
-            
-            # Show table count
-            local TABLE_COUNT=$(docker exec $CONTAINER_NAME psql -U $DBUSER -d $DBNAME -t -c "SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema');")
-            echo "User tables: $TABLE_COUNT"
-            
-            return 0
-        fi
-        echo -n "."
-        sleep 1
-    done
+    if ! wait_for_postgres "$CONTAINER_NAME" 30; then
+        exit 1
+    fi
     
-    echo -e "\n${RED}✗ Database is not healthy${NC}"
-    exit 1
+    # Show connection info
+    docker exec "$CONTAINER_NAME" psql -U "$dbuser" -d "$dbname" -c "SELECT version();" -t
+    docker exec "$CONTAINER_NAME" psql -U "$dbuser" -d "$dbname" -c \
+        "SELECT current_database() as database, current_user as user, pg_size_pretty(pg_database_size(current_database())) as size;" -t
+    
+    # Show table count
+    local table_count
+    table_count=$(docker exec "$CONTAINER_NAME" psql -U "$dbuser" -d "$dbname" -t -c \
+        "SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema');")
+    echo "User tables: $table_count"
 }
+
+# =============================================================================
+# MAIN
+# =============================================================================
 
 # Parse arguments
-PROD_MODE=false
 COMMAND=""
+ARGS=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
         --prod)
             PROD_MODE=true
-            CONTAINER_NAME="niyati-postgres-prod"
+            COMPOSE_MODE="prod"
             shift
             ;;
         -h|--help)
@@ -261,67 +254,43 @@ while [[ $# -gt 0 ]]; do
         start|stop|restart|status|logs|psql|migrate|seed|reset|backup|restore|health)
             COMMAND=$1
             shift
+            ARGS="$*"
+            break
             ;;
         *)
-            if [ -z "$COMMAND" ]; then
-                echo -e "${RED}Unknown command: $1${NC}"
+            if [[ -z "$COMMAND" ]]; then
+                log_error "Unknown command: $1"
                 print_usage
                 exit 1
             fi
-            ARGS="$@"
-            break
             ;;
     esac
 done
 
-if [ -z "$COMMAND" ]; then
+if [[ -z "$COMMAND" ]]; then
     print_usage
     exit 1
 fi
 
 # Load environment
-check_env
+load_project_env "$PROJECT_ROOT"
 
 # Execute command
 case $COMMAND in
-    start)
-        db_start
-        ;;
-    stop)
-        db_stop
-        ;;
-    restart)
-        db_restart
-        ;;
-    status)
-        db_status
-        ;;
-    logs)
-        db_logs
-        ;;
-    psql)
-        db_psql
-        ;;
-    migrate)
-        db_migrate
-        ;;
-    seed)
-        db_seed
-        ;;
-    reset)
-        db_reset
-        ;;
-    backup)
-        db_backup $ARGS
-        ;;
-    restore)
-        db_restore $ARGS
-        ;;
-    health)
-        db_health
-        ;;
+    start)   db_start ;;
+    stop)    db_stop ;;
+    restart) db_restart ;;
+    status)  db_status ;;
+    logs)    db_logs ;;
+    psql)    db_psql ;;
+    migrate) db_migrate ;;
+    seed)    db_seed ;;
+    reset)   db_reset ;;
+    backup)  db_backup $ARGS ;;
+    restore) db_restore $ARGS ;;
+    health)  db_health ;;
     *)
-        echo -e "${RED}Unknown command: $COMMAND${NC}"
+        log_error "Unknown command: $COMMAND"
         print_usage
         exit 1
         ;;

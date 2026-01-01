@@ -1,166 +1,203 @@
 #!/usr/bin/env bash
-# Development helper script for Docker operations
+# =============================================================================
+# Docker Development Helper for Niyati
+# =============================================================================
+# Provides convenient commands for managing Docker services during development.
+# This script also handles initial environment setup (replaces docker-setup.sh).
+#
+# Usage: ./scripts/docker-dev.sh [command]
+# =============================================================================
 
-set -e
-
+# Load common library
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "${SCRIPT_DIR}/lib/common.sh"
 
+# Configuration
+PROJECT_ROOT="$(find_project_root "$SCRIPT_DIR")"
 cd "$PROJECT_ROOT"
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
-
-# Functions
-log_info() {
-    echo -e "${GREEN}[INFO]${NC} $1"
-}
-
-log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
-
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-check_env_files() {
-    log_info "Checking environment files..."
-    
-    # Check service-specific env files
-    for svc in auth platform pthru; do
-        if [ ! -f ".env.bff.${svc}" ]; then
-            if [ -f ".env.bff.${svc}.example" ]; then
-                log_warn ".env.bff.${svc} not found. Creating from example..."
-                cp ".env.bff.${svc}.example" ".env.bff.${svc}"
-                log_info "Created .env.bff.${svc} - please update with your API keys"
-            else
-                log_warn ".env.bff.${svc}.example not found - skipping"
-            fi
-        fi
-    done
-    
-    if [ ! -f ".env.ui" ]; then
-        log_warn ".env.ui not found. Creating with defaults..."
-        cat > .env.ui << 'EOF'
-VITE_APP_VERSION=0.1.0-dev
-VITE_BFF_BASE_URL=http://localhost:3000
-VITE_DEBUG_MODE=true
-EOF
-        log_info "Created .env.ui"
-    fi
-}
+# =============================================================================
+# USAGE
+# =============================================================================
 
 show_help() {
     cat << EOF
-Niyati Docker Development Helper
+${BOLD}Niyati Docker Development Helper${NC}
 
-Usage: ./scripts/docker-dev.sh [command]
+${YELLOW}Usage:${NC} $0 [command]
 
-Commands:
-    up          Start all services in development mode
-    down        Stop all services
-    restart     Restart all services
-    logs        Show logs from all services
-    logs-bff    Show BFF logs only
-    logs-ui     Show UI logs only
-    build       Rebuild all images
-    clean       Stop services and remove volumes
-    shell-bff   Open shell in BFF container
-    shell-ui    Open shell in UI container
-    ps          Show running containers
-    health      Check health status of services
-    help        Show this help message
+${YELLOW}Commands:${NC}
+  ${GREEN}setup${NC}       Initial setup - create env files, check Docker
+  ${GREEN}up${NC}          Start all services in development mode
+  ${GREEN}down${NC}        Stop all services
+  ${GREEN}restart${NC}     Restart all services
+  ${GREEN}logs${NC}        Show logs from all services
+  ${GREEN}logs-bff${NC}    Show BFF Platform logs only
+  ${GREEN}logs-auth${NC}   Show BFF Auth logs only
+  ${GREEN}logs-ui${NC}     Show UI logs only
+  ${GREEN}build${NC}       Rebuild all images
+  ${GREEN}clean${NC}       Stop services and remove volumes
+  ${GREEN}shell-bff${NC}   Open shell in BFF Platform container
+  ${GREEN}shell-auth${NC}  Open shell in BFF Auth container
+  ${GREEN}shell-ui${NC}    Open shell in UI container
+  ${GREEN}ps${NC}          Show running containers
+  ${GREEN}health${NC}      Check health status of services
+  ${GREEN}help${NC}        Show this help message
 
-Examples:
-    ./scripts/docker-dev.sh up
-    ./scripts/docker-dev.sh logs-bff
-    ./scripts/docker-dev.sh shell-bff
+${YELLOW}Examples:${NC}
+  $0 setup              # First-time setup
+  $0 up                 # Start services
+  $0 logs-bff           # View BFF Platform logs
+  $0 shell-bff          # Shell into BFF container
 
 EOF
 }
 
-# Main script
+# =============================================================================
+# COMMANDS
+# =============================================================================
 
-# Load port configuration from .env
-if [ -f ".env" ]; then
-    export $(grep -E '^(BFF_PLATFORM_PORT|BFF_AUTH_PORT|UI_DEV_PORT)=' .env | xargs)
-fi
-BFF_PLATFORM_PORT=${BFF_PLATFORM_PORT:-3000}
-BFF_AUTH_PORT=${BFF_AUTH_PORT:-3001}
-UI_DEV_PORT=${UI_DEV_PORT:-5173}
+cmd_setup() {
+    print_header "Niyati Docker Setup" 45
+    echo ""
+    
+    # Check Docker
+    check_docker || exit 1
+    echo ""
+    
+    # Create environment files
+    ensure_env_files "$PROJECT_ROOT"
+    echo ""
+    
+    # Make scripts executable
+    chmod +x "$SCRIPT_DIR"/*.sh 2>/dev/null || true
+    log_success "Scripts are executable"
+    echo ""
+    
+    print_header "Setup Complete!" 45
+    echo ""
+    echo -e "${GREEN}Next steps:${NC}"
+    echo ""
+    echo "1. Edit .env files and add your API keys:"
+    echo -e "   ${YELLOW}nano .env.bff.auth${NC}"
+    echo -e "   ${YELLOW}nano .env.bff.platform${NC}"
+    echo ""
+    echo "2. Start the services:"
+    echo -e "   ${YELLOW}$0 up${NC}"
+    echo ""
+    echo "3. Access the application:"
+    echo -e "   UI:           ${BLUE}http://localhost:${UI_DEV_PORT:-5173}${NC}"
+    echo -e "   BFF Platform: ${BLUE}http://localhost:${BFF_PLATFORM_PORT:-3000}${NC}"
+    echo -e "   BFF Auth:     ${BLUE}http://localhost:${BFF_AUTH_PORT:-3001}${NC}"
+    echo ""
+}
 
-case "$1" in
-    up)
-        check_env_files
-        log_info "Starting development services..."
-        docker-compose up -d
-        log_info "Services started. Use 'docker-compose logs -f' to view logs"
-        log_info "BFF Platform: http://localhost:${BFF_PLATFORM_PORT}"
-        log_info "BFF Auth: http://localhost:${BFF_AUTH_PORT}"
-        log_info "UI: http://localhost:${UI_DEV_PORT}"
-        ;;
-    down)
-        log_info "Stopping services..."
-        docker-compose down
-        log_info "Services stopped"
-        ;;
-    restart)
-        log_info "Restarting services..."
-        docker-compose restart
-        log_info "Services restarted"
-        ;;
-    logs)
-        docker-compose logs -f
-        ;;
-    logs-bff)
-        docker-compose logs -f bff-service
-        ;;
-    logs-ui)
-        docker-compose logs -f ui-service
-        ;;
-    build)
-        log_info "Building images..."
-        docker-compose build --no-cache
-        log_info "Build complete"
-        ;;
-    clean)
-        log_warn "This will stop services and remove volumes. Continue? (y/N)"
-        read -r response
-        if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
-            log_info "Cleaning up..."
-            docker-compose down -v
-            log_info "Cleanup complete"
-        else
-            log_info "Cancelled"
-        fi
-        ;;
-    shell-bff)
-        log_info "Opening shell in BFF container..."
-        docker-compose exec bff-service sh
-        ;;
-    shell-ui)
-        log_info "Opening shell in UI container..."
-        docker-compose exec ui-service sh
-        ;;
-    ps)
-        docker-compose ps
-        ;;
-    health)
-        log_info "Checking service health..."
-        echo ""
-        echo "BFF Platform Service:"
-        curl -s http://localhost:${BFF_PLATFORM_PORT}/api/v1/telemetry/health | jq . || log_error "BFF Platform unhealthy"
-        echo ""
-        echo "BFF Auth Service:"
-        curl -s http://localhost:${BFF_AUTH_PORT}/api/v1/telemetry/health | jq . || log_error "BFF Auth unhealthy"
-        echo ""
-        echo "UI Service:"
-        curl -s http://localhost:${UI_DEV_PORT} > /dev/null && log_info "UI healthy" || log_error "UI unhealthy"
-        ;;
+cmd_up() {
+    ensure_env_files "$PROJECT_ROOT" || true
+    log_info "Starting development services..."
+    docker compose up -d
+    log_success "Services started"
+    echo ""
+    log_info "Access points:"
+    echo -e "  BFF Platform: ${BLUE}http://localhost:${BFF_PLATFORM_PORT:-3000}${NC}"
+    echo -e "  BFF Auth:     ${BLUE}http://localhost:${BFF_AUTH_PORT:-3001}${NC}"
+    echo -e "  UI:           ${BLUE}http://localhost:${UI_DEV_PORT:-5173}${NC}"
+    echo ""
+    log_info "View logs with: $0 logs"
+}
+
+cmd_down() {
+    log_info "Stopping services..."
+    docker compose down
+    log_success "Services stopped"
+}
+
+cmd_restart() {
+    log_info "Restarting services..."
+    docker compose restart
+    log_success "Services restarted"
+}
+
+cmd_logs() {
+    docker compose logs -f
+}
+
+cmd_logs_bff() {
+    docker compose logs -f bff-platform
+}
+
+cmd_logs_auth() {
+    docker compose logs -f bff-auth
+}
+
+cmd_logs_ui() {
+    docker compose logs -f ui-service
+}
+
+cmd_build() {
+    log_info "Building images..."
+    docker compose build --no-cache
+    log_success "Build complete"
+}
+
+cmd_clean() {
+    log_warn "This will stop services and remove volumes."
+    if confirm_action "Continue?" "n"; then
+        log_info "Cleaning up..."
+        docker compose down -v
+        log_success "Cleanup complete"
+    else
+        log_info "Cancelled"
+    fi
+}
+
+cmd_shell_bff() {
+    log_info "Opening shell in BFF Platform container..."
+    docker compose exec bff-platform sh
+}
+
+cmd_shell_auth() {
+    log_info "Opening shell in BFF Auth container..."
+    docker compose exec bff-auth sh
+}
+
+cmd_shell_ui() {
+    log_info "Opening shell in UI container..."
+    docker compose exec ui-service sh
+}
+
+cmd_ps() {
+    docker compose ps
+}
+
+cmd_health() {
+    load_project_env "$PROJECT_ROOT"
+    run_health_checks
+}
+
+# =============================================================================
+# MAIN
+# =============================================================================
+
+# Load environment for port info
+load_project_env "$PROJECT_ROOT" 2>/dev/null || true
+
+case "${1:-help}" in
+    setup)      cmd_setup ;;
+    up)         cmd_up ;;
+    down)       cmd_down ;;
+    restart)    cmd_restart ;;
+    logs)       cmd_logs ;;
+    logs-bff)   cmd_logs_bff ;;
+    logs-auth)  cmd_logs_auth ;;
+    logs-ui)    cmd_logs_ui ;;
+    build)      cmd_build ;;
+    clean)      cmd_clean ;;
+    shell-bff)  cmd_shell_bff ;;
+    shell-auth) cmd_shell_auth ;;
+    shell-ui)   cmd_shell_ui ;;
+    ps)         cmd_ps ;;
+    health)     cmd_health ;;
     help|--help|-h|"")
         show_help
         ;;
