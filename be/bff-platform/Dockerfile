@@ -1,8 +1,8 @@
 FROM node:20-alpine AS base
 
 WORKDIR /app
-# Install dumb-init and netcat for wait-for-db functionality
-RUN apk add --no-cache dumb-init netcat-openbsd curl
+# Install dumb-init, netcat and PostgreSQL client for wait-for-db functionality
+RUN apk add --no-cache dumb-init netcat-openbsd curl postgresql-client
 
 # Copy shared helper scripts (once in base, inherited by all stages)
 COPY scripts/wait-for-db.sh /usr/local/bin/wait-for-db.sh
@@ -16,6 +16,8 @@ FROM base AS development
 RUN npm install
 # Copy service-specific code first
 COPY bff-platform/ /app/
+# Copy scripts for migrations
+COPY scripts/ /app/scripts/
 # Copy commons (shared libraries) afterwards so repository commons wins
 COPY commons/ /app/commons/
 # FIX: Create a symlink at /commons to satisfy the "../../commons" relative import
@@ -34,6 +36,8 @@ ENV NODE_ENV=production
 RUN npm ci --only=production && npm cache clean --force
 # Copy service-specific code first
 COPY bff-platform/ /app/
+# Copy scripts for migrations
+COPY scripts/ /app/scripts/
 # Copy commons (shared libraries) afterwards so repository commons wins
 COPY commons/ /app/commons/
 # FIX: Create a symlink at /commons to satisfy the "../../commons" relative import

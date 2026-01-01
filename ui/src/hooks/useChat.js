@@ -78,12 +78,151 @@ function isHoroscopeQuery(text) {
   return horoscopeKeywords.some(keyword => lowerText.includes(keyword));
 }
 
+// Check if user is asking a premium astrology question (requires payment for free users)
+// This excludes casual conversation which should be allowed through to n8n
+function isPremiumAstrologyQuery(text) {
+  const premiumKeywords = [
+    // Birth chart and kundli
+    'birth chart', 'kundli', 'kundali', 'natal chart', 'chart analysis',
+    // Life areas
+    'career', 'job', 'work', 'profession', 'business', 'money', 'wealth', 'finance', 'financial',
+    'love', 'relationship', 'marriage', 'partner', 'spouse', 'compatibility', 'soulmate',
+    'health', 'medical', 'disease', 'illness',
+    'education', 'studies', 'exam', 'results',
+    'travel', 'abroad', 'foreign', 'immigration', 'visa',
+    'children', 'kids', 'pregnancy', 'fertility',
+    'property', 'house', 'real estate', 'land',
+    // Predictions and timing
+    'predict', 'prediction', 'future', 'forecast', 'when will', 'will i',
+    'dasha', 'mahadasha', 'antardasha', 'transit', 'gochar',
+    // Remedies
+    'remedy', 'remedies', 'solution', 'mantra', 'gemstone', 'stone', 'yantra',
+    // Planets and houses
+    'saturn', 'shani', 'rahu', 'ketu', 'jupiter', 'guru', 'venus', 'shukra',
+    'mars', 'mangal', 'mercury', 'budh', 'moon', 'chandra', 'sun', 'surya',
+    'house', 'bhava', 'ascendant', 'lagna'
+  ];
+  const lowerText = text.toLowerCase();
+  return premiumKeywords.some(keyword => lowerText.includes(keyword));
+}
+
+// Check if message is casual conversation/banter (should NOT deduct credits)
+// This helps distinguish between:
+// a) Questions asking for predictions/prophecies -> deduct credits
+// b) Casual conversation/greetings/banter -> no credit deduction
+function isCasualConversation(text) {
+  const lowerText = text.toLowerCase().trim();
+  
+  // Greetings and pleasantries
+  const casualPatterns = [
+    /^(hi|hello|hey|namaste|good\s*(morning|afternoon|evening|night))\b/i,
+    /^(how are you|how're you|how do you do|what's up|wassup|sup)/i,
+    /^(thank|thanks|thx)/i,
+    /^(bye|goodbye|see you|take care|good night)/i,
+    /^(ok|okay|alright|sure|yes|no|yeah|nope|yep)/i,
+    /^(nice|great|awesome|cool|wow|amazing|wonderful)/i,
+    /\b(how are you|how're you)\??$/i,
+    // Memory/identity questions - conversational, not predictions
+    /do you (remember|know|recall)/i,  // Matches "do you remember me", "do you remember the time", etc.
+    /you remember/i,
+    /who am i/i,
+    /what('s| is) my name/i,
+    /tell me about (myself|me)/i,
+    // Small talk about Niyati
+    /who are you/i,
+    /what('s| is) your name/i,
+    /where are you (from|located|based|living)/i,
+    /where do you live/i,
+    /how old are you/i,
+    /are you (real|human|ai|bot)/i,
+    // Time-related casual questions
+    /what('s| is) the time/i,
+    /what time is it/i,
+    /what('s| is) the date/i,
+    /what day is (it|today)/i,
+    // Appreciation and feedback
+    /you('re| are) (great|amazing|awesome|wonderful|helpful)/i,
+    /i (like|love|enjoy) (talking|chatting) (to|with) you/i,
+    /this is (fun|interesting|cool)/i,
+    // Simple responses
+    /^(really|oh|ah|hmm|haha|lol|ha ha)\??!?$/i,
+    /^(i see|got it|understood|makes sense)$/i,
+    // General "tell me about today" - casual but may lead to horoscope
+    /^(can you )?(tell|talk) (me )?(about )?today\??$/i,
+  ];
+  
+  // Check if message matches casual patterns
+  if (casualPatterns.some(pattern => pattern.test(lowerText))) {
+    return true;
+  }
+  
+  // Short messages that are likely conversational (less than 6 words, no predictive keywords)
+  const words = lowerText.split(/\s+/).filter(w => w.length > 0);
+  if (words.length <= 6) {
+    // Predictive/astrology keywords that indicate a real query
+    const predictiveWords = [
+      'future', 'predict', 'happen', 'luck', 'career', 'love', 'marriage', 'job', 'money',
+      'horoscope', 'zodiac', 'kundli', 'kundali', 'chart', 'dasha', 'transit',
+      'promotion', 'health', 'wealth', 'children', 'baby', 'travel', 'abroad'
+    ];
+    
+    const hasPredictive = predictiveWords.some(p => lowerText.includes(p));
+    
+    // If short message without predictive keywords, likely casual
+    if (!hasPredictive) {
+      // Additional patterns for casual statements
+      if (lowerText.includes('life has been') || 
+          lowerText.includes('i am') || 
+          lowerText.includes("i'm") ||
+          lowerText.includes('been good') ||
+          lowerText.includes('been great') ||
+          lowerText.includes('been fine') ||
+          lowerText.includes('weather') ||
+          lowerText.includes('miss you') ||
+          lowerText.includes('missed you')) {
+        return true;
+      }
+    }
+  }
+  
+  return false;
+}
+
 // Get credits config from localStorage (set by useLogin)
 function getCreditsConfig() {
   try {
     const stored = localStorage.getItem('niyati_credits_config');
     if (stored) return JSON.parse(stored);
   } catch (e) { /* ignore */ }
+
+// Message variation functions for natural conversation
+function getExhaustedCreditsMessage(credits, needed) {
+  const messages = [
+    `You have ${credits} credits remaining, but this insight requires ${needed} credits. Add more credits to continue your cosmic journey.`,
+    `This question needs ${needed} credits, and you have ${credits}. Consider adding credits to unlock deeper astrological wisdom.`,
+    `I'd love to help with this, but you need ${needed} credits (you have ${credits}). Please add credits to continue exploring your destiny.`,
+    `Your credits (${credits}) are insufficient for this query (${needed} needed). Add credits to keep unveiling what the stars have in store.`
+  ];
+  return messages[Math.floor(Math.random() * messages.length)];
+}
+
+function getPaymentQRMessage(amount, creditsFromPayment) {
+  const messages = [
+    `To add more credits, scan the QR code above to pay \u20b9${amount} (adds ${creditsFromPayment} credits). After payment, share your UPI ID and the 12-digit transaction ID.`,
+    `Scan the QR code to pay \u20b9${amount} and receive ${creditsFromPayment} credits. Once paid, share your UPI ID (e.g., yourname@upi) and transaction ID for verification.`,
+    `Ready to continue? Pay \u20b9${amount} via the QR code above to get ${creditsFromPayment} credits. Then share your UPI ID and 12-digit transaction ID.`
+  ];
+  return messages[Math.floor(Math.random() * messages.length)];
+}
+
+function getLowCreditsWarning(credits) {
+  const messages = [
+    `⚠️ Your credits are running low (${credits} remaining). Consider adding more credits to ensure uninterrupted service.`,
+    `⚠️ Heads up! You have only ${credits} credits left. Add more to keep your cosmic conversations flowing.`,
+    `⚠️ Low credits alert: ${credits} remaining. Top up soon to continue exploring your astrological insights.`
+  ];
+  return messages[Math.floor(Math.random() * messages.length)];
+}
   return {
     credits_monthly_free: 10,
     credits_horoscope_cost: 2,
@@ -268,7 +407,7 @@ export function useChat(profile, updateProfile, addMessage, auth) {
         return parts.join(', ');
     }
 
-    const callWebhook = async (webhookUrl, reqId, message) => {
+    const callWebhook = async (webhookUrl, reqId, message, userProfile = null) => {
         // Input validation
         if (!webhookUrl || typeof webhookUrl !== 'string') {
           throw new Error('Invalid webhook URL');
@@ -284,6 +423,19 @@ export function useChat(profile, updateProfile, addMessage, auth) {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 60000);
 
+        // Build metadata with user profile details for n8n
+        const metadata = {
+          reqId: reqId || 'unknown',
+          // Always include user profile so n8n has birth details
+          userName: userProfile?.user_name || null,
+          dateOfBirth: userProfile?.user_dob || null,
+          timeOfBirth: userProfile?.user_timeOfBirth || null,
+          placeOfBirth: userProfile?.user_placeOfBirth || null,
+          currentLocation: userProfile?.user_currentLocation || null,
+          credits: userProfile?.user_credits ?? null,
+          isPaid: (userProfile?.user_totalPaidAmount ?? 0) > 0
+        };
+
         try {
           // Log outgoing user message to webhook
           try { console.log('USER', message.substring(0, 500)); } catch (e) { /* ignore logging errors */ }
@@ -297,7 +449,7 @@ export function useChat(profile, updateProfile, addMessage, auth) {
                 body: JSON.stringify({
                     message: message,
                     sessionId: auth.phoneNumber || 'unknown',
-                    metadata: { reqId: reqId || 'unknown' }
+                    metadata: metadata
                 }),
                 signal: controller.signal
             });
@@ -322,11 +474,16 @@ export function useChat(profile, updateProfile, addMessage, auth) {
       const config = getCreditsConfig();
       const creditsFromPayment = Math.floor(config.payment_amount_inr / 10);
       
-      // Check if user has enough credits
-      if (userCredits < queryCost && hasAllRequiredFields(currentProfile)) {
+      // IMPORTANT: Check if this is casual conversation FIRST
+      // Casual messages should pass through to n8n without credit checks
+      const isCasualMessage = isCasualConversation(inputText);
+      console.log('[useChat] Message classification:', { text: inputText.substring(0, 50), isCasual: isCasualMessage });
+      
+      // Check if user has enough credits (ONLY for non-casual messages)
+      if (!isCasualMessage && userCredits < queryCost && hasAllRequiredFields(currentProfile)) {
         addMessage({
           id: Date.now() + Math.random(),
-          text: `You have exhausted your credits (${userCredits} remaining, need ${queryCost}). Consider upgrading to a paid subscription to continue asking questions.`,
+          text: getExhaustedCreditsMessage(userCredits, queryCost),
           sender: 'bot',
           timestamp: new Date()
         });
@@ -335,7 +492,7 @@ export function useChat(profile, updateProfile, addMessage, auth) {
           addMessage({
             id: Date.now() + Math.random() + 1,
             image: '/payment/PayQR.jpeg',
-            text: `To add more credits, scan the QR code above to pay \u20b9${config.payment_amount_inr} (adds ${creditsFromPayment} credits). After payment, share your UPI ID (e.g., yourname@upi) and the 12-digit UPI transaction ID for verification.`,
+            text: getPaymentQRMessage(config.payment_amount_inr, creditsFromPayment),
             sender: 'bot',
             timestamp: new Date()
           });
@@ -346,17 +503,18 @@ export function useChat(profile, updateProfile, addMessage, auth) {
       }
       
       // Check if credits are running low for non-paid users (show warning with QR)
-      if (!isPaidUser && userCredits <= config.credits_low_threshold && !qrAlreadyShown && hasAllRequiredFields(currentProfile)) {
+      // Skip this check for casual messages
+      if (!isCasualMessage && !isPaidUser && userCredits <= config.credits_low_threshold && !qrAlreadyShown && hasAllRequiredFields(currentProfile)) {
         addMessage({
           id: Date.now() + Math.random(),
-          text: `⚠️ Your credits are running low (${userCredits} remaining). To ensure uninterrupted service, consider adding more credits.`,
+          text: getLowCreditsWarning(userCredits),
           sender: 'bot',
           timestamp: new Date()
         });
         addMessage({
           id: Date.now() + Math.random() + 1,
           image: '/payment/PayQR.jpeg',
-          text: `To add more credits, scan the QR code above to pay \u20b9${config.payment_amount_inr} (adds ${creditsFromPayment} credits). After payment, share your UPI ID (e.g., yourname@upi) and the 12-digit UPI transaction ID for verification.`,
+          text: getPaymentQRMessage(config.payment_amount_inr, creditsFromPayment),
           sender: 'bot',
           timestamp: new Date()
         });
@@ -402,19 +560,22 @@ export function useChat(profile, updateProfile, addMessage, auth) {
         }
       }
       
-      // For free users (no payment history), restrict to horoscope only
+      // For free users (no payment history), restrict premium astrology queries only
+      // Casual conversation and horoscope queries are allowed through to n8n
       if (!isPaidUser && hasAllRequiredFields(currentProfile)) {
-        if (!isHoroscopeQuery(inputText)) {
+        if (isPremiumAstrologyQuery(inputText) && !isHoroscopeQuery(inputText)) {
           addMessage({
             id: Date.now() + Math.random(),
-            text: `I'd love to help you with detailed birth chart analysis and personalized predictions! However, as a free user with ${userCredits} credits, you can only access today's horoscope (${config.credits_horoscope_cost} credits). Premium questions cost ${config.credits_premium_cost} credits. To unlock all premium features, please complete your payment of \u20b9${config.payment_amount_inr} (adds ${creditsFromPayment} credits) and share your UPI ID and 12-digit transaction ID.`,
+            image: '/payment/PayQR.jpeg',
+            text: `I'd love to help you with detailed birth chart analysis and personalized predictions!\n\nHowever, as a free user with ${userCredits} credits, you can only access today's horoscope (${config.credits_horoscope_cost} credits). Premium questions cost ${config.credits_premium_cost} credits.\n\nTo unlock all premium features, scan the QR code above to pay \u20b9${config.payment_amount_inr} (adds ${creditsFromPayment} credits) and share your UPI ID and 12-digit transaction ID.`,
             sender: 'bot',
             timestamp: new Date()
           });
+          markPaymentQRAsShown();
           setIsLoading(false);
           return;
         }
-        // Allow horoscope queries to proceed to n8n
+        // Allow horoscope queries and casual conversation to proceed to n8n
       }
 
       if (!hasAllRequiredFields(currentProfile) && !isReturning) {
@@ -495,15 +656,16 @@ export function useChat(profile, updateProfile, addMessage, auth) {
         }
 
       // Determine what message to send to n8n:
-      // - First time (profile not sent): send full profile details
+      // - First time (profile not sent): send full profile details in message body
       // - Subsequent times: send only the user's message
+      // NOTE: Profile is ALWAYS included in metadata so n8n has birth details
       const messageToSend = profileAlreadySent ? inputText : constructFullMessage(currentProfile);
       const webhookReqId = getSessionReqId();
       let response = null;
       let usedFallback = false;
 
       try {
-        response = await callWebhook(N8N_WEBHOOK_URL, webhookReqId, messageToSend);
+        response = await callWebhook(N8N_WEBHOOK_URL, webhookReqId, messageToSend, currentProfile);
         if (response.status >= 500) {
           throw new Error(`Server error: ${response.status}`);
         }
@@ -511,7 +673,7 @@ export function useChat(profile, updateProfile, addMessage, auth) {
         console.warn('Primary webhook failed:', primaryError.message);
         if (N8N_WEBHOOK_FALLBACK_URL && N8N_WEBHOOK_FALLBACK_URL !== N8N_WEBHOOK_URL) {
           usedFallback = true;
-          response = await callWebhook(N8N_WEBHOOK_FALLBACK_URL, webhookReqId, messageToSend);
+          response = await callWebhook(N8N_WEBHOOK_FALLBACK_URL, webhookReqId, messageToSend, currentProfile);
         } else {
           throw primaryError;
         }
@@ -526,13 +688,25 @@ export function useChat(profile, updateProfile, addMessage, auth) {
       let botResponseText = "The stars are clouded... I could not reach the server.";
 
       if (response.ok) {
-        const data = await response.json();
-        // Log N8N response
-        try { console.log('N8N', data.output || data.text || JSON.stringify(data)); } catch (e) {}
-        botResponseText = data.output || data.text || JSON.stringify(data);
+        // Handle empty or non-JSON responses gracefully
+        const responseText = await response.text();
+        if (!responseText || responseText.trim() === '') {
+          botResponseText = "I received your message but didn't get a response. Please ensure n8n workflow is properly configured and active.";
+        } else {
+          try {
+            const data = JSON.parse(responseText);
+            // Log N8N response
+            try { console.log('N8N', data.output || data.text || JSON.stringify(data)); } catch (e) {}
+            botResponseText = data.output || data.text || JSON.stringify(data);
 
-        if (typeof botResponseText === 'string' && botResponseText.startsWith('"') && botResponseText.endsWith('"')) {
-          botResponseText = botResponseText.slice(1, -1);
+            if (typeof botResponseText === 'string' && botResponseText.startsWith('"') && botResponseText.endsWith('"')) {
+              botResponseText = botResponseText.slice(1, -1);
+            }
+          } catch (parseError) {
+            console.warn('Failed to parse n8n response as JSON:', parseError);
+            // Use raw response text if it's not JSON
+            botResponseText = responseText;
+          }
         }
       }
 
@@ -554,16 +728,22 @@ export function useChat(profile, updateProfile, addMessage, auth) {
         if (stored) latestProfile = JSON.parse(stored);
       } catch (e) { /* use currentProfile */ }
       
+      // Skip credit deduction for casual conversation (greetings, banter, etc.)
+      const skipCreditDeduction = isCasualConversation(inputText);
+      
       console.log('[useChat] Credit deduction check:', { 
         phoneNumber, 
         hasAllFields: hasAllRequiredFields(latestProfile),
         queryCost,
+        isCasual: skipCreditDeduction,
         profile: { name: latestProfile.user_name, dob: latestProfile.user_dob, place: latestProfile.user_placeOfBirth, time: latestProfile.user_timeOfBirth }
       });
+      
       // Allow deduction for returning users even if some profile fields are missing
+      // BUT skip deduction for casual conversation
       const persistedPhone = (() => { try { return localStorage.getItem('niyati_user_phone_number'); } catch (e) { return null; } })();
       const isReturningNow = (currentProfile.user_verified && (currentProfile.user_verified.id || currentProfile.user_verified.phoneNumber)) || !!persistedPhone;
-      if (phoneNumber && (hasAllRequiredFields(latestProfile) || isReturningNow)) {
+      if (phoneNumber && (hasAllRequiredFields(latestProfile) || isReturningNow) && !skipCreditDeduction) {
         const newCredits = await deductCredits(phoneNumber, queryCost);
         console.log('[useChat] Credit deduction result:', { newCredits, previousCredits: latestProfile.user_credits });
         if (newCredits !== null) {
@@ -578,6 +758,8 @@ export function useChat(profile, updateProfile, addMessage, auth) {
             });
           }
         }
+      } else if (skipCreditDeduction) {
+        console.log('[useChat] Skipping credit deduction for casual conversation');
       }
 
       // For first-time users (not returning) with low credits, show payment QR after n8n response - ONLY ONCE

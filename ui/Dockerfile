@@ -76,6 +76,9 @@ CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
 # Caddy will serve these directly
 FROM alpine:3.19 AS production
 
+# Install su-exec for dropping privileges after setup
+RUN apk add --no-cache su-exec
+
 # Create non-root user
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S nodejs -u 1001
@@ -85,14 +88,14 @@ WORKDIR /app
 # Copy built assets from builder stage to a staging location
 COPY --from=builder --chown=nodejs:nodejs /app/dist /app/dist-source
 
-# Create a script to copy files to the volume mount point on startup
+# Create entrypoint: run as root to fix volume permissions, then drop to nodejs user
 RUN echo '#!/bin/sh' > /entrypoint.sh && \
-    echo 'cp -r /app/dist-source/* /app/dist/' >> /entrypoint.sh && \
-    echo 'echo "UI files copied to shared volume"' >> /entrypoint.sh && \
-    echo 'tail -f /dev/null' >> /entrypoint.sh && \
+    echo 'set -eu' >> /entrypoint.sh && \
+    echo 'mkdir -p /app/dist' >> /entrypoint.sh && \
+    echo 'chown -R nodejs:nodejs /app/dist' >> /entrypoint.sh && \
+    echo 'exec su-exec nodejs sh -c "cp -r /app/dist-source/* /app/dist/ && echo UI files copied to shared volume && tail -f /dev/null"' >> /entrypoint.sh && \
     chmod +x /entrypoint.sh
 
-USER nodejs
-
+# Entrypoint starts as root (for chown), then drops to nodejs via su-exec
 # The /app/dist directory will be mounted as a volume
 CMD ["/entrypoint.sh"]

@@ -86,7 +86,33 @@ fi
 
 # Step 4: Run migrations
 if deploy_prompt "Run DB migrations and seed data?"; then
-    $COMPOSE_CMD run --rm bff-platform /app/scripts/run_migrations.sh
+    # Ensure infra is running so migrations can connect to Postgres
+    log_info "Starting infrastructure services required for migrations: postgres, redis"
+    $COMPOSE_CMD up -d postgres redis
+
+    # Resolve postgres container id from compose (works for dev and prod)
+    PG_CONTAINER=$($COMPOSE_CMD ps -q postgres 2>/dev/null || true)
+    if [[ -z "$PG_CONTAINER" ]]; then
+        log_error "Could not find postgres container"
+        exit 1
+    fi
+
+    # Wait for Postgres to be healthy before running migrations
+    if ! wait_for_container "$PG_CONTAINER" 120 1; then
+        log_error "Postgres did not become healthy; aborting migrations"
+        exit 1
+    fi
+
+    # Run migrations using the appropriate runner:
+    # - In production use the dedicated `migrate` service (it mounts /migrations)
+    # - In development use the bff-platform image (local mounts may provide migrations)
+    if [[ $PROD -eq 1 ]]; then
+        log_info "Running migrations using migrate service"
+        $COMPOSE_CMD run --rm migrate
+    else
+        log_info "Running migrations using bff-platform image"
+        $COMPOSE_CMD run --rm bff-platform /app/scripts/run_migrations.sh
+    fi
 fi
 
 # Step 5: Start services
@@ -106,26 +132,35 @@ log_info "Health checks:"
 # Load env for ports
 load_project_env "$PROJECT_ROOT" 2>/dev/null || true
 
+# Helper to get container health status from service name
+get_service_health() {
+    local svc="$1"
+    local cid
+    cid=$($COMPOSE_CMD ps -q "$svc" 2>/dev/null || true)
+    if [[ -z "$cid" ]]; then
+        echo "not running"
+        return
+    fi
+    docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}running{{end}}' "$cid" 2>/dev/null || echo "unknown"
+}
+
 echo -n "Auth:      "
-curl -s -o /dev/null -w '%{http_code}\n' "http://localhost:${BFF_AUTH_PORT:-3001}/api/v1/telemetry/health"
+get_service_health bff-auth
 
 echo -n "Platform:  "
-curl -s -o /dev/null -w '%{http_code}\n' "http://localhost:${BFF_PLATFORM_PORT:-3000}/api/v1/telemetry/health"
+get_service_health bff-platform
 
 echo -n "UI:        "
-curl -s -o /dev/null -w '%{http_code}\n' "http://localhost:${UI_DEV_PORT:-5173}"
-
-echo -n "Mailhog:   "
-curl -s -o /dev/null -w '%{http_code}\n' "http://localhost:8025"
+get_service_health ui-service
 
 echo -n "Redis:     "
-$COMPOSE_CMD logs redis 2>&1 | grep -q 'Ready to accept connections' && echo 'OK' || echo 'NOT READY'
+get_service_health redis
 
 echo -n "Caddy:     "
-$COMPOSE_CMD logs caddy 2>&1 | grep -q 'serving initial configuration' && echo 'OK' || echo 'NOT READY'
+get_service_health caddy
 
-echo -n "N8N:       "
-curl -s -o /dev/null -w '%{http_code}\n' "http://localhost:5678"
+echo -n "Postgres:  "
+get_service_health postgres
 
 # Done
 echo ""
