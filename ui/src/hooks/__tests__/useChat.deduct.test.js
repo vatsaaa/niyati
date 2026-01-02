@@ -39,10 +39,11 @@ describe('useChat deduction flow', () => {
     const addMessage = vi.fn();
     const auth = { countries: [{ code: 'IN', name: 'India', dialCode: '+91' }], phoneNumber: '+91-9992223333' };
 
-    // Mock fetch: first call is webhook (n8n), second call is deduct-credits
+    // Mock fetch: first call is BFF chat endpoint, second call is deduct-credits
     const fetchMock = vi.spyOn(global, 'fetch').mockImplementation(async (url, opts) => {
-      if (String(url).includes('/webhook')) {
-        return { ok: true, json: async () => ({ output: 'stubbed response' }) };
+      if (String(url).includes('/api/v1/chat')) {
+        // BFF returns n8nResponse nested inside data
+        return { ok: true, text: async () => JSON.stringify({ status: 'ok', data: { forwardedToN8n: true, n8nResponse: { output: 'stubbed response' } } }) };
       }
       if (String(url).includes('/deduct-credits')) {
         // return updated credits = 8

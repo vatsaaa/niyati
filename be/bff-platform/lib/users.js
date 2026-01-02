@@ -397,32 +397,100 @@ router.post('/deduct-credits', async (req, res) => {
   try {
     const phone = (req.body.phoneNumber || '').trim();
     const amount = parseInt(req.body.amount, 10) || 2;
-    
+    // Prefer explicit idempotency key header, fallback to x-request-id or body.requestId
+    const incomingReqId = (req.headers['x-idempotency-key'] || req.headers['x-request-id'] || req.body.requestId || '').trim();
+
     if (!phone) {
       return res.sendError(ErrorCodes.MISSING_REQUIRED_FIELD, 'missing_phone_number');
     }
-    
+
     const db = req.app.get('db');
     if (!db) return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Database not configured');
-    
-    // Deduct credits (don't go below 0)
-    const sql = `
-      UPDATE users 
-      SET credits = GREATEST(credits - $2, 0), updated_at = now()
-      WHERE regexp_replace(phone_number, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g')
-      RETURNING id, credits, total_paid_amount
-    `;
-    
-    const result = await db.query(sql, [phone, amount]);
-    if (!result || !result.rows || result.rows.length === 0) {
-      return res.sendError(ErrorCodes.NOT_FOUND, 'user_not_found');
+
+    // If no idempotency key provided, fall back to simple update (non-idempotent)
+    if (!incomingReqId) {
+      try {
+        const sql = `
+          UPDATE users 
+          SET credits = GREATEST(credits - $2, 0), updated_at = now()
+          WHERE regexp_replace(phone_number, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g')
+          RETURNING id, credits, total_paid_amount
+        `;
+        const result = await db.query(sql, [phone, amount]);
+        if (!result || !result.rows || result.rows.length === 0) {
+          return res.sendError(ErrorCodes.NOT_FOUND, 'user_not_found');
+        }
+        const user = result.rows[0];
+        logger.info({ msg: 'credits_deducted_no_idempotency', phone, amount, creditsAfter: user.credits });
+        return res.sendSuccess({ credits: user.credits, totalPaidAmount: user.total_paid_amount });
+      } catch (e) {
+        logger.error({ msg: 'deduct_credits_failed', err: e && e.message, phone, amount });
+        return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'deduct_credits_failed');
+      }
     }
-    
-    const user = result.rows[0];
-    return res.sendSuccess({ 
-      credits: user.credits,
-      totalPaidAmount: user.total_paid_amount
-    });
+
+    // Idempotent flow using charge_transactions table (best-effort; if table missing, fallback)
+    try {
+      // Check if transaction exists
+      const checkSql = `SELECT id, request_id, phone_number, amount, status, credits_after, created_at FROM charge_transactions WHERE request_id = $1 LIMIT 1`;
+      const existing = await db.query(checkSql, [incomingReqId]);
+      if (existing && existing.rows && existing.rows.length > 0) {
+        const tx = existing.rows[0];
+        logger.info({ msg: 'deduct_credits_idempotent_hit', reqId: incomingReqId, phone });
+        return res.sendSuccess({ credits: tx.credits_after, alreadyApplied: tx.status === 'applied' });
+      }
+
+      // Start transaction: insert pending tx, apply deduction, update tx
+      await db.query('BEGIN');
+      const insertSql = `INSERT INTO charge_transactions (request_id, phone_number, amount, status, created_at) VALUES ($1, $2, $3, 'pending', now()) RETURNING id`;
+      await db.query(insertSql, [incomingReqId, phone, amount]);
+
+      const updateSql = `
+        UPDATE users 
+        SET credits = GREATEST(credits - $2, 0), updated_at = now()
+        WHERE regexp_replace(phone_number, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g')
+        RETURNING id, credits, total_paid_amount
+      `;
+      const result = await db.query(updateSql, [phone, amount]);
+      if (!result || !result.rows || result.rows.length === 0) {
+        await db.query('ROLLBACK');
+        return res.sendError(ErrorCodes.NOT_FOUND, 'user_not_found');
+      }
+      const user = result.rows[0];
+
+      const finalizeSql = `UPDATE charge_transactions SET status = 'applied', credits_after = $3 WHERE request_id = $1`;
+      await db.query(finalizeSql, [incomingReqId, phone, user.credits]);
+      await db.query('COMMIT');
+
+      logger.info({ msg: 'deduct_credits_applied', reqId: incomingReqId, phone, amount, creditsAfter: user.credits });
+      return res.sendSuccess({ credits: user.credits, totalPaidAmount: user.total_paid_amount });
+    } catch (e) {
+      try { await db.query('ROLLBACK'); } catch (e2) {}
+      // If charge_transactions table doesn't exist, fall back to non-idempotent behavior
+      if (e && e.message && e.message.includes('relation "charge_transactions" does not exist')) {
+        logger.warn({ msg: 'charge_transactions_table_missing', err: e.message });
+        // Fall back to simple update
+        try {
+          const sql = `
+            UPDATE users 
+            SET credits = GREATEST(credits - $2, 0), updated_at = now()
+            WHERE regexp_replace(phone_number, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g')
+            RETURNING id, credits, total_paid_amount
+          `;
+          const result = await db.query(sql, [phone, amount]);
+          if (!result || !result.rows || result.rows.length === 0) {
+            return res.sendError(ErrorCodes.NOT_FOUND, 'user_not_found');
+          }
+          const user = result.rows[0];
+          return res.sendSuccess({ credits: user.credits, totalPaidAmount: user.total_paid_amount });
+        } catch (e3) {
+          logger.error({ msg: 'deduct_credits_fallback_failed', err: e3 && e3.message });
+          return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'deduct_credits_failed');
+        }
+      }
+      logger.error({ msg: 'deduct_credits_error', err: e && e.message });
+      return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'deduct_credits_failed');
+    }
   } catch (err) {
     logger.error(sanitize({ msg: 'users.deduct-credits.error', err: err && err.message }));
     return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'deduct_credits_failed');

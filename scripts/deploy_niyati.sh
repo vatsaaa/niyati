@@ -13,7 +13,8 @@
 #   restart   Restart all services (or specific service with --service=<name>)
 #   stop      Stop all services
 #   rebuild   Force rebuild all images (no-cache) then start
-#   clean     Stop services, remove orphans, prune unused images
+#   clean     Stop services, remove orphans, volumes, networks, images
+#   fresh     Complete fresh start: clean everything, rebuild, deploy (like new machine)
 #   migrate   Run database migrations only
 #   status    Show status of all services
 #
@@ -93,7 +94,8 @@ Actions:
   restart   Restart all services (or specific service with --service=<name>)
   stop      Stop all services
   rebuild   Force rebuild all images (no-cache) then start
-  clean     Stop services, remove orphans, prune unused images
+  clean     Stop services, remove orphans, volumes, networks, images
+  fresh     Complete fresh start: clean everything, rebuild, deploy (like new machine)
   migrate   Run database migrations only
   status    Show status of all services
 
@@ -151,9 +153,9 @@ for arg in "$@"; do
             ;;
         --action=*)
             ACTION="${arg#--action=}"
-            if [[ ! "$ACTION" =~ ^(deploy|restart|stop|rebuild|clean|migrate|status)$ ]]; then
+            if [[ ! "$ACTION" =~ ^(deploy|restart|stop|rebuild|clean|fresh|migrate|status)$ ]]; then
                 log_error "Invalid --action value: $ACTION"
-                log_error "Valid actions: deploy, restart, stop, rebuild, clean, migrate, status"
+                log_error "Valid actions: deploy, restart, stop, rebuild, clean, fresh, migrate, status"
                 exit 1
             fi
             ;;
@@ -788,23 +790,101 @@ action_clean() {
     
     acquire_lock
     
-    # Stop and remove all containers
-    log_info "Stopping all services and removing orphans..."
-    run_cmd "$COMPOSE_CMD down --remove-orphans --volumes || true"
+    # Step 1: Stop and remove all containers for BOTH project names
+    log_info "Stopping all services from all project names..."
+    run_cmd "docker compose -p niyati -f docker-compose.yml -f docker-compose.override.yml down --remove-orphans --volumes 2>/dev/null || true"
+    run_cmd "docker compose -p niyati-prod -f docker-compose.yml -f docker-compose.prod.yml down --remove-orphans --volumes 2>/dev/null || true"
     
-    # Prune unused images
+    # Step 2: Force remove any orphaned niyati containers by name
+    log_info "Removing any orphaned niyati containers..."
+    run_cmd "docker ps -a --filter 'name=niyati' -q | xargs -r docker rm -f 2>/dev/null || true"
+    
+    # Step 3: Remove niyati networks
+    log_info "Removing niyati networks..."
+    run_cmd "docker network rm niyati_niyati niyati_default niyati-prod_niyati niyati-prod_default 2>/dev/null || true"
+    run_cmd "docker network prune -f"
+    
+    # Step 4: Remove niyati volumes
+    log_info "Removing niyati volumes..."
+    run_cmd "docker volume ls --filter 'name=niyati' -q | xargs -r docker volume rm -f 2>/dev/null || true"
+    
+    # Step 5: Remove niyati images
+    if deploy_prompt "Remove all niyati Docker images?"; then
+        log_info "Removing niyati images..."
+        run_cmd "docker images --filter 'reference=niyati/*' -q | xargs -r docker rmi -f 2>/dev/null || true"
+    fi
+    
+    # Step 6: Prune unused images
     if deploy_prompt "Prune unused Docker images?"; then
         log_info "Pruning unused images..."
         run_cmd "docker image prune -f"
     fi
     
-    # Optionally prune volumes
-    if deploy_prompt "Prune unused Docker volumes? (WARNING: This removes data!)"; then
-        log_warn "Pruning volumes will delete database data!"
-        run_cmd "docker volume prune -f"
+    # Step 7: Prune build cache
+    if deploy_prompt "Prune Docker build cache?"; then
+        log_info "Pruning build cache..."
+        run_cmd "docker builder prune -f"
     fi
     
     log_success "Cleanup complete!"
+}
+
+# ACTION: fresh - Complete fresh start (clean + rebuild + deploy)
+action_fresh() {
+    print_header "Niyati Fresh Deployment ($ENV)"
+    
+    log_warn "This will perform a COMPLETE fresh start:"
+    log_warn "  - Stop all niyati containers"
+    log_warn "  - Remove all volumes (DATABASE DATA WILL BE LOST)"
+    log_warn "  - Remove all networks"
+    log_warn "  - Remove all niyati images"
+    log_warn "  - Rebuild everything from scratch"
+    log_warn "  - Run migrations on fresh database"
+    echo ""
+    
+    if ! deploy_prompt "Continue with fresh deployment?"; then
+        log_info "Aborted."
+        exit 0
+    fi
+    
+    acquire_lock
+    
+    # Step 1: Thorough cleanup
+    log_info "=== Step 1/6: Complete cleanup ==="
+    run_cmd "docker compose -p niyati -f docker-compose.yml -f docker-compose.override.yml down --remove-orphans --volumes 2>/dev/null || true"
+    run_cmd "docker compose -p niyati-prod -f docker-compose.yml -f docker-compose.prod.yml down --remove-orphans --volumes 2>/dev/null || true"
+    run_cmd "docker ps -a --filter 'name=niyati' -q | xargs -r docker rm -f 2>/dev/null || true"
+    
+    # Step 2: Remove networks
+    log_info "=== Step 2/6: Remove networks ==="
+    run_cmd "docker network rm niyati_niyati niyati_default niyati-prod_niyati niyati-prod_default 2>/dev/null || true"
+    run_cmd "docker network prune -f"
+    
+    # Step 3: Remove volumes
+    log_info "=== Step 3/6: Remove volumes ==="
+    run_cmd "docker volume ls --filter 'name=niyati' -q | xargs -r docker volume rm -f 2>/dev/null || true"
+    
+    # Step 4: Remove images and prune
+    log_info "=== Step 4/6: Remove images and prune ==="
+    run_cmd "docker images --filter 'reference=niyati/*' -q | xargs -r docker rmi -f 2>/dev/null || true"
+    run_cmd "docker system prune -f"
+    
+    # Step 5: Build fresh images
+    log_info "=== Step 5/6: Build fresh images (no-cache) ==="
+    run_cmd "$COMPOSE_CMD build --no-cache"
+    
+    # Step 6: Start services (migrations run automatically via healthcheck dependencies)
+    log_info "=== Step 6/6: Start services ==="
+    run_cmd "$COMPOSE_CMD up -d"
+    
+    # Wait for services to be healthy
+    log_info "Waiting for services to become healthy..."
+    sleep 10
+    run_health_checks
+    
+    echo ""
+    log_success "Fresh deployment complete!"
+    show_access_info
 }
 
 # ACTION: migrate
@@ -892,6 +972,9 @@ case "$ACTION" in
         ;;
     clean)
         action_clean
+        ;;
+    fresh)
+        action_fresh
         ;;
     migrate)
         action_migrate

@@ -12,6 +12,9 @@
     email {$CADDY_EMAIL:ankur.vatsa@gmail.com}
     # Enable debug logging to capture detailed proxy traces during local debugging
     debug
+    # Use Caddy's internal CA for localhost (self-signed certs)
+    # This enables HTTPS for localhost without Let's Encrypt
+    local_certs
     # Use staging for testing, remove 'acme_ca' for production Let's Encrypt
     # acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
 }
@@ -175,6 +178,95 @@ http://localhost:5173, http://{$DOMAIN:localhost}, http://nonexperientially-nona
     }
 
     # Access log (optional, can be disabled for performance)
+    log {
+        output stdout
+        format json
+        level INFO
+    }
+}
+
+# HTTPS server for localhost - uses Caddy's internal CA (self-signed certs)
+# Browser will show certificate warning on first visit - click "Advanced" > "Proceed"
+https://localhost {
+    tls internal
+
+    # Enable gzip compression
+    encode gzip
+
+    # Security headers
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Frame-Options "SAMEORIGIN"
+        X-Content-Type-Options "nosniff"
+        X-XSS-Protection "1; mode=block"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        -Server
+    }
+
+    # CORS headers for API routes and webhook
+    @api_and_webhook path /api/* /webhook/*
+    header @api_and_webhook {
+        -Access-Control-Allow-Origin
+        Access-Control-Allow-Origin "{http.request.header.Origin}"
+        Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+        Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With"
+        Access-Control-Allow-Credentials "true"
+        Access-Control-Max-Age "3600"
+    }
+
+    # Handle preflight OPTIONS requests
+    @options method OPTIONS
+    handle @options {
+        header {
+            -Access-Control-Allow-Origin
+            Access-Control-Allow-Origin "{http.request.header.Origin}"
+            Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+            Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With"
+            Access-Control-Allow-Credentials "true"
+            Access-Control-Max-Age "3600"
+        }
+        respond "" 204
+    }
+
+    # Health check endpoint
+    handle /health {
+        respond "healthy" 200
+    }
+
+    # BFF Auth API routes
+    handle /api/v1/users/deduct-credits {
+        reverse_proxy bff-platform:{$BFF_PLATFORM_PORT:3000}
+    }
+
+    handle /api/v1/users/add-credits {
+        reverse_proxy bff-platform:{$BFF_PLATFORM_PORT:3000}
+    }
+
+    handle /api/v1/users/* {
+        reverse_proxy bff-auth:{$BFF_AUTH_PORT:3001}
+    }
+
+    handle /api/v1/auth/* {
+        reverse_proxy bff-auth:{$BFF_AUTH_PORT:3001}
+    }
+
+    # N8N Webhook route
+    handle /webhook/* {
+        reverse_proxy host.docker.internal:5678
+    }
+
+    # BFF Platform API routes
+    handle /api/* {
+        reverse_proxy bff-platform:{$BFF_PLATFORM_PORT:3000}
+    }
+
+    # UI - serve static files
+    handle /* {
+        root * /srv
+        try_files {path} /index.html
+        file_server
+    }
+
     log {
         output stdout
         format json

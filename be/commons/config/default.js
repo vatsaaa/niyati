@@ -74,4 +74,14 @@ module.exports = {
     webhookUrl: '', // Must be set via N8N_WEBHOOK_URL env var
     token: ''       // Optional, set via N8N_TOKEN env var
   }
+  ,
+  // Feature flags for gradual rollout of chat heuristics and auto-confirmation
+  features: {
+    chat: {
+      // When true, the BFF will auto-confirm age when a timeOfBirth is present
+      autoConfirmAge: false,
+      // When true, server-side heuristics for parsing DOB/time/place are enabled
+      enableAgeHeuristics: true
+    }
+  }
 };

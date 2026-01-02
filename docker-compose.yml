@@ -148,6 +148,7 @@ services:
       <<: *bff-environment
       PORT: ${BFF_PLATFORM_PORT:-3000}
       DATABASE_URL: postgresql://${POSTGRES_USER:-niyati}:${POSTGRES_PASSWORD:-niyati_dev_pass}@postgres:5432/${POSTGRES_DB:-niyati_dev}
+      N8N_WEBHOOK_URL: ${N8N_WEBHOOK_URL:-http://host.docker.internal:5678/webhook/chat}
     healthcheck:
       test: ["CMD-SHELL", "/usr/local/bin/healthcheck-http.sh http://localhost:${BFF_PLATFORM_PORT:-3000}/api/v1/telemetry/health"]
       <<: *healthcheck-http

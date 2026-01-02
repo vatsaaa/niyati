@@ -181,7 +181,7 @@ Instructions: Welcome this returning user warmly. Keep it brief and friendly - t
             const webhookReqId = getSessionReqId();
             // Log system-generated message sent to N8N
             try { console.log('NIYATI', systemContext); } catch (e) {}
-            const response = await fetch(N8N_WEBHOOK_URL, {
+            const response = await fetch('/api/v1/chat', {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
@@ -253,7 +253,7 @@ Instructions: Welcome this returning user warmly. Keep it brief and friendly - t
             try { localStorage.setItem('niyati_profile_sent', 'true'); } catch (e) { /* ignore */ }
 
             // send synthesized profile to n8n as a lightweight profile message
-            await fetch(N8N_WEBHOOK_URL, {
+            await fetch('/api/v1/chat', {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',

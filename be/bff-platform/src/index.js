@@ -126,6 +126,141 @@ apiRouter.use('/telemetry', telemetryRouter);
 const usersRouter = require('../lib/users');
 apiRouter.use('/users', usersRouter);
 
+// POST /api/v1/chat
+// Acts as a lightweight BFF: normalizes metadata, computes derived fields (age, ageConfirmed),
+// persists minimal authoritative state to users table (if DB available), and forwards
+// a canonical payload to n8n. Returns canonical response to UI.
+apiRouter.post('/chat', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const message = (body.message || '').toString();
+    const sessionId = (body.sessionId || '').toString();
+    const metadata = (body.metadata && typeof body.metadata === 'object') ? body.metadata : {};
+
+    if (!message) return res.sendError(ErrorCodes.MISSING_REQUIRED_FIELD, 'missing_message');
+    if (!sessionId) return res.sendError(ErrorCodes.MISSING_REQUIRED_FIELD, 'missing_sessionId');
+
+    // Normalize dateOfBirth to ISO YYYY-MM-DD if present
+    let normalizedDob = null;
+    if (metadata.dateOfBirth) {
+      try {
+        let d = new Date(metadata.dateOfBirth);
+        if (isNaN(d.getTime()) && chrono && typeof chrono.parseDate === 'function') {
+          d = chrono.parseDate(metadata.dateOfBirth);
+        }
+        if (d && !isNaN(d.getTime())) normalizedDob = d.toISOString().slice(0, 10);
+      } catch (e) {
+        // ignore - leave normalizedDob null
+      }
+    }
+
+    // Normalize timeOfBirth to hh:mm (leave as-is if not parseable)
+    let normalizedTob = metadata.timeOfBirth || null;
+    if (normalizedTob && typeof normalizedTob === 'string') {
+      // crude normalization: keep first 5 chars if like HH:MM
+      const m = normalizedTob.match(/(\d{1,2}:\d{2})/);
+      if (m) normalizedTob = m[1];
+    }
+
+    const userName = metadata.userName || metadata.name || null;
+
+    // Compute age (years) if dob known
+    let age = null;
+    if (normalizedDob) {
+      const dobDate = new Date(normalizedDob + 'T00:00:00Z');
+      const now = new Date();
+      let years = now.getUTCFullYear() - dobDate.getUTCFullYear();
+      const m = now.getUTCMonth() - dobDate.getUTCMonth();
+      if (m < 0 || (m === 0 && now.getUTCDate() < dobDate.getUTCDate())) years--;
+      age = years;
+    }
+
+    // Decide ageConfirmed: hint from client but validate server-side
+    let ageConfirmed = false;
+    if (typeof metadata.ageConfirmed !== 'undefined') {
+      ageConfirmed = !!metadata.ageConfirmed; // treat as hint
+    }
+    // auto-confirm if timeOfBirth provided (higher confidence) - controlled by feature flag
+    const autoConfirmAgeFlag = commons && commons.config && typeof commons.config.get === 'function'
+      ? commons.config.get('features.chat.autoConfirmAge', 'FEATURE_CHAT_AUTO_CONFIRM_AGE', false)
+      : false;
+    if (!ageConfirmed && normalizedTob && autoConfirmAgeFlag) ageConfirmed = true;
+
+    // Decide isSystemContext server-side (treat client-provided as hint)
+    let isSystemContext = !!metadata.isSystemContext;
+    // If message is short and contains 'SYSTEM' marker, honor; otherwise default false
+    if (!isSystemContext && typeof message === 'string' && message.startsWith('[SYSTEM')) isSystemContext = true;
+
+    // Persist minimal authoritative state to users table if DB available
+    const db = req.app.get('db');
+    if (db) {
+      try {
+        const upsertSql = `
+          INSERT INTO users (phone_number, name, date_of_birth, time_of_birth, place_of_birth, last_login_location, created_at, updated_at)
+          VALUES ($1,$2,$3,$4,$5,$6, now(), now())
+          ON CONFLICT (phone_number) DO UPDATE SET
+            name = COALESCE(EXCLUDED.name, users.name),
+            date_of_birth = COALESCE(EXCLUDED.date_of_birth, users.date_of_birth),
+            time_of_birth = COALESCE(EXCLUDED.time_of_birth, users.time_of_birth),
+            place_of_birth = COALESCE(EXCLUDED.place_of_birth, users.place_of_birth),
+            last_login_location = COALESCE(EXCLUDED.last_login_location, users.last_login_location),
+            updated_at = now()
+          RETURNING id, phone_number, name, date_of_birth, time_of_birth, place_of_birth, credits, total_paid_amount
+        `;
+        const params = [sessionId, userName || null, normalizedDob, normalizedTob, metadata.placeOfBirth || null, metadata.currentLocation || null];
+        await db.query(upsertSql, params);
+        logger.info({ msg: 'user_sync_from_chat', phone: sessionId, dob: normalizedDob, age, ageConfirmed });
+      } catch (e) {
+        logger.warn({ msg: 'user_sync_failed', err: e && e.message });
+      }
+    }
+
+    // Build canonical payload for n8n
+    const canonical = {
+      message: message,
+      sessionId: sessionId,
+      metadata: {
+        reqId: metadata.reqId || null,
+        userName: userName,
+        dateOfBirth: normalizedDob || null,
+        timeOfBirth: normalizedTob || null,
+        placeOfBirth: metadata.placeOfBirth || null,
+        currentLocation: metadata.currentLocation || null,
+        age: age,
+        ageConfirmed: ageConfirmed,
+        isSystemContext: isSystemContext,
+        credits: metadata.credits || null,
+        isPaid: !!metadata.isPaid
+      }
+    };
+
+    // Log parsed DOB/age and isSystemContext for observability/audit
+    try { logger.info({ msg: 'chat_normalized', phone: sessionId, dob: canonical.metadata.dateOfBirth, age: canonical.metadata.age, ageConfirmed: canonical.metadata.ageConfirmed, isSystemContext: canonical.metadata.isSystemContext, autoConfirmFlag: !!autoConfirmAgeFlag }); } catch (e) {}
+
+    // Forward canonical payload to n8n (if configured)
+    const n8nUrl = commons && commons.config && commons.config.n8n && commons.config.n8n.webhookUrl ? commons.config.n8n.webhookUrl : '';
+    let n8nResp = null;
+    if (n8nUrl) {
+      try {
+        const axios = require('axios');
+        const headers = { 'Content-Type': 'application/json' };
+        if (commons && commons.config && commons.config.n8n && commons.config.n8n.token) {
+          headers['Authorization'] = `Bearer ${commons.config.n8n.token}`;
+        }
+        const resp = await axios.post(n8nUrl, canonical, { headers, timeout: 25000 });
+        n8nResp = resp && resp.data ? resp.data : null;
+      } catch (e) {
+        logger.warn({ msg: 'failed_forward_to_n8n', err: e && e.message });
+      }
+    }
+
+    return res.sendSuccess({ forwardedToN8n: !!n8nResp, n8nResponse: n8nResp, canonical });
+  } catch (err) {
+    logger.error({ msg: 'chat_bff_error', err: err && err.stack ? err.stack : err });
+    return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'chat_bff_failed');
+  }
+});
+
 // POST /api/v1/parse/date
 // Expects JSON { text: string, ref?: ISODateString }
 apiRouter.post('/parse/date', (req, res) => {

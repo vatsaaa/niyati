@@ -5,6 +5,8 @@ import { resolveLocationAndTimezone } from '../services/geo';
 import { formatPlaceFromLocation, formatDobForDisplay, formatTimeForDisplay } from '../utils/formatters';
 import { bffFetchWithRetry, sendClientLog } from '../services/api';
 import { N8N_WEBHOOK_URL, N8N_WEBHOOK_FALLBACK_URL } from '../config';
+// BFF chat endpoint (server-side canonicalization + forwarding to n8n)
+const BFF_CHAT_ENDPOINT = '/api/v1/chat';
 import { getSessionReqId } from '../utils/uuid';
 import { hasAllRequiredFields, missingProfileFields } from '../utils/profile';
 
@@ -114,6 +116,17 @@ function isPremiumAstrologyQuery(text) {
 function isCasualConversation(text) {
   const lowerText = text.toLowerCase().trim();
   
+  // Predictive/astrology keywords that indicate a real query (NOT casual)
+  // If ANY of these appear, the message is billable, regardless of greeting prefix
+  const predictiveWords = [
+    'future', 'predict', 'happen', 'luck', 'career', 'love', 'marriage', 'job', 'money',
+    'horoscope', 'zodiac', 'kundli', 'kundali', 'chart', 'dasha', 'transit',
+    'promotion', 'health', 'wealth', 'children', 'baby', 'travel', 'abroad',
+    'forecast', 'prophecy', 'destiny', 'fate', 'rashifal'
+  ];
+  const hasPredictive = predictiveWords.some(p => lowerText.includes(p));
+  if (hasPredictive) return false; // NOT casual — billable
+
   // Profile information patterns - NEVER billable (user onboarding)
   // Matches: "I am X, born in Y on Z at T", "My name is X", "I was born on", etc.
   const profilePatterns = [
@@ -179,32 +192,21 @@ function isCasualConversation(text) {
     return true;
   }
   
-  // Short messages that are likely conversational (less than 6 words, no predictive keywords)
+  // Short messages (<=6 words) without predictive keywords are also casual
+  // (Note: predictive keywords already checked above, so at this point we know there are none)
   const words = lowerText.split(/\s+/).filter(w => w.length > 0);
   if (words.length <= 6) {
-    // Predictive/astrology keywords that indicate a real query
-    const predictiveWords = [
-      'future', 'predict', 'happen', 'luck', 'career', 'love', 'marriage', 'job', 'money',
-      'horoscope', 'zodiac', 'kundli', 'kundali', 'chart', 'dasha', 'transit',
-      'promotion', 'health', 'wealth', 'children', 'baby', 'travel', 'abroad'
-    ];
-    
-    const hasPredictive = predictiveWords.some(p => lowerText.includes(p));
-    
-    // If short message without predictive keywords, likely casual
-    if (!hasPredictive) {
-      // Additional patterns for casual statements
-      if (lowerText.includes('life has been') || 
-          lowerText.includes('i am') || 
-          lowerText.includes("i'm") ||
-          lowerText.includes('been good') ||
-          lowerText.includes('been great') ||
-          lowerText.includes('been fine') ||
-          lowerText.includes('weather') ||
-          lowerText.includes('miss you') ||
-          lowerText.includes('missed you')) {
-        return true;
-      }
+    // Additional patterns for casual statements
+    if (lowerText.includes('life has been') || 
+        lowerText.includes('i am') || 
+        lowerText.includes("i'm") ||
+        lowerText.includes('been good') ||
+        lowerText.includes('been great') ||
+        lowerText.includes('been fine') ||
+        lowerText.includes('weather') ||
+        lowerText.includes('miss you') ||
+        lowerText.includes('missed you')) {
+      return true;
     }
   }
   
@@ -217,6 +219,14 @@ function getCreditsConfig() {
     const stored = localStorage.getItem('niyati_credits_config');
     if (stored) return JSON.parse(stored);
   } catch (e) { /* ignore */ }
+  return {
+    credits_monthly_free: 10,
+    credits_horoscope_cost: 2,
+    credits_premium_cost: 4,
+    credits_low_threshold: 4,
+    payment_amount_inr: 500
+  };
+}
 
 // Message variation functions for natural conversation
 function getExhaustedCreditsMessage(credits, needed) {
@@ -245,14 +255,6 @@ function getLowCreditsWarning(credits) {
     `⚠️ Low credits alert: ${credits} remaining. Top up soon to continue exploring your astrological insights.`
   ];
   return messages[Math.floor(Math.random() * messages.length)];
-}
-  return {
-    credits_monthly_free: 10,
-    credits_horoscope_cost: 2,
-    credits_premium_cost: 4,
-    credits_low_threshold: 6,
-    payment_amount_inr: 500
-  };
 }
 
 // Determine credit cost based on query type (uses configurable values)
@@ -688,13 +690,15 @@ export function useChat(profile, updateProfile, addMessage, auth) {
       let usedFallback = false;
 
       try {
-        response = await callWebhook(N8N_WEBHOOK_URL, webhookReqId, messageToSend, currentProfile);
+        // Call BFF instead of n8n directly
+        response = await callWebhook(BFF_CHAT_ENDPOINT, webhookReqId, messageToSend, currentProfile);
         if (response.status >= 500) {
           throw new Error(`Server error: ${response.status}`);
         }
       } catch (primaryError) {
         console.warn('Primary webhook failed:', primaryError.message);
         if (N8N_WEBHOOK_FALLBACK_URL && N8N_WEBHOOK_FALLBACK_URL !== N8N_WEBHOOK_URL) {
+          // fallback still points at n8n directly (rare)
           usedFallback = true;
           response = await callWebhook(N8N_WEBHOOK_FALLBACK_URL, webhookReqId, messageToSend, currentProfile);
         } else {
@@ -718,9 +722,11 @@ export function useChat(profile, updateProfile, addMessage, auth) {
         } else {
           try {
             const data = JSON.parse(responseText);
+            // BFF wraps n8n response in data.n8nResponse; fallback to direct output for backward compat
+            const n8nData = (data && data.data && data.data.n8nResponse) || data;
             // Log N8N response
-            try { console.log('N8N', data.output || data.text || JSON.stringify(data)); } catch (e) {}
-            botResponseText = data.output || data.text || JSON.stringify(data);
+            try { console.log('N8N', n8nData.output || n8nData.text || JSON.stringify(n8nData)); } catch (e) {}
+            botResponseText = n8nData.output || n8nData.text || JSON.stringify(n8nData);
 
             if (typeof botResponseText === 'string' && botResponseText.startsWith('"') && botResponseText.endsWith('"')) {
               botResponseText = botResponseText.slice(1, -1);

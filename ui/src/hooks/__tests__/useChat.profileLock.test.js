@@ -162,6 +162,11 @@ describe('useChat credit checks', () => {
       credits_low_threshold: 4,
       payment_amount_inr: 500
     }));
+
+    // Mock fetch so it never actually gets called for BFF (flow should block before fetch)
+    vi.spyOn(global, 'fetch').mockImplementation(async () => ({
+      ok: true, text: async () => JSON.stringify({ status: 'ok', data: {} })
+    }));
     
     const profile = {
       user_name: 'Ankur',
