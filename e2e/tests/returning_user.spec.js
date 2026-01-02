@@ -3,32 +3,63 @@ const { test, expect } = require('@playwright/test');
 test.describe('Returning user flow', () => {
   test('should not prompt for profile and should send synthesized message to webhook', async ({ page, baseURL }) => {
     // Intercept calls to identify and webhook
-    let webhookBody = null;
+    let webhookBodies = [];
     await page.route('**/api/v1/users/identify', route => {
-      // Respond as a returning user with stored profile
+      // Respond as a returning user with stored profile (API-shaped)
+      // Include all required fields so the UI sends a synthesized profile to webhook
       route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
-          returning: true,
-          profile: {
-            name: 'Asha Rao',
-            dob: '1990-05-12',
-            phoneNumber: '+91-9999999999',
-            currentLocation: { city: 'Mumbai', state: 'MH', country: 'India' }
+          status: 'ok',
+          data: {
+            returning: true,
+            user: {
+              id: 'returning-as-asha',
+              name: 'Asha Rao',
+              date_of_birth: '1990-05-12',
+              time_of_birth: '10:30:00',
+              place_of_birth: 'Mumbai',
+              phone_number: '+91-9999999999',
+              consent_given: true,
+              credits: 10,
+              total_paid_amount: 0,
+              last_login_location: 'Mumbai, Maharashtra, India'
+            },
+            config: {
+              credits_monthly_free: 10,
+              credits_low_threshold: 4,
+              payment_amount_inr: 500
+            }
           }
         })
       });
     });
 
+    // Intercept webhook calls - must return valid JSON for the UI to parse
     await page.route('**/webhook/**', async route => {
       try {
         const req = route.request();
-        webhookBody = await req.postData();
+        const body = req.postData();
+        if (body) webhookBodies.push(body);
       } catch (e) {
         // ignore
       }
-      route.fulfill({ status: 200, body: 'ok' });
+      // Return valid JSON response that the UI expects
+      route.fulfill({ 
+        status: 200, 
+        contentType: 'application/json',
+        body: JSON.stringify({ output: 'Hello Asha! Welcome back to Niyati.' }) 
+      });
+    });
+    
+    // Also mock the profile endpoint
+    await page.route('**/api/v1/users/profile', route => {
+      route.fulfill({ 
+        status: 200, 
+        contentType: 'application/json',
+        body: JSON.stringify({ status: 'ok', data: { user: { credits: 10 } } }) 
+      });
     });
 
     const base = process.env.BASE_URL || baseURL || 'http://127.0.0.1';
@@ -51,10 +82,12 @@ test.describe('Returning user flow', () => {
     await page.locator('textarea').press('Enter');
 
     // Wait a short while for webhook to be called
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(2000);
 
-    expect(webhookBody).not.toBeNull();
-    // webhook body should contain natural-language-like content with parts of the profile
-    expect(webhookBody).toMatch(/Asha|Mumbai|1990/);
+    // At least one webhook call should have been made with profile data
+    expect(webhookBodies.length).toBeGreaterThan(0);
+    // At least one webhook body should contain profile parts (name, place, or year)
+    const hasProfileData = webhookBodies.some(body => /Asha|Mumbai|1990/.test(body));
+    expect(hasProfileData).toBeTruthy();
   });
 });

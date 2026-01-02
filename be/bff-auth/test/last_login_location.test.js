@@ -1,5 +1,5 @@
 const request = require('supertest');
-const express = require('express');
+const { createTestApp } = require('@test-helpers');
 
 describe('bff-auth forwarding last_login_location', () => {
   let app;
@@ -11,10 +11,8 @@ describe('bff-auth forwarding last_login_location', () => {
     jest.mock('axios');
 
     const usersRouter = require('../lib/users');
-    app = express();
-    app.use(express.json());
-    const { attachResponseHelpers } = require('../../commons/lib/responses');
-    app.use('/api/v1/users', attachResponseHelpers, usersRouter);
+    const { app: testApp } = createTestApp('/api/v1/users', usersRouter);
+    app = testApp;
   });
 
   afterEach(() => jest.restoreAllMocks());

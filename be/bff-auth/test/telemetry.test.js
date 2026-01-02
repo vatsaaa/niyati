@@ -1,20 +1,23 @@
 const request = require('supertest');
-const express = require('express');
+const { createTestApp } = require('@test-helpers');
 
 describe('bff-auth telemetry routes', () => {
   let app;
 
   beforeEach(() => {
     jest.resetModules();
-    jest.mock('../commons/lib/logger', () => ({ logger: { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn() }, reqIdFromReq: () => null }));
-    jest.mock('../commons/lib/sanitize', () => ({ sanitize: v => v }));
-    jest.mock('../commons/config', () => ({ server: { apiVersion: '1.0' }, env: 'test' }));
+    jest.mock('../../commons/lib/logger', () => ({ logger: { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn() }, reqIdFromReq: () => null }));
+    jest.mock('../../commons/lib/sanitize', () => ({ sanitize: v => v }));
+    jest.mock('../../commons/config', () => ({ server: { apiVersion: '1.0' }, env: 'test' }));
 
-    const router = require('../lib/telemetry');
-    app = express();
-    app.use(express.json());
-    const { attachResponseHelpers } = require('../../commons/lib/responses');
-    app.use('/api/telemetry', attachResponseHelpers, router);
+    const createTelemetryRouter = require('../../commons/lib/telemetry');
+    const router = createTelemetryRouter({
+      serviceName: 'bff-auth',
+      packageJsonPath: '../package.json',
+      commonsPath: '../../commons'
+    });
+    const { app: testApp } = createTestApp('/api/telemetry', router);
+    app = testApp;
   });
 
   afterEach(() => jest.restoreAllMocks());

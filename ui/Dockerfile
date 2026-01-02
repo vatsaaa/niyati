@@ -44,8 +44,8 @@ FROM node:20-alpine AS development
 
 WORKDIR /app
 
-# Install dumb-init
-RUN apk add --no-cache dumb-init
+# Install dumb-init and curl for reliable healthchecks
+RUN apk add --no-cache dumb-init curl
 
 # Copy package files and install deps
 COPY package*.json ./
@@ -64,41 +64,38 @@ USER nodejs
 # Expose Vite dev server port
 EXPOSE 5173
 
-# Health check
+# Simple healthcheck using curl (no external script needed)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:5173 || exit 1
+  CMD curl -f http://localhost:5173 || exit 1
 
 # Start Vite dev server with host binding for Docker
 ENTRYPOINT ["dumb-init", "--"]
 CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
 
-# Stage 4: Production with Nginx
-FROM nginx:alpine AS production
+# Stage 4: Production - output built assets to shared volume
+# Caddy will serve these directly
+FROM alpine:3.19 AS production
 
-# Install curl for healthcheck
-RUN apk add --no-cache curl
+# Install su-exec for dropping privileges after setup
+RUN apk add --no-cache su-exec
 
-# Copy custom nginx config
-COPY nginx.conf /etc/nginx/nginx.conf
+# Create non-root user
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S nodejs -u 1001
 
-# Copy built assets from builder stage
-COPY --from=builder /app/dist /usr/share/nginx/html
+WORKDIR /app
 
-# Use existing nginx user and set permissions
-RUN chown -R nginx:nginx /usr/share/nginx/html && \
-    chown -R nginx:nginx /var/cache/nginx && \
-    chown -R nginx:nginx /var/log/nginx && \
-    touch /var/run/nginx.pid && \
-    chown -R nginx:nginx /var/run/nginx.pid
+# Copy built assets from builder stage to a staging location
+COPY --from=builder --chown=nodejs:nodejs /app/dist /app/dist-source
 
-USER nginx
+# Create entrypoint: run as root to fix volume permissions, then drop to nodejs user
+RUN echo '#!/bin/sh' > /entrypoint.sh && \
+    echo 'set -eu' >> /entrypoint.sh && \
+    echo 'mkdir -p /app/dist' >> /entrypoint.sh && \
+    echo 'chown -R nodejs:nodejs /app/dist' >> /entrypoint.sh && \
+    echo 'exec su-exec nodejs sh -c "cp -r /app/dist-source/* /app/dist/ && echo UI files copied to shared volume && tail -f /dev/null"' >> /entrypoint.sh && \
+    chmod +x /entrypoint.sh
 
-# Expose HTTP port
-EXPOSE 80
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-  CMD curl -f http://localhost/ || exit 1
-
-# Start nginx
-CMD ["nginx", "-g", "daemon off;"]
+# Entrypoint starts as root (for chown), then drops to nodejs via su-exec
+# The /app/dist directory will be mounted as a volume
+CMD ["/entrypoint.sh"]

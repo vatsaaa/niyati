@@ -10,10 +10,11 @@ describe('validateEnv', () => {
     global.loggerMock = {
       warn: jest.fn(),
       fatal: jest.fn(),
-      info: jest.fn()
+      info: jest.fn(),
+      error: jest.fn()
     };
     loggerMock = global.loggerMock;
-    jest.mock('../commons/lib/logger', () => ({ logger: global.loggerMock }));
+    jest.mock('../../commons/lib/logger', () => ({ logger: global.loggerMock }));
   });
 
   afterEach(() => {
@@ -32,9 +33,9 @@ describe('validateEnv', () => {
       throw new Error('process.exit:' + code);
     });
 
-    const { validateEnv } = require('../lib/validateEnv');
+    const { validateEnv } = require('../../commons/lib/validateEnv');
 
-    expect(() => validateEnv()).toThrow(/process.exit:1/);
+    expect(() => validateEnv({ service: 'bff-auth' })).toThrow(/process.exit:1/);
     expect(loggerMock.fatal).toHaveBeenCalled();
     exitSpy.mockRestore();
   });
@@ -43,12 +44,13 @@ describe('validateEnv', () => {
     process.env.PORT = '3000';
     process.env.ASTRO_API_URL = 'https://api.example.com';
     process.env.ASTRO_API_KEY = 'abc123';
+    process.env.ACCESS_TOKEN_SECRET = 'test-secret-key';
     process.env.NODE_ENV = 'test';
 
-    const { validateEnv } = require('../lib/validateEnv');
+    const { validateEnv } = require('../../commons/lib/validateEnv');
 
     // Should not throw
-    expect(() => validateEnv()).not.toThrow();
+    expect(() => validateEnv({ service: 'bff-auth' })).not.toThrow();
     expect(loggerMock.info).toHaveBeenCalled();
   });
 });

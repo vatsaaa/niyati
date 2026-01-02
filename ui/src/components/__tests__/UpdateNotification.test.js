@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import React from 'react';
+import { act } from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 
 // Mock the registerSW module so we control update callback
@@ -25,13 +27,11 @@ describe('UpdateNotification', () => {
   });
 
   it('does not render initially', () => {
-    const React = require('react');
     render(React.createElement(UpdateNotification));
     expect(screen.queryByText(/Update Available/)).toBeNull();
   });
 
   it('shows notification when update callback invoked and handles actions', async () => {
-    const React = require('react');
     render(React.createElement(UpdateNotification));
     // trigger the update callback
     expect(typeof window.__updateCb).toBe('function');

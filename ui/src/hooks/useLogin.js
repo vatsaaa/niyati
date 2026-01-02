@@ -155,19 +155,24 @@ export function useLogin(auth, profile, updateProfile, addMessage, clearMessages
         // Build location-aware instructions
         let locationInstructions = '';
         if (locationChanged) {
-          locationInstructions = `IMPORTANT: User's location has CHANGED from "${lastLoc}" to "${currentLoc}". Mention something like "I see you're logging in from ${currentLoc} today - how is it different from ${lastLoc}?" or ask about the weather/experience in the new location.`;
+          locationInstructions = `IMPORTANT: User's CURRENT location has CHANGED from "${lastLoc}" to "${currentLoc}". Mention something like "I see you're logging in from ${currentLoc} today - how is it different from ${lastLoc}?" or ask about the weather/experience in the new location.`;
         } else if (currentLoc && currentLoc !== 'unknown location') {
-          locationInstructions = `User is logging in from same location (${currentLoc}). You can mention the location casually, like "How's the weather in ${currentLoc} today?"`;
+          locationInstructions = `User is logging in from same CURRENT location (${currentLoc}). You can mention the location casually, like "How's the weather in ${currentLoc} today?"`;
         }
 
         // System context message - tells n8n this is a returning user login, not a user query
+        // IMPORTANT: Clearly distinguish between birth place (where they were born) and current location (where they are NOW)
         const systemContext = `[SYSTEM: Returning user login - Generate a warm, personalized welcome greeting]
 User: ${firstName} (${payingStatus}, ${userCredits} credits remaining)
-Birth: ${dob} at ${tob} in ${pob}
-Current location: ${currentLoc}
-Last login location: ${lastLoc}
-Location changed: ${locationChanged ? 'YES' : 'NO'}
+Birth details: Born on ${dob} at ${tob} in ${pob} (this is their BIRTH PLACE, not where they are now)
+CURRENT location (where they are NOW): ${currentLoc}
+Previous login location: ${lastLoc}
+Location changed since last login: ${locationChanged ? 'YES' : 'NO'}
+
 ${locationInstructions}
+
+CRITICAL: When greeting the user, reference their CURRENT LOCATION (${currentLoc}), NOT their birth place (${pob}). Say something like "great to see you from ${currentLoc}" or "how's ${currentLoc} today?". Do NOT say "back from ${pob}" - that's where they were BORN, not where they are logging in from.
+
 Instructions: Welcome this returning user warmly. Keep it brief and friendly - this is just a greeting, not a prophecy.`;
 
         // Send to n8n and let it generate the personalized greeting

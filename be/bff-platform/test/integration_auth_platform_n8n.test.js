@@ -31,7 +31,14 @@ describe('integration: bff-auth -> bff-platform -> n8n stub', () => {
 
     // Start bff-platform app (importing src index) and attach fake DB
     process.env.NODE_ENV = 'test';
-    platformApp = require('../../bff-platform/src/index');
+    try {
+      // When running tests from repo root (host), this path resolves
+      platformApp = require('../../bff-platform/src/index');
+    } catch (err) {
+      // When running inside the bff-platform container, the package root
+      // is the current working directory; fall back to local src path.
+      platformApp = require('../src/index');
+    }
     platformApp.set('db', fakeDb);
     await new Promise((resolve) => { platformServer = platformApp.listen(0, resolve); });
     const pPort = platformServer.address().port;

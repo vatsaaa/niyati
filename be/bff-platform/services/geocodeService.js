@@ -1,6 +1,8 @@
 const axios = require('axios');
 const NodeCache = require('node-cache');
-const { logger, sanitize, config } = require('../commons');
+const { logger, sanitize } = require('../../commons');
+// Use repository-relative commons config for predictable resolution inside container
+const config = require('../../commons/config');
 
 // Cache TTL from config
 const GEOCODE_CACHE_TTL = config.cache.geocode.ttl;

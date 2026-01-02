@@ -1,12 +1,30 @@
-FROM node:20-alpine
+FROM node:20-alpine AS builder
 WORKDIR /usr/src/app
 
-# copy package files first to leverage docker cache
-COPY package.json package-lock.json ./
+# Install only production dependencies in builder stage
+COPY be/worker/package.json be/worker/package-lock.json ./
 RUN npm ci --only=production
 
-COPY worker.js ./
+# Copy runtime files
+COPY be/worker/worker.js ./
+
+FROM node:20-alpine AS production
+WORKDIR /usr/src/app
+
+# Copy only the runtime artifacts from builder
+COPY --from=builder /usr/src/app /usr/src/app
 
 ENV NODE_ENV=production
+# Install dumb-init and netcat for wait-for-db
+RUN apk add --no-cache dumb-init netcat-openbsd
 
+# Copy shared helper scripts
+COPY be/scripts/wait-for-db.sh be/scripts/entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/wait-for-db.sh /usr/local/bin/entrypoint.sh
+
+# Non-root user for better security
+RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001 && chown -R nodejs:nodejs /usr/src/app
+USER nodejs
+
+ENTRYPOINT ["dumb-init", "--", "/usr/local/bin/entrypoint.sh"]
 CMD ["node", "worker.js"]

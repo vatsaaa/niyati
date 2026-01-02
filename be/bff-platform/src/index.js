@@ -6,16 +6,18 @@ const helmet = require('helmet');
 const compression = require('compression');
 const dotenv = require('dotenv');
 
-dotenv.config({ path: path.resolve(process.cwd(), '.env') });
+// Load .env only for non-test environments to avoid overriding Jest's NODE_ENV
+if (process.env.NODE_ENV !== 'test') {
+  dotenv.config({ path: path.resolve(process.cwd(), '.env') });
+}
 
 // Use shared commons from be/commons
-const commons = require('../commons');
-const { logger, attachResponseHelpers } = commons;
+const commons = require('../../commons');
+const { logger, attachResponseHelpers, createTelemetryRouter } = commons;
 
 // Import platform routers from local copies
 const geocodeRouter = require('../lib/geocode');
 const astrologyRouter = require('../lib/astrology');
-const telemetryRouter = require('../lib/telemetry');
 // chrono-node for server-side natural language date parsing
 let chrono;
 try {
@@ -94,11 +96,12 @@ if (process.env.DATABASE_URL) {
   // Attach response helpers and logger from commons
       app.use(attachResponseHelpers);
 
-  // Fail-fast environment validation (bff-platform) — skip during tests
-  if (process.env.NODE_ENV !== 'test') {
+  // Fail-fast environment validation (bff-platform)
+  // Only run during real process startup (not when required by tests or other modules)
+  if (process.env.NODE_ENV !== 'test' && require.main === module) {
     try {
-      const { validateEnv } = require('../lib/validateEnv');
-      validateEnv();
+      const { validateEnv } = require('../commons/lib/validateEnv');
+      validateEnv({ service: 'bff-platform' });
     } catch (e) {
       console.error('Environment validation failed during bootstrap (bff-platform):', e && e.message);
       throw e;
@@ -107,6 +110,12 @@ if (process.env.DATABASE_URL) {
 
   // Also expose ErrorCodes for consistent error codes usage in this file
   const { ErrorCodes } = commons;
+
+// Initialize telemetry router with service-specific config
+const telemetryRouter = createTelemetryRouter({
+  serviceName: 'bff-platform',
+  packageJsonPath: '../package.json'
+});
 
 const API_VERSION = process.env.API_VERSION || 'v1';
 const apiRouter = express.Router();
@@ -176,7 +185,8 @@ app.use((err, req, res, next) => {
   }
 });
 
-if (process.env.NODE_ENV !== 'test') {
+// Start server only when running this file directly (not when required by tests)
+if (process.env.NODE_ENV !== 'test' && require.main === module) {
   const server = app.listen(PORT, () => {
     logger.info({ msg: `BFF Platform listening on http://localhost:${PORT}` });
   });

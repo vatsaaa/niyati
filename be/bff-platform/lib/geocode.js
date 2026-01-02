@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const geocodeService = require('../services/geocodeService');
-const { logger, sanitize, reqIdFromReq, ErrorCodes, config } = require('../commons');
+const { logger, sanitize, reqIdFromReq, ErrorCodes, config } = require('../../commons');
 
 // POST /api/v1/geocode  (alias for search)
 // body: { q: 'Pune, Maharashtra' }

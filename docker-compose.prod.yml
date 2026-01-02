@@ -1,5 +1,21 @@
 # Docker Compose - Production Overrides
 # Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# This file extends the base configuration with:
+#   - Docker secrets for sensitive credentials
+#   - Production-optimized settings
+#   - Additional services (migration, backup, proxy)
+#   - Explicit container naming for management
+
+# =============================================================================
+# YAML ANCHORS FOR PRODUCTION (DRY Configuration)
+# =============================================================================
+
+# Shared production environment settings
+x-prod-env: &prod-env
+  NODE_ENV: production
+  LOG_PRETTY_PRINT: "false"
+  LOG_LEVEL: info
 
 services:
   postgres:
@@ -40,15 +56,13 @@ services:
       - smtp_user
       - smtp_password
     environment:
-      - NODE_ENV=production
-      - LOG_PRETTY_PRINT=false
-      - LOG_LEVEL=info
-      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
-      - JWT_SECRET_FILE=/run/secrets/jwt_secret
-      - SMTP_USER_FILE=/run/secrets/smtp_user
-      - SMTP_PASSWORD_FILE=/run/secrets/smtp_password
-      - CORS_ALLOWED=${CORS_ALLOWED}
-      - ALLOW_CROSS_SITE_COOKIES=${ALLOW_CROSS_SITE_COOKIES:-false}
+      <<: *prod-env
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      JWT_SECRET_FILE: /run/secrets/jwt_secret
+      SMTP_USER_FILE: /run/secrets/smtp_user
+      SMTP_PASSWORD_FILE: /run/secrets/smtp_password
+      CORS_ALLOWED: ${CORS_ALLOWED}
+      ALLOW_CROSS_SITE_COOKIES: ${ALLOW_CROSS_SITE_COOKIES:-false}
     restart: always
 
   bff-platform:
@@ -62,12 +76,10 @@ services:
     secrets:
       - postgres_password
     environment:
-      - NODE_ENV=production
-      - LOG_PRETTY_PRINT=false
-      - LOG_LEVEL=info
-      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
-      - CORS_ALLOWED=${CORS_ALLOWED}
-      - ALLOW_CROSS_SITE_COOKIES=${ALLOW_CROSS_SITE_COOKIES:-false}
+      <<: *prod-env
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      CORS_ALLOWED: ${CORS_ALLOWED}
+      ALLOW_CROSS_SITE_COOKIES: ${ALLOW_CROSS_SITE_COOKIES:-false}
     restart: always
 
   ui-service:
@@ -79,14 +91,8 @@ services:
     expose:
       - "${UI_PROD_PORT:-80}"
     environment:
-      - NODE_ENV=production
+      <<: *prod-env
     restart: always
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:80"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
 
   worker:
     container_name: niyati-worker-prod
@@ -95,11 +101,11 @@ services:
       - smtp_password
       - worker_token
     environment:
-      - SMTP_USER_FILE=/run/secrets/smtp_user
-      - SMTP_PASSWORD_FILE=/run/secrets/smtp_password
-      - WORKER_TOKEN_FILE=/run/secrets/worker_token
+      SMTP_USER_FILE: /run/secrets/smtp_user
+      SMTP_PASSWORD_FILE: /run/secrets/smtp_password
+      WORKER_TOKEN_FILE: /run/secrets/worker_token
     restart: always
-    profiles: []
+    profiles: []  # Enable in production (override base profile)
 
   # Migration runner (one-shot)
   migrate:
@@ -186,8 +192,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
-    profiles:
-      - proxy
 
 volumes:
   postgres-data-prod:

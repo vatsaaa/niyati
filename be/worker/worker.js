@@ -4,6 +4,16 @@ const { createClient } = require('redis');
 const nodemailer = require('nodemailer');
 const axios = require('axios');
 const fs = require('fs');
+const { logger } = require('../commons/lib/logger');
+const { validateEnv } = require('../commons/lib/validateEnv');
+
+// Validate environment early
+try {
+  validateEnv({ service: 'worker' });
+} catch (e) {
+  logger.error({ msg: 'Worker environment validation failed', err: e.message });
+  process.exit(1);
+}
 
 // Helper to read secret from file if _FILE env var is set
 function getSecret(envVar, fileEnvVar) {
@@ -11,7 +21,7 @@ function getSecret(envVar, fileEnvVar) {
     try {
       return fs.readFileSync(process.env[fileEnvVar], 'utf8').trim();
     } catch (e) {
-      console.error(`Failed to read secret from ${process.env[fileEnvVar]}:`, e.message);
+      logger.error({ msg: `Failed to read secret from ${process.env[fileEnvVar]}`, err: e.message });
     }
   }
   return process.env[envVar];
@@ -28,23 +38,23 @@ const redis = createClient({
   socket: {
     reconnectStrategy: (retries) => {
       if (retries > 10) {
-        console.error('Redis connection failed after 10 retries');
+        logger.error({ msg: 'Redis connection failed after 10 retries' });
         return new Error('Redis connection failed');
       }
       // Exponential backoff: 100ms, 200ms, 400ms, etc.
       const delay = Math.min(retries * 100, 3000);
-      console.log(`Redis reconnecting in ${delay}ms...`);
+      logger.info({ msg: `Redis reconnecting in ${delay}ms` });
       return delay;
     }
   }
 });
-redis.on('error', (err) => console.error('Redis client error', err?.message || err));
-redis.on('connect', () => console.log('Redis client connected'));
-redis.on('reconnecting', () => console.log('Redis client reconnecting...'));
+redis.on('error', (err) => logger.error({ msg: 'Redis client error', err: err?.message || err }));
+redis.on('connect', () => logger.info({ msg: 'Redis client connected' }));
+redis.on('reconnecting', () => logger.info({ msg: 'Redis client reconnecting' }));
 
 async function start() {
   await redis.connect();
-  console.log('Worker connected to Redis at', REDIS_URL);
+  logger.info({ msg: 'Worker connected to Redis', redisUrl: REDIS_URL });
 
   // Setup transporter if SMTP configured
   let transporter = null;
@@ -55,24 +65,24 @@ async function start() {
       secure: (process.env.SMTP_SECURE === 'true'),
       auth: SMTP_USER ? { user: SMTP_USER, pass: SMTP_PASSWORD } : undefined
     });
-    try { await transporter.verify(); console.log('SMTP transporter ready'); } catch (e) { console.warn('SMTP verify failed:', e.message); }
+    try { await transporter.verify(); logger.info({ msg: 'SMTP transporter ready' }); } catch (e) { logger.warn({ msg: 'SMTP verify failed', err: e.message }); }
   } else {
-    console.log('No SMTP configured — email jobs will be logged only');
+    logger.info({ msg: 'No SMTP configured — email jobs will be logged only' });
   }
 
   async function handleJob(job, redisClient) {
     // Input validation
     if (!job || typeof job !== 'object') {
-      console.error('Invalid job: must be an object');
+      logger.error({ msg: 'Invalid job: must be an object' });
       return false;
     }
     if (!job.type || typeof job.type !== 'string') {
-      console.error('Invalid job: missing or invalid type');
+      logger.error({ msg: 'Invalid job: missing or invalid type' });
       return false;
     }
     
     const { type, data, attempts = 3 } = job;
-    console.log('Processing job', type, 'attempts left', attempts);
+    logger.info({ msg: 'Processing job', type, attemptsLeft: attempts });
     
     try {
       if (type === 'email') {
@@ -85,7 +95,7 @@ async function start() {
         }
         
         if (!transporter) {
-          console.log('Email job (no SMTP configured):', data);
+          logger.info({ msg: 'Email job (no SMTP configured)', data });
         } else {
           await transporter.sendMail({
             from: data.from || process.env.EMAIL_FROM || 'noreply@example.com',
@@ -94,7 +104,7 @@ async function start() {
             text: data.text || '',
             html: data.html
           });
-          console.log('Email sent to', data.to);
+          logger.info({ msg: 'Email sent', to: data.to });
         }
       } else if (type === 'webhook') {
         // Validate webhook data
@@ -106,7 +116,7 @@ async function start() {
         }
         
         // Log outgoing user message payload
-        try { console.log('USER', typeof data.body === 'string' ? data.body : JSON.stringify(data.body)); } catch (e) {}
+        try { logger.debug({ msg: 'USER', body: typeof data.body === 'string' ? data.body : JSON.stringify(data.body) }); } catch (e) {}
         const res = await axios({ 
           method: data.method || 'post', 
           url: data.url, 
@@ -116,24 +126,24 @@ async function start() {
           validateStatus: (status) => status < 500 // Don't throw on 4xx errors
         });
         // Log response from webhook (N8N)
-        try { console.log('N8N', res && res.data ? (typeof res.data === 'string' ? res.data : JSON.stringify(res.data)) : `status:${res.status}`); } catch (e) {}
+        try { logger.debug({ msg: 'N8N', response: res && res.data ? (typeof res.data === 'string' ? res.data : JSON.stringify(res.data)) : `status:${res.status}` }); } catch (e) {}
       } else {
-        console.warn('Unknown job type:', type);
+        logger.warn({ msg: 'Unknown job type', type });
         // Don't retry unknown job types
         if (redisClient) await redisClient.lPush('job_failed', JSON.stringify({ ...job, error: 'unknown_job_type' }));
         return false;
       }
       return true;
     } catch (err) {
-      console.error('Job failed:', err.message || err);
+      logger.error({ msg: 'Job failed', err: err.message || err });
       if ((attempts || 0) > 1) {
         const next = { ...job, attempts: attempts - 1 };
         // simple re-queue at the end
         if (redisClient) await redisClient.lPush('job_queue', JSON.stringify(next));
-        console.log('Requeued job, attempts left', next.attempts);
+        logger.info({ msg: 'Requeued job', attemptsLeft: next.attempts });
       } else {
         if (redisClient) await redisClient.lPush('job_failed', JSON.stringify(job));
-        console.log('Moved job to job_failed');
+        logger.info({ msg: 'Moved job to job_failed' });
       }
       return false;
     }
@@ -144,7 +154,7 @@ async function start() {
   
   // Graceful shutdown handler
   process.on('SIGTERM', () => {
-    console.log('SIGTERM received, finishing current job and shutting down...');
+    logger.info({ msg: 'SIGTERM received, finishing current job and shutting down' });
     isShuttingDown = true;
   });
   
@@ -157,26 +167,26 @@ async function start() {
       try { 
         job = JSON.parse(payload); 
       } catch (e) { 
-        console.error('Invalid job payload:', payload.substring(0, 100)); 
+        logger.error({ msg: 'Invalid job payload', payload: payload.substring(0, 100) }); 
         // Move to failed queue
         await redis.lPush('job_failed', JSON.stringify({ error: 'invalid_json', payload: payload.substring(0, 100) })).catch(() => {});
         continue; 
       }
       await handleJob(job, redis);
     } catch (err) {
-      console.error('Worker loop error:', err.message || err);
+      logger.error({ msg: 'Worker loop error', err: err.message || err });
       await new Promise((r) => setTimeout(r, 2000));
     }
   }
   
   // Cleanup on shutdown
-  console.log('Worker shutting down gracefully...');
-  await redis.quit().catch((err) => console.error('Error closing Redis connection:', err));
-  console.log('Worker stopped');
+  logger.info({ msg: 'Worker shutting down gracefully' });
+  await redis.quit().catch((err) => logger.error({ msg: 'Error closing Redis connection', err }));
+  logger.info({ msg: 'Worker stopped' });
 }
  
 module.exports = { start, handleJob };
 
 if (require.main === module) {
-  start().catch((err) => { console.error(err); process.exit(1); });
+  start().catch((err) => { logger.error({ msg: 'Worker startup failed', err }); process.exit(1); });
 }

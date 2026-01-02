@@ -1,5 +1,5 @@
 const request = require('supertest');
-const express = require('express');
+const { createTestApp, createMockDb } = require('@test-helpers');
 
 describe('POST /can-ask', () => {
   let app;
@@ -17,10 +17,8 @@ describe('POST /can-ask', () => {
     });
 
     const router = require('../lib/users');
-    app = express();
-    app.use(express.json());
-    const { attachResponseHelpers } = require('../../commons/lib/responses');
-    app.use('/api/v1/users', attachResponseHelpers, router);
+    const { app: testApp } = createTestApp('/api/v1/users', router);
+    app = testApp;
   });
 
   afterEach(() => jest.restoreAllMocks());

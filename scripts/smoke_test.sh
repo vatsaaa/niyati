@@ -1,49 +1,49 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# =============================================================================
+# Smoke Tests for Niyati
+# =============================================================================
+# Runs health checks against local containers to verify the stack is healthy.
+#
+# Usage: ./scripts/smoke_test.sh
+#
+# Environment Variables:
+#   SMOKE_MAX_RETRIES  - Maximum retry attempts (default: 10)
+#   SMOKE_SLEEP_BASE   - Base sleep time between retries (default: 2)
+# =============================================================================
 
-echo "Running hardened smoke tests against local containers"
+# Load common library
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lib/common.sh"
 
+log_info "Running smoke tests against local containers"
+
+# Configuration
 SMOKE_MAX_RETRIES=${SMOKE_MAX_RETRIES:-10}
 SMOKE_SLEEP_BASE=${SMOKE_SLEEP_BASE:-2}
 
-check_with_retries() {
-  local url="$1"
-  local attempt=1
-  local max=${2:-$SMOKE_MAX_RETRIES}
-
-  echo "Checking $url (up to $max attempts)"
-  while [ $attempt -le $max ]; do
-    if curl -fsS --max-time 8 "$url" >/dev/null 2>&1; then
-      echo "OK: $url"
-      return 0
-    fi
-    echo "Attempt $attempt/$max failed for $url"
-    attempt=$((attempt+1))
-    sleep_seconds=$((SMOKE_SLEEP_BASE * attempt))
-    sleep $sleep_seconds
-  done
-  echo "FAIL after $max attempts: $url"
-  return 1
-}
+# Load project env for port configuration
+PROJECT_ROOT="$(find_project_root "$SCRIPT_DIR" 2>/dev/null)" || PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+load_project_env "$PROJECT_ROOT" 2>/dev/null || true
 
 # List of endpoints to verify
 endpoints=(
-  "http://127.0.0.1:3005/api/v1/telemetry/health"
-  "http://127.0.0.1:3006/api/v1/telemetry/health"
-  "http://127.0.0.1:5175/"
-  "http://127.0.0.1:3005/api/v1/identify"
+    "http://127.0.0.1:${BFF_PLATFORM_PORT:-3000}/api/v1/telemetry/health"
+    "http://127.0.0.1:${BFF_AUTH_PORT:-3001}/api/v1/telemetry/health"
+    "http://127.0.0.1:${UI_DEV_PORT:-5173}/"
+    "http://127.0.0.1:${BFF_PLATFORM_PORT:-3000}/api/v1/identify"
 )
 
 failed=0
 for url in "${endpoints[@]}"; do
-  if ! check_with_retries "$url"; then
-    failed=1
-  fi
+    if ! check_url_with_retries "$url" "$SMOKE_MAX_RETRIES" "$SMOKE_SLEEP_BASE"; then
+        failed=1
+    fi
 done
 
-if [ $failed -ne 0 ]; then
-  echo "One or more smoke checks failed"
-  exit 1
+echo ""
+if [[ $failed -ne 0 ]]; then
+    log_fail "One or more smoke checks failed"
+    exit 1
 fi
 
-echo "Smoke tests passed"
+log_success "All smoke tests passed"

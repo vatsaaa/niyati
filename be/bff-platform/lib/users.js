@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const axios = require('axios');
-const { logger, sanitize, ErrorCodes, config } = require('../commons');
+const { logger, sanitize, ErrorCodes, config } = require('../../commons');
 const { classify } = require('./queryClassifier');
 
 // Cache for app_config values (refresh every 5 minutes)
@@ -109,7 +109,23 @@ router.post('/sync', async (req, res) => {
     // Log incoming user profile (USER)
     try { console.log('USER', `SYNC ${profile.phoneNumber} last_login_location=${profile.last_login_location || ''}`); } catch (e) {}
 
-    const result = await db.query(upsertSql, params);
+    let result;
+    try {
+      result = await db.query(upsertSql, params);
+    } catch (err) {
+      try {
+        console.error('SQL_ERROR_DEBUG:', JSON.stringify({
+          message: err && err.message,
+          sql: upsertSql,
+          paramsLength: Array.isArray(params) ? params.length : 0,
+          params: params
+        }));
+      } catch (e) {
+        // best-effort logging
+        console.error('SQL_ERROR_DEBUG: failed to stringify debug info', e && e.message);
+      }
+      throw err;
+    }
     const user = result.rows[0];
 
     // Server created/updated user record (NIYATI)
@@ -223,7 +239,7 @@ router.post('/profile', async (req, res) => {
         is_paid, last_payment_amount, last_payment_verified, upi_id, upi_txn_id,
         created_at, updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CASE WHEN $9 THEN now() ELSE NULL END, $10, $11, $12, $13, $14, $15, $16, $17, $18, now(), now())
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CASE WHEN $9 THEN now() ELSE NULL END, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, now(), now())
       ON CONFLICT (phone_number) DO UPDATE SET
         name = COALESCE(EXCLUDED.name, users.name),
         date_of_birth = COALESCE(EXCLUDED.date_of_birth, users.date_of_birth),
@@ -265,7 +281,22 @@ router.post('/profile', async (req, res) => {
     // Log incoming profile update (USER)
     try { console.log('USER', `PROFILE_UPDATE ${profile.phoneNumber} last_login_location=${profile.last_login_location || ''}`); } catch (e) {}
 
-    const result = await db.query(upsertSql, params);
+    let result;
+    try {
+      result = await db.query(upsertSql, params);
+    } catch (err) {
+      try {
+        console.error('SQL_ERROR_DEBUG:', JSON.stringify({
+          message: err && err.message,
+          sql: upsertSql,
+          paramsLength: Array.isArray(params) ? params.length : 0,
+          params: params
+        }));
+      } catch (e) {
+        console.error('SQL_ERROR_DEBUG: failed to stringify debug info', e && e.message);
+      }
+      throw err;
+    }
     const user = result.rows[0];
 
     // Normalize returned user object to include new fields

@@ -1,3 +1,4 @@
+import React from 'react'
 import { useOnlineStatus } from '../hooks/usePWA';
 
 /**

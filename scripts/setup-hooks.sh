@@ -1,40 +1,46 @@
 #!/usr/bin/env bash
-# Setup git hooks for Niyati project
+# =============================================================================
+# Git Hooks Setup for Niyati
+# =============================================================================
+# Configures git hooks using the .husky directory for pre-commit, pre-push,
+# and commit-msg hooks.
+#
+# Usage: ./scripts/setup-hooks.sh
+# =============================================================================
 
-set -e
+# Load common library
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lib/common.sh"
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+PROJECT_ROOT="$(find_project_root "$SCRIPT_DIR")"
+cd "$PROJECT_ROOT"
 
-echo -e "${YELLOW}🔧 Setting up git hooks...${NC}"
+log_step "🔧 Setting up git hooks..."
 
 # Check if we're in a git repository
-if [ ! -d ".git" ]; then
-    echo -e "${RED}❌ Not a git repository${NC}"
+if [[ ! -d ".git" ]]; then
+    log_error "Not a git repository"
     echo "Please run this script from the root of the git repository"
     exit 1
 fi
 
 # Create .husky directory if it doesn't exist
-if [ ! -d ".husky" ]; then
-    echo -e "${RED}❌ .husky directory not found${NC}"
+if [[ ! -d ".husky" ]]; then
+    log_error ".husky directory not found"
     exit 1
 fi
 
 # Make hooks executable
-echo "  → Making hooks executable..."
-chmod +x .husky/pre-commit
-chmod +x .husky/pre-push
-chmod +x .husky/commit-msg
+log_step "Making hooks executable..."
+chmod +x .husky/pre-commit 2>/dev/null || true
+chmod +x .husky/pre-push 2>/dev/null || true
+chmod +x .husky/commit-msg 2>/dev/null || true
 
 # Configure git to use .husky for hooks
-echo "  → Configuring git..."
+log_step "Configuring git..."
 git config core.hooksPath .husky
 
-echo -e "${GREEN}✅ Git hooks installed successfully!${NC}"
+log_success "Git hooks installed successfully!"
 echo ""
 echo -e "${YELLOW}Installed hooks:${NC}"
 echo "  • pre-commit:  Runs linting, formatting, and security checks"
