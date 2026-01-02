@@ -16,6 +16,24 @@ source "${SCRIPT_DIR}/lib/common.sh"
 PROJECT_ROOT="$(find_project_root "$SCRIPT_DIR")"
 cd "$PROJECT_ROOT"
 
+# If no .env is present, create one from job environment variables (CI-friendly)
+if [[ ! -f "$PROJECT_ROOT/.env" ]]; then
+    log_warn ".env not found in project root; creating temporary .env from environment variables"
+    cat > "$PROJECT_ROOT/.env" <<EOF
+POSTGRES_USER=${POSTGRES_USER:-niyati}
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-niyati_dev_pass}
+POSTGRES_DB=${POSTGRES_DB:-niyati_dev}
+SERVICE_TOKEN=${SERVICE_TOKEN:-}
+VITE_N8N_WEBHOOK_URL=${VITE_N8N_WEBHOOK_URL:-http://host.docker.internal:5678/webhook}
+CORS_ALLOWED=${CORS_ALLOWED:-https://localhost}
+EMAIL_FROM=${EMAIL_FROM:-}
+SMTP_HOST=${SMTP_HOST:-}
+SMTP_PORT=${SMTP_PORT:-}
+SMTP_SECURE=${SMTP_SECURE:-}
+EOF
+    log_debug "Wrote temporary .env with POSTGRES_DB=${POSTGRES_DB:-niyati_dev}"
+fi
+
 COMPOSE_CMD="docker compose -f docker-compose.yml -f docker-compose.ci.yml"
 
 log_info "Starting CI test script from ${PROJECT_ROOT}"
