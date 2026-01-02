@@ -110,8 +110,29 @@ function isPremiumAstrologyQuery(text) {
 // This helps distinguish between:
 // a) Questions asking for predictions/prophecies -> deduct credits
 // b) Casual conversation/greetings/banter -> no credit deduction
+// c) Profile information sharing -> no credit deduction (user onboarding)
 function isCasualConversation(text) {
   const lowerText = text.toLowerCase().trim();
+  
+  // Profile information patterns - NEVER billable (user onboarding)
+  // Matches: "I am X, born in Y on Z at T", "My name is X", "I was born on", etc.
+  const profilePatterns = [
+    /\b(i am|i'm|my name is|name is|this is)\b.*\b(born|dob|birth|birthday)\b/i,
+    /\bborn\s+(in|on|at)\b/i,  // "born in Delhi", "born on 19 May", "born at 7:31"
+    /\b(my|i was)\s+born\b/i,  // "I was born", "my born"
+    /\b(date of birth|dob|birthday)\s*(is|:)?\s*\d/i,  // "DOB is 19", "date of birth: 1979"
+    /\b(birth\s*place|place of birth|birthplace)\b/i,
+    /\b(birth\s*time|time of birth)\b/i,
+    /\b\d{1,2}[:\s]?\d{2}\s*(am|pm)\b/i,  // Time patterns like "7:31 am"
+    /\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}/i,  // "May 19"
+    /\b\d{1,2}\s+(january|february|march|april|may|june|july|august|september|october|november|december)/i,  // "19 May"
+    /\b(19|20)\d{2}\b/i,  // Years like 1979, 2001 (birth years)
+  ];
+  
+  // If message contains profile information, it's not billable
+  if (profilePatterns.some(pattern => pattern.test(lowerText))) {
+    return true;
+  }
   
   // Greetings and pleasantries
   const casualPatterns = [
@@ -149,6 +170,8 @@ function isCasualConversation(text) {
     /^(i see|got it|understood|makes sense)$/i,
     // General "tell me about today" - casual but may lead to horoscope
     /^(can you )?(tell|talk) (me )?(about )?today\??$/i,
+    // Introduction without birth details
+    /^(i am|i'm|my name is)\s+[a-z]+$/i,  // Just "I am Ankur" or "My name is Vatsa"
   ];
   
   // Check if message matches casual patterns

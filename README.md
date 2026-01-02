@@ -26,6 +26,76 @@ AI-powered conversational astrology platform delivering personalized horoscopes,
 - [Roadmap & TODOs](#roadmap--todos)
 - [Troubleshooting](#troubleshooting)
 
+## Design: Keep the Client Lightweight (BFF-first)
+
+Purpose: make the UI a thin collector and renderer while moving business logic, policy, and billing to trusted servers (BFF / `bff-platform` + `n8n`). This reduces client complexity, improves security, and centralizes audit/logging and feature flags.
+
+- Server/BFF First
+  - Add a small backend endpoint (extend `be/bff-platform`) that accepts UI payloads, normalizes metadata (ISO `dateOfBirth`, `timeOfBirth`, `placeOfBirth`, `userName`), computes derived fields (`age`, `ageConfirmed`) and stores authoritative state.
+  - The BFF should decide `isSystemContext` for system-initiated messages and return a short canonical payload to the UI for display.
+  - The BFF forwards a canonical, validated request to `n8n` so the workflow always receives consistent, server-validated data.
+
+- `n8n` as Orchestrator (not Validator)
+  - Keep `n8n` focused on conversation orchestration, memory persistence (age, dob, name) and LLM prompt control.
+  - Post-process LLM outputs in `n8n` to sanitize stage directions (e.g., strip `*smiles*`) and to produce an explicit `isBillable` flag for each outgoing response.
+  - Persist computed fields into the workflow memory node before the agent executes (ensures agent sees authoritative state).
+
+- Centralize Billing & Charge Decisions Server-side
+  - Only BFF or `n8n` should decrement credits after validating `isBillable` and message type.
+  - UI must never perform the authoritative charge; it may show optimistic UI but waits for server confirmation before committing locally.
+  - Charge endpoints must be idempotent (use `reqId` or request tokens) to avoid double deductions during retries.
+
+- UI Responsibilities (keep them tiny)
+  - Collect and minimally validate inputs (format DOB to ISO `YYYY-MM-DD`, basic syntactic checks).
+  - Attach lightweight hints (e.g., `isSystemContext: true`) for system-originated messages but treat hints as non-authoritative.
+  - Send canonical payload to BFF (not directly to `n8n`).
+  - Render messages and defensively sanitize outputs (strip `*stage directions*`) for display only.
+  - Fetch credit balance from backend; display server-confirmed balances.
+
+- Auth, Trust & Observability
+  - Use short-lived tokens / session IDs so backend can validate and tie requests to sessions.
+  - Log parsed DOB/age and `isBillable` decisions server-side for audits. Add feature flags to toggle heuristics safely.
+
+- Quick migration path (minimal changes)
+  1. Add a BFF endpoint: `POST /api/v1/chat/proxy` that accepts UI payloads and returns canonical payload plus `isBillable` and credit balance.
+  2. Update `ui/src/hooks/useChat.js` to call the BFF instead of posting directly to `n8n`.
+  3. Move age computation + persistence + billing-gate logic to BFF and/or `n8n` (pre-agent memory persistence).
+  4. UI renders server-provided `isBillable` and updated credit-balance values returned by the BFF.
+
+- Minimal BFF endpoint spec (example)
+  - Request: `POST /api/v1/chat/proxy`
+    ```json
+    {
+      "reqId": "<client-session-reqid>",
+      "message": "<user or system message text>",
+      "sessionId": "<user-session-id>",
+      "metadata": {
+        "userName": "Ankur Vatsa",
+        "dateOfBirth": "1979-05-19",
+        "timeOfBirth": "07:30",
+        "placeOfBirth": "New Delhi",
+        "isSystemContext": true
+      }
+    }
+    ```
+  - Response: `200 OK`
+    ```json
+    {
+      "reqId": "<same-reqid>",
+      "forwardedToN8n": true,
+      "n8nResponse": { "output": "...", "isBillable": false },
+      "credits": 12
+    }
+    ```
+
+- Testing checklist
+  - Send initial system greeting (with DOB). Verify BFF computes `age`, sets `ageConfirmed`, persists it (or forwards to `n8n` memory), and returns `isBillable=false` and no credit deduction.
+  - Reply with redundant confirmations ("Yes, I'm over 18"). Verify no credits deducted and `ageConfirmed` remains in memory.
+  - Send an actual horoscope question. Verify `isBillable=true` is returned and credits are deducted by server-side billing.
+
+Rationale: this pattern centralizes sensitive logic (billing, age computation) on trusted servers, making the UI easier to maintain and safer to operate in production.
+
+
 ---
 
 ## Architecture
@@ -689,8 +759,29 @@ CI test runner that handles Docker lifecycle and tests.
 Production deployment script.
 
 ```bash
-./scripts/deploy_niyati.sh
+./scripts/deploy_niyati.sh --prod --project-name=niyati-prod
 ```
+
+#### Deploy script notes
+
+- The `deploy_niyati.sh` script supports the following useful flags:
+
+  - `--prod` — use production compose overrides (`docker-compose.prod.yml`)
+  - `--project-name=<name>` — set the Compose project name (`-p`) to ensure stable container naming across runs
+  - `--dry-run` — print the commands the script would run without executing them
+  - `--log-file=PATH` — append deploy output to `PATH`
+
+- Idempotent start sequence (what the script does when starting services):
+
+  1. `docker compose -p <project> down --remove-orphans` — removes any leftover or orphaned containers (prevents names like `niyati-caddy-1`).
+  2. `docker compose -p <project> up -d --build` — starts the stack with freshly built images.
+
+Example:
+
+```bash
+./scripts/deploy_niyati.sh --prod --project-name=niyati-prod --log-file=/tmp/deploy.log
+```
+
 
 ---
 
