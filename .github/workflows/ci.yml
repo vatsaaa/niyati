@@ -24,7 +24,10 @@ jobs:
         cache: 'npm'
         cache-dependency-path: '**/package-lock.json'
     - name: Install Host Dependencies
-      run: npm ci
+      run: |
+        npm ci --prefix be/bff-platform
+        npm ci --prefix be/bff-auth
+        npm ci --prefix ui
 
     - name: Run Full Integration Suite
       # This script now owns the Docker lifecycle + Mock N8N
