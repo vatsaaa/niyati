@@ -5,6 +5,7 @@ on:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
+  workflow_dispatch: {}
 
 jobs:
   test:
@@ -36,11 +37,13 @@ jobs:
       env:
         REAL: '1'
         BASE_URL: 'http://127.0.0.1:5173'
+        SERVICE_TOKEN: ${{ secrets.SERVICE_TOKEN }}
       run: |
         cd e2e
         npm ci
         npx playwright install --with-deps chromium
         npx playwright test --project=api
+
 
     - name: Upload Playwright Traces (On Failure)
       if: failure()
