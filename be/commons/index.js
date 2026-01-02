@@ -18,6 +18,7 @@ const { sanitize, sanitizeEmail, sanitizeName } = require('./lib/sanitize');
 const { createRateLimiter } = require('./lib/rateLimiter');
 const createTelemetryRouter = require('./lib/telemetry');
 const { validateEnv, validateChecks, validateOrExit } = require('./lib/validateEnv');
+const { authenticateOrReject } = require('./lib/authMiddleware');
 
 // Re-export config for services to use
 const config = require('./config');
@@ -37,6 +38,7 @@ module.exports = {
   validateEnv,
   validateChecks,
   validateOrExit,
+  authenticateOrReject,
   config
 };
 

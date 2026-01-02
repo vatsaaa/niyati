@@ -94,8 +94,7 @@ if (process.env.DATABASE_URL) {
 }
 
   // Attach response helpers and logger from commons
-      app.use(attachResponseHelpers);
-
+    app.use(attachResponseHelpers);
   // Fail-fast environment validation (bff-platform)
   // Only run during real process startup (not when required by tests or other modules)
   if (process.env.NODE_ENV !== 'test' && require.main === module) {
@@ -119,6 +118,16 @@ const telemetryRouter = createTelemetryRouter({
 
 const API_VERSION = process.env.API_VERSION || 'v1';
 const apiRouter = express.Router();
+// Authentication middleware: validate incoming requests via bff-auth
+// Uses `authenticateOrReject` exported by be/commons which calls the bff-auth validate endpoint.
+// This will reject unauthenticated requests with 401 unless they present a valid X-Service-Token.
+if (commons && commons.authenticateOrReject) {
+  // Protect only specific routes (chat) rather than entire API router.
+  // Some endpoints (e.g. /users lookup/sync) are intended to be callable
+  // internally without a bearer token when using X-Service-Token forwarding
+  // in tests. Apply middleware to `/chat` specifically.
+  apiRouter.use('/chat', commons.authenticateOrReject);
+}
 apiRouter.use('/geocode', geocodeRouter);
 apiRouter.use('/astrology', astrologyRouter);
 apiRouter.use('/telemetry', telemetryRouter);
