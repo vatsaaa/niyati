@@ -9,6 +9,7 @@ const { sendMail } = require('./emailProvider');
 const { authenticate } = require('./authMiddleware');
 const crypto = require('crypto');
 const { handleCallback, fetchUserInfo } = require('../src/socialLogin');
+const { passwordResetLimiter } = require('../commons/lib/rateLimiter');
 
 const router = express.Router();
 const bcrypt = require('bcryptjs');
@@ -276,7 +277,7 @@ router.post('/login', async (req, res) => {
 // POST /auth/request-password-reset
 // Body: { email }
 // TODO: Add rate limiting to prevent email enumeration and spam
-router.post('/request-password-reset', async (req, res) => {
+router.post('/request-password-reset', passwordResetLimiter, async (req, res) => {
   try {
     const { email } = req.body || {};
 
