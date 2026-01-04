@@ -134,6 +134,10 @@ apiRouter.use('/telemetry', telemetryRouter);
 const usersRouter = require('../lib/users');
 apiRouter.use('/users', usersRouter);
 
+// Profile extraction endpoint (NLP-based field extraction)
+const profileRouter = require('../lib/profileExtractor');
+apiRouter.use('/profile', profileRouter);
+
 // Import query classifier for billing classification and chat routes
 const { getQueryCreditCost, getQueryType, isCasualConversation } = require('../lib/queryClassifier');
 const chatRouter = require('../lib/chat');
