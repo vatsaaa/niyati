@@ -63,9 +63,10 @@ router.post('/sync', async (req, res) => {
         credits, total_paid_amount,
         last_login_location, last_login_lat, last_login_lon,
         is_paid, last_payment_amount, last_payment_verified, upi_id, upi_txn_id,
+        is_adult,
         created_at, updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CASE WHEN $9 THEN now() ELSE NULL END, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, now(), now())
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CASE WHEN $9 THEN now() ELSE NULL END, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, now(), now())
       ON CONFLICT (phone_number) DO UPDATE SET
         name = COALESCE(EXCLUDED.name, users.name),
         date_of_birth = COALESCE(EXCLUDED.date_of_birth, users.date_of_birth),
@@ -78,12 +79,25 @@ router.post('/sync', async (req, res) => {
         last_login_location = COALESCE(EXCLUDED.last_login_location, users.last_login_location),
         last_login_lat = COALESCE(EXCLUDED.last_login_lat, users.last_login_lat),
         last_login_lon = COALESCE(EXCLUDED.last_login_lon, users.last_login_lon),
+        is_adult = COALESCE(EXCLUDED.is_adult, users.is_adult),
         updated_at = now()
-      RETURNING id, phone_number, name, created_at, updated_at, credits, credits_last_reset, total_paid_amount, is_paid, last_payment_amount, last_payment_verified, upi_id, upi_txn_id, last_login_location, last_login_lat, last_login_lon
+      RETURNING id, phone_number, name, created_at, updated_at, credits, credits_last_reset, total_paid_amount, is_paid, last_payment_amount, last_payment_verified, upi_id, upi_txn_id, last_login_location, last_login_lat, last_login_lon, is_adult
     `;
 
     // Ensure last_login_location is sent as a string (or null) to avoid numeric coercion
     const normalizedLastLoginLocation = (profile.last_login_location === undefined || profile.last_login_location === null) ? null : String(profile.last_login_location);
+
+    // compute is_adult from provided date_of_birth
+    function computeIsAdult(dob) {
+      if (!dob) return null;
+      const d = new Date(dob);
+      if (Number.isNaN(d.getTime())) return null;
+      const now = new Date();
+      let age = now.getFullYear() - d.getFullYear();
+      const m = now.getMonth() - d.getMonth();
+      if (m < 0 || (m === 0 && now.getDate() < d.getDate())) age--;
+      return age >= 18;
+    }
 
     const params = [
       profile.phoneNumber,
@@ -104,7 +118,8 @@ router.post('/sync', async (req, res) => {
       0,     // last_payment_amount
       false, // last_payment_verified
       profile.upiId || null,
-      profile.upiTxnId || null
+      profile.upiTxnId || null,
+      computeIsAdult(profile.dateOfBirth)
     ];
     // Log incoming user profile (USER)
     try { console.log('USER', `SYNC ${profile.phoneNumber} last_login_location=${profile.last_login_location || ''}`); } catch (e) {}
@@ -154,7 +169,7 @@ router.post('/identify', async (req, res) => {
     if (!db) return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Database not configured');
 
     // Normalize phone by comparing only digits
-    const sql = `SELECT id, phone_number, name, date_of_birth, time_of_birth, place_of_birth, lat, lon, timezone, consent_given, credits, credits_last_reset, total_paid_amount, is_paid, last_payment_amount, last_payment_verified, upi_id, upi_txn_id, last_login_location, last_login_lat, last_login_lon, created_at, updated_at FROM users WHERE regexp_replace(phone_number, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g') LIMIT 1`;
+    const sql = `SELECT id, phone_number, name, date_of_birth, time_of_birth, place_of_birth, lat, lon, timezone, consent_given, credits, credits_last_reset, total_paid_amount, is_paid, last_payment_amount, last_payment_verified, upi_id, upi_txn_id, last_login_location, last_login_lat, last_login_lon, is_adult, created_at, updated_at FROM users WHERE regexp_replace(phone_number, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g') LIMIT 1`;
     const result = await db.query(sql, [phone]);
 
     if (!result || !result.rows || result.rows.length === 0) {
@@ -202,7 +217,8 @@ router.post('/identify', async (req, res) => {
         upi_txn_id: user.upi_txn_id || null,
         last_login_location: user.last_login_location,
         last_login_lat: user.last_login_lat,
-        last_login_lon: user.last_login_lon
+        last_login_lon: user.last_login_lon,
+        is_adult: typeof user.is_adult !== 'undefined' ? !!user.is_adult : null
       },
       config: {
         credits_monthly_free: monthlyCredits,
@@ -237,9 +253,10 @@ router.post('/profile', async (req, res) => {
         credits, total_paid_amount,
         last_login_location, last_login_lat, last_login_lon,
         is_paid, last_payment_amount, last_payment_verified, upi_id, upi_txn_id,
+        is_adult,
         created_at, updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CASE WHEN $9 THEN now() ELSE NULL END, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, now(), now())
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CASE WHEN $9 THEN now() ELSE NULL END, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, now(), now())
       ON CONFLICT (phone_number) DO UPDATE SET
         name = COALESCE(EXCLUDED.name, users.name),
         date_of_birth = COALESCE(EXCLUDED.date_of_birth, users.date_of_birth),
@@ -252,9 +269,22 @@ router.post('/profile', async (req, res) => {
         last_login_location = COALESCE(EXCLUDED.last_login_location, users.last_login_location),
         last_login_lat = COALESCE(EXCLUDED.last_login_lat, users.last_login_lat),
         last_login_lon = COALESCE(EXCLUDED.last_login_lon, users.last_login_lon),
+        is_adult = COALESCE(EXCLUDED.is_adult, users.is_adult),
         updated_at = now()
-      RETURNING id, phone_number, name, date_of_birth, time_of_birth, place_of_birth, lat, lon, timezone, consent_given, credits, credits_last_reset, total_paid_amount, is_paid, last_payment_amount, last_payment_verified, upi_id, upi_txn_id, last_login_location, last_login_lat, last_login_lon
+      RETURNING id, phone_number, name, date_of_birth, time_of_birth, place_of_birth, lat, lon, timezone, consent_given, credits, credits_last_reset, total_paid_amount, is_paid, last_payment_amount, last_payment_verified, upi_id, upi_txn_id, last_login_location, last_login_lat, last_login_lon, is_adult
     `;
+
+    // compute is_adult from provided date_of_birth (reuse computeIsAdult if present)
+    function computeIsAdult(dob) {
+      if (!dob) return null;
+      const d = new Date(dob);
+      if (Number.isNaN(d.getTime())) return null;
+      const now = new Date();
+      let age = now.getFullYear() - d.getFullYear();
+      const m = now.getMonth() - d.getMonth();
+      if (m < 0 || (m === 0 && now.getDate() < d.getDate())) age--;
+      return age >= 18;
+    }
 
     const params = [
       profile.phoneNumber,
@@ -272,10 +302,11 @@ router.post('/profile', async (req, res) => {
       profile.last_login_lat ? parseFloat(profile.last_login_lat) : (profile.last_login_lat === 0 ? 0 : null),
       profile.last_login_lon ? parseFloat(profile.last_login_lon) : (profile.last_login_lon === 0 ? 0 : null),
       false, // is_paid
-      0,     // last_payment_amount
+      0,  // last_payment_amount
       false, // last_payment_verified
       profile.upiId || null,
-      profile.upiTxnId || null
+      profile.upiTxnId || null,
+      computeIsAdult(profile.dateOfBirth)
     ];
 
     // Log incoming profile update (USER)
@@ -314,6 +345,7 @@ router.post('/profile', async (req, res) => {
       credits: user.credits,
       total_paid_amount: user.total_paid_amount,
       is_paid: !!user.is_paid,
+      is_adult: typeof user.is_adult !== 'undefined' ? !!user.is_adult : null,
       last_payment_amount: user.last_payment_amount || 0,
       last_payment_verified: !!user.last_payment_verified,
       upi_id: user.upi_id || null,
@@ -357,11 +389,11 @@ router.get('/lookup', async (req, res) => {
     let sql;
     let params = [];
     if (id) {
-      sql = `SELECT id, phone_number, name, date_of_birth, time_of_birth, place_of_birth, lat, lon, timezone, consent_given, credits, credits_last_reset, total_paid_amount, last_login_location, last_login_lat, last_login_lon, created_at, updated_at FROM users WHERE id = $1 LIMIT 1`;
+      sql = `SELECT id, phone_number, name, date_of_birth, time_of_birth, place_of_birth, lat, lon, timezone, consent_given, credits, credits_last_reset, total_paid_amount, last_login_location, last_login_lat, last_login_lon, is_adult, created_at, updated_at FROM users WHERE id = $1 LIMIT 1`;
       params = [id];
     } else {
       // Normalize phone by comparing only digits to allow flexible formatting ( +91-999... vs +91999... )
-      sql = `SELECT id, phone_number, name, date_of_birth, time_of_birth, place_of_birth, lat, lon, timezone, consent_given, credits, credits_last_reset, total_paid_amount, last_login_location, last_login_lat, last_login_lon, created_at, updated_at FROM users WHERE regexp_replace(phone_number, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g') LIMIT 1`;
+      sql = `SELECT id, phone_number, name, date_of_birth, time_of_birth, place_of_birth, lat, lon, timezone, consent_given, credits, credits_last_reset, total_paid_amount, last_login_location, last_login_lat, last_login_lon, is_adult, created_at, updated_at FROM users WHERE regexp_replace(phone_number, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g') LIMIT 1`;
       params = [phone];
     }
 
