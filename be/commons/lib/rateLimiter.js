@@ -46,8 +46,7 @@ const passwordResetLimiter = rateLimit({
   max: 3, // 3 reset requests per hour per IP
   message: { status: 'error', error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many password reset requests, please try again later' } },
   standardHeaders: true,
-  legacyHeaders: false,
-  skipSuccessfulRequests: true // Only count failed attempts
+  legacyHeaders: false
 });
 
 // Rate limiter for token refresh (prevent token abuse)
