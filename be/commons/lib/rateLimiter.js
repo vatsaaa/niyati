@@ -1,78 +1,71 @@
 /**
- * Simple in-memory rate limiter for auth endpoints
- * For production, use Redis-backed rate limiting
+ * Rate limiter factory and helpers
+ * - Exposes `createRateLimiter(config)` which returns named limiters
+ * - Also provides default pre-created limiters for backward compatibility
  *
- * @module be/commons/lib/rateLimiter
+ * Notes:
+ * - In production you should supply a shared store (Redis) via config
+ *   so rate limits are consistent across instances.
  */
 
 const rateLimit = require('express-rate-limit');
 
-// Rate limiter for login attempts (prevent brute force)
-/**
- * Express rate limiter instance used for login attempts.
- * @type {import('express-rate-limit').RateLimit}
- */
-const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // 5 attempts per window
-  message: { status: 'error', error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many login attempts, please try again later' } },
-  standardHeaders: true,
-  legacyHeaders: false,
-  // Use IP + email combination for more granular limiting
-  keyGenerator: (req) => {
-    const email = req.body?.email || 'unknown';
-    return `${req.ip}:${email}`;
-  }
-});
+const defaultConfig = require('../config').rateLimit || {};
 
-// Rate limiter for registration (prevent account creation spam)
-/**
- * @type {import('express-rate-limit').RateLimit}
- */
-const registerLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour
-  max: 3, // 3 registrations per hour per IP
-  message: { status: 'error', error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many registration attempts, please try again later' } },
-  standardHeaders: true,
-  legacyHeaders: false
-});
+function makeLimiter(opts = {}) {
+  return rateLimit({
+    windowMs: opts.windowMs,
+    max: opts.max,
+    message: opts.message,
+    standardHeaders: opts.standardHeaders !== false,
+    legacyHeaders: opts.legacyHeaders === true,
+    keyGenerator: opts.keyGenerator
+  });
+}
 
-// Rate limiter for password reset requests (prevent email enumeration and spam)
-/**
- * @type {import('express-rate-limit').RateLimit}
- */
-const passwordResetLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour
-  max: 3, // 3 reset requests per hour per IP
-  message: { status: 'error', error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many password reset requests, please try again later' } },
-  standardHeaders: true,
-  legacyHeaders: false
-});
+function createRateLimiter(cfg = {}) {
+  const cfgRoot = cfg || defaultConfig;
 
-// Rate limiter for token refresh (prevent token abuse)
-/**
- * @type {import('express-rate-limit').RateLimit}
- */
-const tokenRefreshLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minute
-  max: 10, // 10 refresh attempts per minute
-  message: { status: 'error', error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many token refresh requests, please slow down' } },
-  standardHeaders: true,
-  legacyHeaders: false
-});
+  const general = cfgRoot.general || {};
+  const strict = cfgRoot.strict || {};
 
-/**
- * @typedef {Object} RateLimiters
- * @property {import('express-rate-limit').RateLimit} loginLimiter
- * @property {import('express-rate-limit').RateLimit} registerLimiter
- * @property {import('express-rate-limit').RateLimit} passwordResetLimiter
- * @property {import('express-rate-limit').RateLimit} tokenRefreshLimiter
- */
+  const login = makeLimiter({
+    windowMs: general.windowMs || 15 * 60 * 1000,
+    max: general.loginMax || 5,
+    message: { status: 'error', error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many login attempts, please try again later' } },
+    keyGenerator: (req) => {
+      const email = req.body?.email || 'unknown';
+      return `${req.ip}:${email}`;
+    }
+  });
 
-/** @type {RateLimiters} */
-module.exports = {
-  loginLimiter,
-  registerLimiter,
-  passwordResetLimiter,
-  tokenRefreshLimiter
-};
+  const register = makeLimiter({
+    windowMs: general.windowMs || 60 * 60 * 1000,
+    max: general.registerMax || 3,
+    message: { status: 'error', error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many registration attempts, please try again later' } }
+  });
+
+  const passwordReset = makeLimiter({
+    windowMs: general.windowMs || 60 * 60 * 1000,
+    max: general.passwordResetMax || 3,
+    message: { status: 'error', error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many password reset requests, please try again later' } }
+  });
+
+  const tokenRefresh = makeLimiter({
+    windowMs: strict.windowMs || 1 * 60 * 1000,
+    max: strict.tokenRefreshMax || 10,
+    message: { status: 'error', error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many token refresh requests, please slow down' } }
+  });
+
+  return {
+    loginLimiter: login,
+    registerLimiter: register,
+    passwordResetLimiter: passwordReset,
+    tokenRefreshLimiter: tokenRefresh
+  };
+}
+
+// Backward compatible default instance
+const DEFAULT_LIMITERS = createRateLimiter(defaultConfig);
+
+module.exports = Object.assign({ createRateLimiter }, DEFAULT_LIMITERS);

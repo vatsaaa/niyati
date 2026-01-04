@@ -77,6 +77,8 @@ INTERACTIVE=1
 LOG_FILE=""
 SKIP_CHECKS=0
 SKIP_HEALTH=0
+DEEP_CLEAN=0
+NO_START=0
 
 # =============================================================================
 # USAGE / HELP
@@ -108,6 +110,8 @@ Options:
   --verbose            Show detailed output
   --log-file=PATH      Save deploy output to PATH (appends)
   -y, --yes            Non-interactive mode (auto-confirm prompts)
+        --deep               When used with --action=clean, perform deep cleanup (remove images, prune build cache)
+  --no-start           When used with --action=fresh, perform full wipe but do NOT start services
   --skip-checks        Skip pre-deploy validation checks
   --skip-health        Skip post-deploy health verification
   -h, --help           Show this help message
@@ -184,6 +188,12 @@ for arg in "$@"; do
             ;;
         --skip-health)
             SKIP_HEALTH=1
+            ;;
+        --deep)
+            DEEP_CLEAN=1
+            ;;
+        --no-start)
+            NO_START=1
             ;;
         # Legacy support
         --prod)
@@ -831,26 +841,43 @@ action_clean() {
     log_info "Step 4/7: Removing niyati volumes..."
     run_cmd "docker volume ls --filter 'name=niyati' -q | xargs -r docker volume rm -f 2>/dev/null || true"
     
-    # Step 5: Remove niyati images
-    if deploy_prompt "Remove all niyati Docker images?"; then
-        log_info "Step 5/7: Removing niyati images..."
-        run_cmd "docker images --filter 'reference=niyati/*' -q | xargs -r docker rmi -f 2>/dev/null || true"
+    if [[ $DEEP_CLEAN -eq 1 ]]; then
+        log_warn "DEEP clean requested: performing full destructive cleanup (containers, images, volumes, networks, caches)."
+
+        # Stop & remove all containers
+        log_info "Stopping and removing ALL containers..."
+        run_cmd "docker rm -f \$(docker ps -aq) || true"
+
+        # Remove all images
+        log_info "Removing ALL images..."
+        run_cmd "docker rmi -f \$(docker images -aq) || true"
+
+        # Remove all volumes
+        log_info "Removing ALL volumes..."
+        run_cmd "docker volume rm \$(docker volume ls -q) || true"
+
+        # Remove known niyati networks and prune networks
+        log_info "Removing known niyati networks and pruning networks..."
+        run_cmd "docker network rm niyati_niyati niyati_default niyati-prod_niyati niyati-prod_default 2>/dev/null || true"
+        run_cmd "docker network prune -f"
+
+        # Full system-wide prune (aggressive)
+        log_info "Running system prune (all unused resources, including volumes)..."
+        run_cmd "docker system prune -a --volumes -f"
+
+        # Prune builder caches (BuildKit + buildx)
+        log_info "Pruning build caches (builder + buildx)..."
+        run_cmd "docker builder prune --all -f"
+        run_cmd "docker buildx prune --all -f 2>/dev/null || true"
+
+        log_success "Deep cleanup complete."
+    else
+        log_info "Deep clean not requested; skipping destructive image/volume/image-prune steps."
+        log_info "To perform a deep clean run: $0 --action=clean --deep"
     fi
-    
-    # Step 6: Prune unused images
-    if deploy_prompt "Prune unused Docker images?"; then
-        log_info "Step 6/7: Pruning unused images..."
-        run_cmd "docker image prune -f"
-    fi
-    
-    # Step 7: Prune build cache
-    if deploy_prompt "Prune Docker build cache?"; then
-        log_info "Step 7/7: Pruning build cache..."
-        run_cmd "docker builder prune -f"
-    fi
-    
+
     log_success "Cleanup complete!"
-    log_info "For a complete wipe including ALL images and buildx cache, use: --action=fresh"
+    log_info "For a complete wipe (including rebuild and buildx prune) use: --action=fresh"
 }
 
 # ACTION: fresh - Complete fresh start (clean + rebuild + deploy)
@@ -904,10 +931,46 @@ action_fresh() {
     run_cmd "docker builder prune --all -f"
     run_cmd "docker buildx prune --all -f 2>/dev/null || true"
     
+    if [[ $NO_START -eq 1 ]]; then
+        log_info "NO_START requested; performing full destructive cleanup but not starting services."
+
+        # Stop & remove all containers
+        log_info "Stopping and removing ALL containers..."
+        run_cmd "docker rm -f \$(docker ps -aq) || true"
+
+        # Remove all images
+        log_info "Removing ALL images..."
+        run_cmd "docker rmi -f \$(docker images -aq) || true"
+
+        # Remove all volumes
+        log_info "Removing ALL volumes..."
+        run_cmd "docker volume rm \$(docker volume ls -q) || true"
+
+        # Remove common niyati networks if present and prune others
+        log_info "Removing known niyati networks and pruning networks..."
+        run_cmd "docker network rm niyati_niyati niyati_default niyati-prod_niyati niyati-prod_default 2>/dev/null || true"
+        run_cmd "docker network prune -f"
+
+        # Full system-wide prune (aggressive)
+        log_info "Running system prune (all unused resources, including volumes)..."
+        run_cmd "docker system prune -a --volumes -f"
+
+        # Prune builder caches (BuildKit + buildx)
+        log_info "Pruning build caches (builder + buildx)..."
+        run_cmd "docker builder prune --all -f"
+        run_cmd "docker buildx prune --all -f 2>/dev/null || true"
+
+        echo ""
+        log_info "Docker disk usage after destructive cleanup:"
+        docker system df || true
+        log_success "Fresh cleanup complete (no-start destructive)"
+        return 0
+    fi
+
     # Step 7: Build fresh images
     log_info "=== Step 7/8: Build fresh images (no-cache) ==="
     run_cmd "$COMPOSE_CMD build --no-cache"
-    
+
     # Step 8: Start services (migrations run automatically via healthcheck dependencies)
     log_info "=== Step 8/8: Start services ==="
     run_cmd "$COMPOSE_CMD up -d"

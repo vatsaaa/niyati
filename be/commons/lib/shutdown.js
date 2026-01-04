@@ -39,17 +39,33 @@ async function shutdownAll(timeoutMs = 15000) {
           }
         });
       }
+      // Some resources (HTTP agents, sockets) expose `destroy()` to forcibly close
+      if (typeof r.destroy === 'function') {
+        try {
+          r.destroy();
+        } catch (e) {
+          logger.error({ msg: 'error_destroying_resource', err: e && e.message });
+        }
+        return Promise.resolve();
+      }
     } catch (e) {
       logger.error({ msg: 'shutdown_error', err: e && e.message });
     }
     return Promise.resolve();
   });
 
-  // Ensure we don't wait forever
+  // Ensure we don't wait forever. Use an unref'd timeout so Jest/process exit isn't prevented.
+  const timeoutPromise = new Promise((resolve) => {
+    const t = setTimeout(resolve, timeoutMs);
+    if (t && typeof t.unref === 'function') t.unref();
+  });
   await Promise.race([
     Promise.all(promises),
-    new Promise((resolve) => setTimeout(resolve, timeoutMs))
+    timeoutPromise
   ]).catch((e) => logger.error({ msg: 'shutdown_all_failed', err: e && e.message }));
+
+  // Clear registry after attempting shutdown so subsequent test runs don't retain references
+  try { resources.clear(); } catch (e) { logger.warn({ msg: 'failed_clearing_shutdown_registry', err: e && e.message }); }
 }
 
 // Attempt graceful shutdown on process events

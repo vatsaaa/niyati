@@ -2,6 +2,8 @@
 
 AI-powered astrology platform. BFF architecture, JavaScript only.
 
+> **Pattern Reference**: This project serves as a reference implementation for BFF-based JavaScript projects with comprehensive CI/CD, testing, and deployment patterns.
+
 ## Architecture & Data Flow
 
 ```
@@ -52,7 +54,39 @@ UI is a **thin rendering layer** — no heavy processing, NLP, or business logic
 | Frontend hooks | [ui/src/hooks/](ui/src/hooks/), services in [ui/src/services/api.js](ui/src/services/api.js) |
 | Migrations | [be/migrations/](be/migrations/) (format: `YYYYMMDD_XX_desc.up.sql`) |
 | E2E tests | [e2e/tests/](e2e/tests/) — Playwright browser tests |
-| CI/Deploy | [scripts/](scripts/) — **all** automation lives here |
+| **CI/CD Scripts** | [scripts/](scripts/) — **all** automation lives here |
+| GitHub Workflows | [.github/workflows/](.github/workflows/) — thin wrappers calling scripts |
+
+## Project Structure Overview
+
+```
+niyati/
+├── .github/
+│   ├── workflows/          # GitHub Actions (thin wrappers)
+│   │   ├── ci.yml          # Main CI → calls scripts/ci-run-tests.sh
+│   │   ├── ui-deploy.yml   # UI deployment to S3/CloudFront
+│   │   └── security.yml    # Security scanning
+│   └── copilot-instructions.md
+├── be/
+│   ├── bff-platform/       # Main BFF service
+│   ├── bff-auth/           # Auth BFF service
+│   ├── commons/            # Shared Node.js utilities
+│   ├── migrations/         # SQL migrations (YYYYMMDD_XX_desc.up.sql)
+│   ├── worker/             # Background job processor
+│   └── n8n/                # n8n workflow definitions
+├── ui/                     # React + Vite frontend
+├── e2e/                    # Playwright E2E tests
+├── scripts/                # All automation scripts
+│   ├── lib/common.sh       # Shared bash library
+│   ├── ci-run-tests.sh     # CI test runner
+│   ├── deploy_niyati.sh    # Deployment script
+│   └── ...
+├── docker-compose.yml      # Base Docker config
+├── docker-compose.ci.yml   # CI overlay (different ports, mock n8n)
+├── docker-compose.prod.yml # Production overlay
+├── .env.ci                 # CI environment variables
+└── Caddyfile               # Caddy reverse proxy config
+```
 
 ## Integration Points
 
@@ -355,35 +389,283 @@ cd be/bff-platform && npm test -- queryClassifier.test.js
 ./scripts/ci-run-tests.sh
 ```
 
+## CI/CD Architecture
+
+> **Design Principle**: All CI/CD logic lives in bash scripts ([scripts/](scripts/)), NOT in GitHub workflow YAML. Workflows are thin wrappers that call scripts. This enables local reproducibility and easier debugging.
+
+### Script Organization
+
+```
+scripts/
+├── lib/
+│   └── common.sh           # Shared library (MUST source in all scripts)
+├── ci-run-tests.sh         # Full CI: backend + E2E tests
+├── deploy_niyati.sh        # Comprehensive deployment script
+├── docker-dev.sh           # Development Docker helper
+├── db.sh                   # Database management
+├── smoke_test.sh           # Health verification
+├── mock-n8n.js             # Mock n8n for CI (canned responses)
+└── mock-webhook.js         # Mock webhook for testing
+```
+
+### Shared Library ([scripts/lib/common.sh](scripts/lib/common.sh))
+
+Every script MUST source the common library:
+
+```bash
+#!/usr/bin/env bash
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lib/common.sh"  # Or ../lib/common.sh if in subdirectory
+
+PROJECT_ROOT="$(find_project_root "$SCRIPT_DIR")"
+cd "$PROJECT_ROOT"
+```
+
+**Available Functions**:
+| Category | Functions |
+|----------|-----------|
+| Logging | `log_info`, `log_warn`, `log_error`, `log_debug`, `log_step`, `log_success`, `log_fail`, `print_header` |
+| Environment | `find_project_root`, `load_env`, `load_project_env`, `ensure_env_files` |
+| Docker | `check_docker`, `get_compose_cmd`, `wait_for_container`, `wait_for_postgres` |
+| HTTP | `check_url_with_retries`, `run_health_checks` |
+| Utility | `confirm_action`, `require_command`, `get_timestamp` |
+
+### CI Test Runner ([scripts/ci-run-tests.sh](scripts/ci-run-tests.sh))
+
+**Purpose**: Idempotent CI script that runs all tests in a clean Docker environment.
+
+```bash
+# Full CI suite (default)
+./scripts/ci-run-tests.sh
+
+# Skip E2E tests (faster, backend only)
+./scripts/ci-run-tests.sh --skip-e2e
+
+# Skip backend tests (E2E only)
+./scripts/ci-run-tests.sh --skip-backend
+
+# Keep stack running for debugging
+./scripts/ci-run-tests.sh --no-cleanup
+```
+
+**What it does** (in order):
+1. Sources `.env.ci` for CI-specific ports
+2. Tears down any existing CI stack (`docker compose down -v`)
+3. Builds and starts CI stack with mock n8n
+4. Waits for all services to be healthy
+5. Applies database migrations and seed data
+6. Runs backend Jest tests (`bff-platform`, `bff-auth`)
+7. Runs E2E Playwright tests
+8. Cleans up on exit (success or failure) via trap
+
+**Key Features**:
+- **Idempotent**: Safe to run multiple times, always starts fresh
+- **Cleanup trap**: Always cleans up, even on Ctrl+C or failure
+- **Separate ports**: CI uses different ports to avoid conflicts with dev
+- **Mock n8n**: Uses [scripts/mock-n8n.js](scripts/mock-n8n.js) for deterministic AI responses
+
+### Deployment Script ([scripts/deploy_niyati.sh](scripts/deploy_niyati.sh))
+
+**Purpose**: Comprehensive deployment tool with safety features.
+
+```bash
+# Development deployment
+./scripts/deploy_niyati.sh --env=dev --action=deploy
+
+# Production deployment
+./scripts/deploy_niyati.sh --env=prod --action=deploy
+
+# Restart specific service
+./scripts/deploy_niyati.sh --env=prod --action=restart --service=bff-platform
+
+# Fresh start (clean everything, rebuild)
+./scripts/deploy_niyati.sh --env=dev --action=fresh
+
+# Show status
+./scripts/deploy_niyati.sh --action=status
+```
+
+**Actions**:
+| Action | Description |
+|--------|-------------|
+| `deploy` | Full deployment: build, migrate, start (default) |
+| `restart` | Restart services (use `--service=<name>` for specific) |
+| `stop` | Stop all services |
+| `rebuild` | Force rebuild (no-cache) then start |
+| `clean` | Stop and remove containers, volumes, networks |
+| `fresh` | Complete clean slate: remove everything, rebuild, deploy |
+| `migrate` | Run database migrations only |
+| `status` | Show status of all services |
+
+**Options**:
+| Option | Description |
+|--------|-------------|
+| `--env=dev\|prod` | Target environment |
+| `--service=<name>` | Target specific service (for restart) |
+| `--dry-run` | Print commands without executing |
+| `--verbose` | Detailed output |
+| `-y, --yes` | Non-interactive (auto-confirm) |
+| `--skip-checks` | Skip pre-deploy validation |
+| `--skip-health` | Skip post-deploy health verification |
+| `--deep` | Deep clean (remove images, build cache) |
+
+### GitHub Workflows
+
+Workflows are **thin wrappers** that call scripts:
+
+**[.github/workflows/ci.yml](.github/workflows/ci.yml)** — Main CI:
+```yaml
+- name: Run Full Integration Suite
+  run: ./scripts/ci-run-tests.sh
+```
+
+**[.github/workflows/ui-deploy.yml](.github/workflows/ui-deploy.yml)** — UI Deployment:
+- Builds UI with Vite
+- Deploys to S3 + CloudFront via OIDC
+- Requires secrets: `AWS_ROLE_ARN`, `AWS_REGION`, `UI_S3_BUCKET`, `CLOUDFRONT_DISTRIBUTION_ID`
+
+**[.github/workflows/security.yml](.github/workflows/security.yml)** — Security scanning
+
+### Docker Compose Architecture
+
+**Layered Configuration**:
+```bash
+# Development (default)
+docker compose up -d
+# Uses: docker-compose.yml + docker-compose.override.yml
+
+# Production
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+# CI
+docker compose --env-file .env.ci -f docker-compose.yml -f docker-compose.ci.yml up -d
+```
+
+**File Purposes**:
+| File | Purpose |
+|------|---------|
+| `docker-compose.yml` | Base services (postgres, redis, bffs, ui, caddy) |
+| `docker-compose.override.yml` | Dev defaults (volumes, hot reload) |
+| `docker-compose.prod.yml` | Production (fixed container names, health checks) |
+| `docker-compose.ci.yml` | CI (different ports, mock n8n service) |
+| `.env.ci` | CI environment variables |
+
+### Port Configuration
+
+CI uses separate ports to allow running alongside dev:
+
+| Service | Dev/Prod | CI | Notes |
+|---------|----------|-----|-------|
+| Caddy (UI) | 5173 | **6173** | Browser access |
+| BFF Platform | 3000 | **4000** | Internal port |
+| BFF Auth | 3001 | **4001** | Internal port |
+| PostgreSQL | 5432 | **56432** | External for seeding |
+| Redis | 6379 | **7379** | External for debugging |
+| n8n/mock | 5678 | **6678** | Mock in CI |
+
+### Mock Services
+
+**[scripts/mock-n8n.js](scripts/mock-n8n.js)**:
+- Simple HTTP server that returns canned AI responses
+- Used in CI instead of real n8n + Ollama
+- Returns: `{ output: "Hello — I see your profile. Here's today's horoscope: You will feel a gentle clarity today.\n" }`
+
+### Adding New Scripts
+
+1. Create script in `scripts/`:
+```bash
+#!/usr/bin/env bash
+# =============================================================================
+# Script Name
+# =============================================================================
+# Description of what this script does
+#
+# Usage: ./scripts/my-script.sh [OPTIONS]
+# =============================================================================
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lib/common.sh"
+
+PROJECT_ROOT="$(find_project_root "$SCRIPT_DIR")"
+cd "$PROJECT_ROOT"
+
+# Your script logic here
+log_step "Starting..."
+```
+
+2. Make executable: `chmod +x scripts/my-script.sh`
+3. Add to [scripts/README.md](scripts/README.md) documentation
+
 ## Commands
+
+### CI/CD Commands
 
 | Task | Command |
 |------|---------|
-| **Run CI locally** | `./scripts/ci-run-tests.sh` |
+| **Run full CI** | `./scripts/ci-run-tests.sh` |
+| CI (backend only) | `./scripts/ci-run-tests.sh --skip-e2e` |
+| CI (keep stack) | `./scripts/ci-run-tests.sh --no-cleanup` |
+| **Deploy dev** | `./scripts/deploy_niyati.sh --env=dev --action=deploy` |
+| **Deploy prod** | `./scripts/deploy_niyati.sh --env=prod --action=deploy` |
+| Fresh start | `./scripts/deploy_niyati.sh --env=dev --action=fresh` |
+| Status check | `./scripts/deploy_niyati.sh --action=status` |
+| Clean up | `./scripts/deploy_niyati.sh --action=clean --yes` |
+
+### Development Commands
+
+| Task | Command |
+|------|---------|
+| Dev stack | `docker compose up -d` |
+| Dev logs | `docker compose logs -f` |
+| Start dev UI | `cd ui && npm run dev` |
+| Mock n8n | `node scripts/mock-n8n.js` |
+| DB shell | `./scripts/db.sh shell` |
+| Run migrations | `./scripts/db.sh migrate` |
+
+### Testing Commands
+
+| Task | Command |
+|------|---------|
 | Backend tests (platform) | `cd be/bff-platform && npm test` |
 | Backend tests (auth) | `cd be/bff-auth && npm test` |
+| Single test file | `cd be/bff-platform && npm test -- queryClassifier.test.js` |
+| Watch mode | `cd be/bff-platform && npm test -- --watch` |
+| Coverage | `cd be/bff-platform && npm test -- --coverage` |
 | E2E tests | `cd e2e && npx playwright test` |
-| Start dev UI | `cd ui && npm run dev` |
-| Deploy | `./scripts/deploy_niyati.sh --env=prod --action=deploy` |
-| Dev stack | `docker compose up -d` |
-| CI stack (manual) | `docker compose --env-file .env.ci -f docker-compose.yml -f docker-compose.ci.yml up -d` |
-| Start mock n8n | `node scripts/mock-n8n.js` |
+| E2E specific | `cd e2e && npx playwright test credits_threshold.spec.js` |
+| E2E debug | `cd e2e && npx playwright test --headed --debug` |
+
+### Troubleshooting Commands
+
+| Task | Command |
+|------|---------|
 | Check CI ports | `lsof -i :6173 -i :4000 -i :4001` |
+| Kill stuck CI | `docker compose -p niyati-ci down -v --remove-orphans` |
+| View container logs | `docker compose logs <service>` |
+| Restart service | `docker compose restart <service>` |
+| Check health | `curl http://localhost:5173/api/v1/telemetry/health` |
 
 ## Critical Rules
 
 1. **SQL**: Always parameterized (`$1`, `$2`). Never concatenate strings.
 2. **Async**: All async code wrapped in try/catch with proper error responses.
 3. **Migrations**: Use `CREATE TABLE IF NOT EXISTS`. Name: `YYYYMMDD_XX_desc.up.sql`.
-4. **CI**: Logic lives in [scripts/ci-run-tests.sh](scripts/ci-run-tests.sh), not GitHub workflow YAML.
+4. **CI/CD**: Logic lives in [scripts/](scripts/), NOT in GitHub workflow YAML.
 5. **Billing**: Server-side only. UI displays but never performs authoritative charges.
 6. **TDD Required**: All code changes MUST have tests written FIRST. No exceptions.
+7. **Scripts**: All bash scripts MUST source `scripts/lib/common.sh` for consistency.
 
 ## Environment Configs
 
-- **Dev**: `docker-compose.yml` + `docker-compose.override.yml`
-- **Prod**: `docker-compose.yml` + `docker-compose.prod.yml`
-- **CI**: `docker-compose.yml` + `docker-compose.ci.yml` + `.env.ci` (uses mock-n8n)
+### Docker Compose Modes
+
+| Mode | Command | Compose Files |
+|------|---------|---------------|
+| **Development** | `docker compose up -d` | `docker-compose.yml` + `docker-compose.override.yml` |
+| **Production** | `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d` | `docker-compose.yml` + `docker-compose.prod.yml` |
+| **CI** | `./scripts/ci-run-tests.sh` (auto) | `docker-compose.yml` + `docker-compose.ci.yml` + `.env.ci` |
 
 ### Port Configuration (CI vs Dev/Prod)
 
@@ -398,11 +680,17 @@ CI uses separate ports to avoid conflicts when running alongside dev environment
 | Redis | 6379 | **7379** | External for debugging |
 | n8n/mock | 5678 | **6678** | External for debugging |
 
-**Key Files**:
-- [.env.ci](.env.ci) — CI-specific environment variables and ports
-- [docker-compose.ci.yml](docker-compose.ci.yml) — CI overlay with port mapping and mock-n8n
+### Key Environment Files
 
-**Running CI locally**:
+| File | Purpose |
+|------|---------|
+| `.env` | Development environment (gitignored) |
+| `.env.ci` | CI-specific ports and mock config |
+| `.env.example` | Template for `.env` |
+| `secrets/` | Docker secrets (gitignored in prod) |
+
+### Running CI Locally
+
 ```bash
 # Full CI suite (recommended)
 ./scripts/ci-run-tests.sh
@@ -412,3 +700,14 @@ docker compose --env-file .env.ci -f docker-compose.yml -f docker-compose.ci.yml
 ```
 
 **Important**: When `bff-auth` calls `bff-platform` internally, it uses `BFF_PLATFORM_BASE` environment variable. In CI, this is set to `http://bff-platform:4000/api/v1` to match the CI port.
+
+## For AI Agents: Quick Start
+
+When you need to make changes to Niyati:
+
+1. **Understand the change**: Is it backend, frontend, CI, or deployment?
+2. **Write test first**: Always TDD — failing test before code
+3. **Make the change**: Follow patterns in existing code
+4. **Run tests**: `npm test` for unit tests
+5. **Run full CI**: `./scripts/ci-run-tests.sh` before considering done
+6. **Document**: Update this file if you change architecture or add new patterns

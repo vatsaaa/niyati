@@ -78,15 +78,16 @@ if (process.env.DATABASE_URL) {
     // Don't exit immediately, log and let the app attempt recovery
   });
   
-  // Verify connection on startup
-  pool.query('SELECT 1').then(() => {
-    logger.info({ msg: 'BFF Platform database pool initialized and verified' });
-  }).catch((err) => {
-    logger.error({ msg: 'Failed to verify database connection', err: err?.message || err });
-    if (process.env.NODE_ENV !== 'test') {
+  // Verify connection on startup when this module is the main process.
+  // Avoid running a networked verification during tests (module import time)
+  if (process.env.NODE_ENV !== 'test' && require.main === module) {
+    pool.query('SELECT 1').then(() => {
+      logger.info({ msg: 'BFF Platform database pool initialized and verified' });
+    }).catch((err) => {
+      logger.error({ msg: 'Failed to verify database connection', err: err?.message || err });
       process.exit(1);
-    }
-  });
+    });
+  }
   
   app.set('db', pool);
   // Register DB pool for centralized shutdown to help tests/CI exit cleanly
@@ -122,16 +123,10 @@ const telemetryRouter = createTelemetryRouter({
 
 const API_VERSION = process.env.API_VERSION || 'v1';
 const apiRouter = express.Router();
-// Authentication middleware: validate incoming requests via bff-auth
-// Uses `authenticateOrReject` exported by be/commons which calls the bff-auth validate endpoint.
-// This will reject unauthenticated requests with 401 unless they present a valid X-Service-Token.
-if (commons && commons.authenticateOrReject) {
-  // Protect only specific routes (chat) rather than entire API router.
-  // Some endpoints (e.g. /users lookup/sync) are intended to be callable
-  // internally without a bearer token when using X-Service-Token forwarding
-  // in tests. Apply middleware to `/chat` specifically.
-  apiRouter.use('/chat', commons.authenticateOrReject);
-}
+// Note: authentication is applied selectively to routes that require it.
+// We will apply `authenticateOrReject` to the POST /api/v1/chat handler below
+// so that lightweight public endpoints like `/api/v1/chat/classify` remain
+// accessible without authentication.
 apiRouter.use('/geocode', geocodeRouter);
 apiRouter.use('/astrology', astrologyRouter);
 apiRouter.use('/telemetry', telemetryRouter);
@@ -150,7 +145,9 @@ apiRouter.use('/chat', chatRouter);
 // Acts as a lightweight BFF: normalizes metadata, computes derived fields (age, ageConfirmed),
 // persists minimal authoritative state to users table (if DB available), and forwards
 // a canonical payload to n8n. Returns canonical response to UI.
-apiRouter.post('/chat', async (req, res) => {
+// Apply authenticateOrReject only to this route when available
+const chatAuthMiddleware = (commons && commons.authenticateOrReject) ? commons.authenticateOrReject : (req, res, next) => next();
+apiRouter.post('/chat', chatAuthMiddleware, async (req, res) => {
   try {
     const body = req.body || {};
     const message = (body.message || '').toString();

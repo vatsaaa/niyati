@@ -90,13 +90,15 @@ if (process.env.DATABASE_URL) {
     // Don't exit immediately, log and let the app attempt recovery
   });
   
-  // Verify connection on startup
-  pool.query('SELECT 1').then(() => {
-    logger.info({ msg: 'Database pool initialized and verified' });
-  }).catch((err) => {
-    logger.error({ msg: 'Failed to verify database connection', err: err?.message || err });
-    process.exit(1);
-  });
+  // Verify connection on startup when running as main process (avoid network calls at import time during tests)
+  if (process.env.NODE_ENV !== 'test' && require.main === module) {
+    pool.query('SELECT 1').then(() => {
+      logger.info({ msg: 'Database pool initialized and verified' });
+    }).catch((err) => {
+      logger.error({ msg: 'Failed to verify database connection', err: err?.message || err });
+      process.exit(1);
+    });
+  }
   
   app.set('db', pool);
 } else {

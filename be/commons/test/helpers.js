@@ -57,14 +57,30 @@ function createMockDb(resultOrHandler) {
  */
 function createMockCommons(overrides = {}) {
   const responses = require('../lib/responses');
-  
+  const defaultConfig = {
+    astrology: { baseUrl: 'http://mock-astro.local', apiKey: 'mock-key' },
+    n8n: { webhookUrl: '', token: '' },
+    features: {},
+  };
+
   return {
     logger: overrides.logger || createMockLogger(),
     sanitize: overrides.sanitize || (v => v),
     sanitizeEmail: overrides.sanitizeEmail || (v => v),
     sanitizeName: overrides.sanitizeName || (v => v),
     ErrorCodes: responses.ErrorCodes,
-    config: overrides.config || {},
+    config: Object.assign({}, defaultConfig, overrides.config || {}),
+    // Provide response helpers and a simple auth middleware for tests that require the full app
+    attachResponseHelpers: overrides.attachResponseHelpers || responses.attachResponseHelpers,
+    sendSuccess: overrides.sendSuccess || responses.sendSuccess,
+    sendError: overrides.sendError || responses.sendError,
+    // Default authenticateOrReject: simple header-based middleware that rejects without `authorization` header
+    authenticateOrReject: overrides.authenticateOrReject || ((req, res, next) => {
+      if (req && req.headers && (req.headers.authorization || req.headers['x-service-token'])) return next();
+      return res.status(401).json({ status: 'error', error: { message: 'unauthorized' } });
+    }),
+    // Telemetry router factory stub returning an empty router
+    createTelemetryRouter: overrides.createTelemetryRouter || (() => require('express').Router()),
     ...overrides,
   };
 }

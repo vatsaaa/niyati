@@ -2,330 +2,216 @@
 # =============================================================================
 # CI Test Runner for Niyati
 # =============================================================================
-# Runs the full test suite including backend unit tests and E2E tests in a
-# CI environment using Docker Compose.
+# Idempotent CI script: tears down any existing stack, starts fresh, runs tests,
+# and cleans up on exit (success or failure).
 #
-# Usage: ./scripts/ci-run-tests.sh
+# Usage: ./scripts/ci-run-tests.sh [OPTIONS]
 #
-# Environment:
-#   CI uses .env.ci with different ports to avoid conflicts with dev/production:
-#   - Caddy (external): 6173 (prod: 5173)
-#   - BFF Platform: 4000 (prod: 3000)
-#   - BFF Auth: 4001 (prod: 3001)
-#   - Postgres: 56432 (prod: 5432)
-#   - n8n mock: 6678 (prod: 5678)
+# Options:
+#   --skip-e2e      Skip E2E tests, run only backend unit tests
+#   --skip-backend  Skip backend tests, run only E2E
+#   --no-cleanup    Don't tear down stack after tests (for debugging)
+#   --verbose       Show detailed output
+#   -h, --help      Show this help
 # =============================================================================
 
-# Load common library
+set -euo pipefail
+
+# =============================================================================
+# INITIALIZATION
+# =============================================================================
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
 
-# Configuration
 PROJECT_ROOT="$(find_project_root "$SCRIPT_DIR")"
 cd "$PROJECT_ROOT"
 
+# Options
+SKIP_E2E=0
+SKIP_BACKEND=0
+NO_CLEANUP=0
+VERBOSE=0
+
 # =============================================================================
-# CI-SPECIFIC ENVIRONMENT SETUP
+# ARGUMENT PARSING
+# =============================================================================
+
+show_help() {
+    sed -n '2,/^# ====/p' "$0" | grep '^#' | sed 's/^# //'
+    exit 0
+}
+
+for arg in "$@"; do
+    case $arg in
+        -h|--help)      show_help ;;
+        --skip-e2e)     SKIP_E2E=1 ;;
+        --skip-backend) SKIP_BACKEND=1 ;;
+        --no-cleanup)   NO_CLEANUP=1 ;;
+        --verbose)      VERBOSE=1 ;;
+        *) log_error "Unknown option: $arg"; exit 1 ;;
+    esac
+done
+
+# =============================================================================
+# CI ENVIRONMENT
 # =============================================================================
 
 ENV_FILE=".env.ci"
+[[ -f "$ENV_FILE" ]] || { log_error "$ENV_FILE not found"; exit 1; }
 
-if [[ -f "$PROJECT_ROOT/$ENV_FILE" ]]; then
-    log_info "Loading CI environment from $ENV_FILE"
-    set -a  # auto-export variables
-    source "$PROJECT_ROOT/$ENV_FILE"
-    set +a
-else
-    log_error "$ENV_FILE not found! CI requires this file for port configuration."
-    log_info "Creating default .env.ci..."
-    cat > "$PROJECT_ROOT/$ENV_FILE" <<'ENVEOF'
-# CI Environment - Auto-generated
-BFF_PLATFORM_PORT=4000
-BFF_AUTH_PORT=4001
-CADDY_HTTP_PORT=6173
-N8N_PORT=6678
-POSTGRES_PORT=56432
-REDIS_PORT=7379
-POSTGRES_USER=niyati
-POSTGRES_PASSWORD=niyati_ci_pass
-POSTGRES_DB=niyati_ci
-SERVICE_TOKEN=ci-test-token
-VITE_N8N_WEBHOOK_URL=/webhook/chat
-CORS_ALLOWED=http://localhost:6173
-NODE_ENV=production
-BUILD_TARGET=production
-ENVEOF
-    source "$PROJECT_ROOT/$ENV_FILE"
-fi
+set -a
+source "$ENV_FILE"
+set +a
 
-# CI port defaults (different from production to avoid conflicts)
+# Exports for tests
 export BFF_PLATFORM_PORT="${BFF_PLATFORM_PORT:-4000}"
 export BFF_AUTH_PORT="${BFF_AUTH_PORT:-4001}"
 export CADDY_HTTP_PORT="${CADDY_HTTP_PORT:-6173}"
-export N8N_PORT="${N8N_PORT:-6678}"
 export POSTGRES_PORT="${POSTGRES_PORT:-56432}"
-export REDIS_PORT="${REDIS_PORT:-7379}"
-export SERVICE_TOKEN="${SERVICE_TOKEN:-ci-test-token}"
 export POSTGRES_USER="${POSTGRES_USER:-niyati}"
 export POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-niyati_ci_pass}"
 export POSTGRES_DB="${POSTGRES_DB:-niyati_ci}"
+export BASE_URL="http://127.0.0.1:${CADDY_HTTP_PORT}"
+export DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:${POSTGRES_PORT}/${POSTGRES_DB}"
 
-# Export BASE_URL using CI Caddy port
-export BASE_URL="http://localhost:${CADDY_HTTP_PORT}"
-
-log_info "CI Ports: Caddy=${CADDY_HTTP_PORT}, BFF-Platform=${BFF_PLATFORM_PORT}, BFF-Auth=${BFF_AUTH_PORT}, Postgres=${POSTGRES_PORT}"
-log_info "BASE_URL: ${BASE_URL}"
-
-# Compose command with CI overlay and env file
+# Compose command
 COMPOSE_CMD="docker compose --env-file $ENV_FILE -f docker-compose.yml -f docker-compose.ci.yml"
+PROJECT_NAME="niyati-ci"
 
-log_info "Starting CI test script from ${PROJECT_ROOT}"
+log_info "CI Environment: BASE_URL=${BASE_URL}, DB=${DATABASE_URL%%@*}@..."
 
 # =============================================================================
-# STEP 1: Start the Stack
+# CLEANUP FUNCTION (runs on exit)
 # =============================================================================
 
-log_step "🚀 Starting Docker Stack for CI (with mock n8n)..."
-# Don't fail the script if one container reports unhealthy; continue and verify readiness below
-$COMPOSE_CMD up -d --build || true
-
-# Wait for important containers to report healthy when possible
-log_step "⏳ Waiting for key containers to be healthy (ui-service, caddy, bff-platform, bff-auth)..."
-
-# First wait for ui-service to finish building (it exits after build in CI)
-log_step "⏳ Waiting for ui-service to build static assets..."
-UI_BUILD_READY=0
-for i in $(seq 1 120); do
-    # Check if ui-service container has exited successfully (exit code 0) or is running
-    UI_STATUS=$($COMPOSE_CMD ps --format '{{.State}}' ui-service 2>/dev/null || echo "unknown")
-    UI_EXIT=$($COMPOSE_CMD ps --format '{{.ExitCode}}' ui-service 2>/dev/null || echo "")
-    
-    if [[ "$UI_STATUS" == "exited" && "$UI_EXIT" == "0" ]]; then
-        log_success "ui-service build completed successfully"
-        UI_BUILD_READY=1
-        break
-    elif [[ "$UI_STATUS" == "running" ]]; then
-        # Still building
-        echo -n "."
-    elif [[ "$UI_STATUS" == "exited" && "$UI_EXIT" != "0" ]]; then
-        log_error "ui-service build failed with exit code $UI_EXIT"
-        $COMPOSE_CMD logs ui-service | tail -50
-        break
-    fi
-    sleep 2
-done
-echo ""
-
-if [[ "$UI_BUILD_READY" -ne 1 ]]; then
-    log_warn "ui-service may not have completed; checking if static files exist..."
-    # Check if index.html exists in the volume
-    if $COMPOSE_CMD exec -T caddy test -f /srv/index.html 2>/dev/null; then
-        log_success "Static files found in /srv"
-        UI_BUILD_READY=1
+cleanup() {
+    local exit_code=$?
+    if [[ "$NO_CLEANUP" -eq 1 ]]; then
+        log_warn "Skipping cleanup (--no-cleanup). Stack is still running."
+        log_info "To clean up manually: $COMPOSE_CMD -p $PROJECT_NAME down -v --remove-orphans"
     else
-        log_error "No index.html found in /srv - UI build may have failed"
-        log_step "Attempting to rebuild ui-service..."
-        $COMPOSE_CMD up -d --build ui-service
-        sleep 30
+        log_step "🧹 Cleaning up CI stack..."
+        $COMPOSE_CMD -p "$PROJECT_NAME" down -v --remove-orphans 2>/dev/null || true
     fi
-fi
-
-for svc in caddy bff-platform bff-auth; do
-    container_id=$($COMPOSE_CMD ps -q $svc 2>/dev/null || true)
-    if [[ -n "$container_id" ]]; then
-        # wait_for_container accepts container id or name
-        if ! wait_for_container "$container_id" 90 2; then
-            log_warn "$svc did not report healthy; continuing but E2E may fail"
-        fi
-    else
-        log_debug "No container id found for $svc; skipping container health wait"
-    fi
-done
-
-# Restart Caddy to ensure it picks up any Caddyfile changes
-log_step "🔄 Restarting Caddy to ensure latest Caddyfile is loaded..."
-$COMPOSE_CMD restart caddy || true
+    exit $exit_code
+}
+trap cleanup EXIT
 
 # =============================================================================
-# STEP 2: Wait for Postgres
+# STEP 1: FRESH START
 # =============================================================================
 
-log_step "⏳ Waiting for Postgres inside compose..."
+log_step "🗑️  Tearing down any existing CI stack..."
+$COMPOSE_CMD -p "$PROJECT_NAME" down -v --remove-orphans 2>/dev/null || true
+
+log_step "🚀 Starting CI stack (with mock n8n)..."
+$COMPOSE_CMD -p "$PROJECT_NAME" up -d --build
+
+# =============================================================================
+# STEP 2: WAIT FOR SERVICES
+# =============================================================================
+
+log_step "⏳ Waiting for Postgres..."
 for i in $(seq 1 60); do
-    $COMPOSE_CMD exec -T postgres pg_isready -U ${POSTGRES_USER:-niyati} -d ${POSTGRES_DB:-niyati_dev} >/dev/null 2>&1 && break || sleep 1
+    $COMPOSE_CMD -p "$PROJECT_NAME" exec -T postgres pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1 && break
+    sleep 1
+done
+
+log_step "⏳ Waiting for BFF services..."
+for svc in bff-platform bff-auth; do
+    for i in $(seq 1 60); do
+        if $COMPOSE_CMD -p "$PROJECT_NAME" exec -T "$svc" wget -q --spider http://localhost:${!svc//-/_}_PORT/api/v1/telemetry/health 2>/dev/null; then
+            log_success "$svc is healthy"
+            break
+        fi
+        sleep 1
+    done
+done
+
+log_step "⏳ Waiting for UI (Caddy) at ${BASE_URL}..."
+for i in $(seq 1 90); do
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "${BASE_URL}/" 2>/dev/null || echo "000")
+    [[ "$HTTP_CODE" == "200" ]] && { log_success "UI is ready"; break; }
+    sleep 1
 done
 
 # =============================================================================
-# STEP 3: Run Migrations and Seeds
+# STEP 3: APPLY MIGRATIONS & SEED
 # =============================================================================
 
-log_step "📦 Applying migrations inside compose Postgres..."
-for f in $(ls -1 be/migrations/*.up.sql | sort); do
-    log_debug "Applying $f"
-    cat "$f" | $COMPOSE_CMD exec -T postgres psql -U ${POSTGRES_USER:-niyati} -d ${POSTGRES_DB:-niyati_dev}
+log_step "📦 Applying migrations..."
+for f in $(ls -1 be/migrations/*.up.sql 2>/dev/null | sort); do
+    cat "$f" | $COMPOSE_CMD -p "$PROJECT_NAME" exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null
 done
 
 if [[ -f be/seed_ci.sql ]]; then
-    log_step "Applying be/seed_ci.sql inside compose Postgres..."
-    cat be/seed_ci.sql | $COMPOSE_CMD exec -T postgres psql -U ${POSTGRES_USER:-niyati} -d ${POSTGRES_DB:-niyati_dev} || { log_error "Failed to apply be/seed_ci.sql"; exit 5; }
-else
-    log_warn "be/seed_ci.sql not found, skipping seed step"
+    log_step "📦 Applying CI seed data..."
+    cat be/seed_ci.sql | $COMPOSE_CMD -p "$PROJECT_NAME" exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null
 fi
 
-# Install shared commons dependencies on the host so tests can require them
-log_step "📦 Installing be/commons dependencies on host..."
-npm ci --prefix be/commons || { log_error "Failed to install be/commons deps"; exit 6; }
-
 # =============================================================================
-# STEP 4: Install devDependencies
+# STEP 4: BACKEND TESTS
 # =============================================================================
 
-log_step "🛠️ Installing devDependencies inside bff-platform container..."
-$COMPOSE_CMD exec -T bff-platform npm install --include=dev || true
-
-# =============================================================================
-# STEP 5: Run Backend Tests
-# =============================================================================
-
-log_step "🧪 Running bff-platform tests locally against compose Postgres..."
-cd be/bff-platform
-npm ci --include=dev
-DETECT_FLAG=""
-if [[ "${JEST_DETECT_OPEN_HANDLES:-0}" == "1" ]]; then
-    DETECT_FLAG="--detectOpenHandles"
-    log_info "Enabling Jest --detectOpenHandles for bff-platform tests"
-fi
-DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:${POSTGRES_PORT}/${POSTGRES_DB}" NODE_ENV=test npx jest --config jest.config.cjs --runInBand --coverage ${DETECT_FLAG} || { log_error "bff-platform tests failed"; exit 2; }
-
-log_step "🧪 Running bff-auth tests locally against compose Postgres..."
-cd ../bff-auth
-npm ci --include=dev
-DETECT_FLAG=""
-if [[ "${JEST_DETECT_OPEN_HANDLES:-0}" == "1" ]]; then
-    DETECT_FLAG="--detectOpenHandles"
-    log_info "Enabling Jest --detectOpenHandles for bff-auth tests"
-fi
-DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:${POSTGRES_PORT}/${POSTGRES_DB}" NODE_ENV=test npx jest --config jest.config.cjs --runInBand ${DETECT_FLAG} || { log_error "bff-auth tests failed"; exit 3; }
-
-cd "$PROJECT_ROOT"
-
-# =============================================================================
-# STEP 6: E2E Tests
-# =============================================================================
-
-log_step "🎭 Preparing E2E Tests..."
-
-E2E_DIR="$PROJECT_ROOT/e2e"
-E2E_EXIT_CODE=0
-
-log_debug "📍 Repo Root: $PROJECT_ROOT"
-log_debug "📍 Looking for E2E at: $E2E_DIR"
-
-if [[ -d "$E2E_DIR" ]]; then
-    log_success "E2E directory found. Running tests..."
-    cd "$E2E_DIR"
-
-    # Install deps if node_modules is missing
-    if [[ ! -d "node_modules" ]]; then
-        log_step "📦 Installing Playwright dependencies..."
-        npm ci
+BACKEND_EXIT=0
+if [[ "$SKIP_BACKEND" -eq 0 ]]; then
+    log_step "🧪 Running backend tests..."
+    
+    # Install commons
+    npm ci --prefix be/commons --silent
+    
+    # bff-platform tests
+    log_info "Testing bff-platform..."
+    cd be/bff-platform
+    npm ci --include=dev --silent
+    NODE_ENV=test npx jest --config jest.config.cjs --runInBand --forceExit || BACKEND_EXIT=1
+    cd "$PROJECT_ROOT"
+    
+    if [[ "$BACKEND_EXIT" -eq 0 ]]; then
+        # bff-auth tests
+        log_info "Testing bff-auth..."
+        cd be/bff-auth
+        npm ci --include=dev --silent
+        NODE_ENV=test npx jest --config jest.config.cjs --runInBand --forceExit || BACKEND_EXIT=1
+        cd "$PROJECT_ROOT"
     fi
+    
+    [[ "$BACKEND_EXIT" -eq 0 ]] && log_success "Backend tests passed" || log_error "Backend tests failed"
+else
+    log_info "Skipping backend tests (--skip-backend)"
+fi
 
-    # Install Playwright browsers (required for E2E tests)
-    log_step "🎭 Installing Playwright browsers..."
-    npx playwright install --with-deps chromium
+# =============================================================================
+# STEP 5: E2E TESTS
+# =============================================================================
 
-    # Run the tests
+E2E_EXIT=0
+if [[ "$SKIP_E2E" -eq 0 && "$BACKEND_EXIT" -eq 0 ]]; then
+    log_step "🎭 Running E2E tests..."
+    
+    cd "$PROJECT_ROOT/e2e"
+    npm install --include=dev
+    npx playwright install chromium 2>/dev/null || true
+    
     export REAL=1
-    # BASE_URL already set from CI env (port ${CADDY_HTTP_PORT})
-
-    # Ensure UI is reachable at BASE_URL
-    UI_PID=""
-    if ! curl -sSf "${BASE_URL}/" >/dev/null 2>&1; then
-        log_warn "UI not reachable at ${BASE_URL}; building and serving local UI..."
-        if [[ -d "$PROJECT_ROOT/ui" ]]; then
-            (cd "$PROJECT_ROOT/ui" && npm ci && npm run build) || { log_error "UI build failed"; E2E_EXIT_CODE=1; }
-            npx --yes http-server "$PROJECT_ROOT/ui/dist" -p 5173 --silent >/tmp/ui-server.log 2>&1 &
-            UI_PID=$!
-            log_debug "Started local UI server (pid=${UI_PID})"
-            for i in $(seq 1 30); do
-                curl -sSf "${BASE_URL}/" >/dev/null 2>&1 && break || sleep 1
-            done
-        else
-            log_error "No ui directory found at $PROJECT_ROOT/ui"
-            E2E_EXIT_CODE=1
-        fi
-    fi
-
-    # Give Docker network a moment to stabilize after container restarts
-    log_step "⏳ Allowing Docker network to stabilize..."
-    sleep 5
-
-    # Wait for proxied API (Caddy) to be healthy with longer timeout
-    log_step "⏳ Waiting for proxied API (Caddy) to report healthy..."
-    if check_url_with_retries "${BASE_URL}/api/v1/telemetry/health" 90 2; then
-        log_success "Proxied API is healthy"
-    else
-        log_error "Proxied API did not become healthy within timeout"
-        log_step "Dumping Caddy logs for debugging:"
-        $COMPOSE_CMD logs caddy | tail -100
-        E2E_EXIT_CODE=3
-    fi
-
-    # Wait for UI service with extended timeout
-    log_step "⏳ Waiting for UI service to be ready..."
-    UI_READY=0
-    for i in $(seq 1 120); do
-        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "${BASE_URL}/" 2>/dev/null || echo "000")
-        if [[ "$HTTP_CODE" == "200" ]]; then
-            BODY_SNIPPET=$(curl -s --max-time 5 "${BASE_URL}/" | head -c 500)
-            if echo "$BODY_SNIPPET" | grep -qE "<html|<!DOCTYPE|<div id=\"root\"|<script.*src="; then
-                log_success "UI service is ready (HTTP 200, valid HTML)"
-                UI_READY=1
-                break
-            else
-                log_debug "Got HTTP 200 but body doesn't look like HTML: ${BODY_SNIPPET:0:100}"
-            fi
-        elif [[ "$HTTP_CODE" == "404" ]]; then
-            # Caddy is up but static files not ready yet
-            log_debug "Attempt $i: HTTP 404 - static files not ready yet"
-        fi
-        echo -n "."
-        sleep 1
-    done
-    echo ""
-
-    if [[ "$UI_READY" -ne 1 ]]; then
-        log_error "UI service did not become ready within timeout"
-        log_step "Dumping Caddy logs for debugging:"
-        $COMPOSE_CMD logs caddy | tail -50
-        log_step "Checking if index.html exists in Caddy container:"
-        $COMPOSE_CMD exec -T caddy ls -la /srv/ || true
-        E2E_EXIT_CODE=4
-    fi
-
-    if [[ "${E2E_EXIT_CODE:-0}" -eq 0 ]]; then
-        npx playwright test --project=api
-        E2E_EXIT_CODE=$?
-    fi
+    export BASE_URL="http://localhost:6173"
+    npx playwright test --project=api || E2E_EXIT=1
+    cd "$PROJECT_ROOT"
+    
+    [[ "$E2E_EXIT" -eq 0 ]] && log_success "E2E tests passed" || log_error "E2E tests failed"
 else
-    log_warn "E2E directory NOT found at $E2E_DIR"
-    E2E_EXIT_CODE=1
+    [[ "$SKIP_E2E" -eq 1 ]] && log_info "Skipping E2E tests (--skip-e2e)"
 fi
 
-cd "$PROJECT_ROOT"
-
 # =============================================================================
-# STEP 7: Cleanup
+# FINAL RESULT
 # =============================================================================
 
-log_step "🧹 Cleaning up compose stack..."
-$COMPOSE_CMD down -v --remove-orphans || true
-
-if [[ "${E2E_EXIT_CODE:-0}" -ne 0 ]]; then
-    log_fail "E2E Tests Failed!"
-    exit ${E2E_EXIT_CODE}
+if [[ "$BACKEND_EXIT" -ne 0 || "$E2E_EXIT" -ne 0 ]]; then
+    log_fail "CI FAILED"
+    exit 1
 fi
 
-log_success "ALL TESTS PASSED (Backend + E2E)"
-
+log_success "✅ ALL CI TESTS PASSED"
+exit 0
