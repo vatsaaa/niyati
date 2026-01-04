@@ -185,50 +185,5 @@ router.post('/horoscope-svg', async (req, res) => {
   }
 });
 
-// Temporary debug endpoint: POST /api/astrology/probe
-// Body: { payload?: object, paths?: string[] }
-// Tries a list of candidate paths against ASTRO_API_URL base and returns provider responses.
-// DISABLED in production for security
-router.post('/probe', async (req, res) => {
-  // Disable based on feature flag
-  if (!config.features.probeEndpoint) {
-    return res.sendError(ErrorCodes.NOT_FOUND, 'Probe endpoint not enabled');
-  }
-
-  const base = config.astrology.baseUrl.replace(/\/$/, '');
-  const key = process.env.ASTRO_API_KEY;
-  
-  // Use proper payload format based on the working endpoints
-  const defaultPayload = {
-    year: 1990, month: 11, date: 23,
-    hours: 7, minutes: 30, seconds: 0,
-    latitude: 18.5204, longitude: 73.8567, timezone: 5.5,
-    settings: { observation_point: 'topocentric', ayanamsha: 'lahiri' }
-  };
-  const payload = req.body.payload || defaultPayload;
-  
-  // Test actual working endpoints instead of generic paths
-  const candidates = req.body.paths && Array.isArray(req.body.paths) && req.body.paths.length 
-    ? req.body.paths 
-    : ['/planets/extended', '/navamsa-chart-info', '/d10-chart-info', '/horoscope-chart-svg-code'];
-  
-  // Use proper authentication headers like the working services
-  const headers = { 'Content-Type': 'application/json' };
-  if (key) headers['x-api-key'] = key;
-  if (process.env.ASTRO_API_TOKEN) headers['Authorization'] = `Bearer ${process.env.ASTRO_API_TOKEN}`;
-
-  const results = [];
-  for (const p of candidates) {
-    const url = (p === '/' ? base + '/' : base + (p.startsWith('/') ? p : `/${p}`));
-    
-    try {
-      const r = await axios.post(url, payload, { headers, timeout: 8000, validateStatus: null });
-      results.push({ path: p, url, status: r.status, data: r.data });
-    } catch (err) {
-      results.push({ path: p, url, error: err.message, response: err.response && err.response.data });
-    }
-  }
-  return res.sendSuccess({ tried: candidates, results });
-});
 
 module.exports = router;
