@@ -9,12 +9,26 @@ const { sendMail } = require('./emailProvider');
 const { authenticate } = require('./authMiddleware');
 const crypto = require('crypto');
 const { handleCallback, fetchUserInfo } = require('../src/socialLogin');
+const rateLimit = require('express-rate-limit');
 const { passwordResetLimiter } = require('../commons/lib/rateLimiter');
 
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 
 const DEFAULT_BCRYPT_ROUNDS = process.env.BCRYPT_ROUNDS ? parseInt(process.env.BCRYPT_ROUNDS, 10) : 10;
+
+// Rate limiters
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // 5 attempts per window per IP
+  message: {
+    status: 'error',
+    code: 'TOO_MANY_REQUESTS',
+    message: 'Too many login attempts, please try again later'
+  },
+  standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
+  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+});
 
 // Input validation helpers
 function isValidEmail(email) {
@@ -230,8 +244,7 @@ router.post('/register', async (req, res) => {
 
 // POST /auth/login
 // Body: { email, password }
-// TODO: Add rate limiting middleware to prevent brute force attacks
-router.post('/login', async (req, res) => {
+router.post('/login', loginLimiter, async (req, res) => {
   try {
     const { email, password } = req.body || {};
 
