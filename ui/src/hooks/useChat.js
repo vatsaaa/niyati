@@ -146,12 +146,16 @@ function getLowCreditsWarning(credits) {
 }
 
 // Deduct credits after successful response
-async function deductCredits(phoneNumber, amount) {
+// Supports idempotency by passing a requestId which will be sent as `x-idempotency-key`
+async function deductCredits(phoneNumber, amount, requestId = null) {
   try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (requestId) headers['x-idempotency-key'] = String(requestId);
+
     const response = await fetch('/api/v1/users/deduct-credits', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phoneNumber, amount })
+      headers,
+      body: JSON.stringify({ phoneNumber, amount, requestId })
     });
     if (response.ok) {
       const data = await response.json();
@@ -658,7 +662,7 @@ export function useChat(profile, updateProfile, addMessage, auth) {
       const persistedPhone = (() => { try { return localStorage.getItem('niyati_user_phone_number'); } catch (e) { return null; } })();
       const isReturningNow = (currentProfile.user_verified && (currentProfile.user_verified.id || currentProfile.user_verified.phoneNumber)) || !!persistedPhone;
       if (phoneNumber && (hasAllRequiredFields(latestProfile) || isReturningNow) && !skipCreditDeduction) {
-        const newCredits = await deductCredits(phoneNumber, queryCost);
+        const newCredits = await deductCredits(phoneNumber, queryCost, webhookReqId);
         console.log('[useChat] Credit deduction result:', { newCredits, previousCredits: latestProfile.user_credits });
         if (newCredits !== null) {
           updateProfile({ user_credits: newCredits });

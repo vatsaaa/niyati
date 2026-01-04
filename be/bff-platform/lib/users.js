@@ -466,30 +466,28 @@ router.post('/deduct-credits', async (req, res) => {
       return res.sendSuccess({ credits: user.credits, totalPaidAmount: user.total_paid_amount });
     } catch (e) {
       try { await db.query('ROLLBACK'); } catch (e2) {}
-      // If charge_transactions table doesn't exist, fall back to non-idempotent behavior
-      if (e && e.message && e.message.includes('relation "charge_transactions" does not exist')) {
-        logger.warn({ msg: 'charge_transactions_table_missing', err: e.message });
-        // Fall back to simple update
-        try {
-          const sql = `
-            UPDATE users 
-            SET credits = GREATEST(credits - $2, 0), updated_at = now()
-            WHERE regexp_replace(phone_number, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g')
-            RETURNING id, credits, total_paid_amount
-          `;
-          const result = await db.query(sql, [phone, amount]);
-          if (!result || !result.rows || result.rows.length === 0) {
-            return res.sendError(ErrorCodes.NOT_FOUND, 'user_not_found');
-          }
-          const user = result.rows[0];
-          return res.sendSuccess({ credits: user.credits, totalPaidAmount: user.total_paid_amount });
-        } catch (e3) {
-          logger.error({ msg: 'deduct_credits_fallback_failed', err: e3 && e3.message });
-          return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'deduct_credits_failed');
+      // If anything goes wrong with the idempotent path, attempt a best-effort
+      // non-idempotent fallback to ensure users are not charged twice due to
+      // unexpected DB/state errors. Log the original error for investigation.
+      logger.warn({ msg: 'deduct_credits_idempotent_error', err: e && e.message, phone, reqId: incomingReqId });
+      try {
+        const sql = `
+          UPDATE users 
+          SET credits = GREATEST(credits - $2, 0), updated_at = now()
+          WHERE regexp_replace(phone_number, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g')
+          RETURNING id, credits, total_paid_amount
+        `;
+        const result = await db.query(sql, [phone, amount]);
+        if (!result || !result.rows || result.rows.length === 0) {
+          return res.sendError(ErrorCodes.NOT_FOUND, 'user_not_found');
         }
+        const user = result.rows[0];
+        logger.info({ msg: 'deduct_credits_fallback_applied', phone, amount, creditsAfter: user.credits });
+        return res.sendSuccess({ credits: user.credits, totalPaidAmount: user.total_paid_amount });
+      } catch (e3) {
+        logger.error({ msg: 'deduct_credits_fallback_failed', err: e3 && e3.message });
+        return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'deduct_credits_failed');
       }
-      logger.error({ msg: 'deduct_credits_error', err: e && e.message });
-      return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'deduct_credits_failed');
     }
   } catch (err) {
     logger.error(sanitize({ msg: 'users.deduct-credits.error', err: err && err.message }));
