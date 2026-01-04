@@ -52,6 +52,22 @@ test.describe('Returning user flow', () => {
         body: JSON.stringify({ output: 'Hello Asha! Welcome back to Niyati.' }) 
       });
     });
+
+    // Also intercept BFF chat endpoint in case the UI posts to the BFF (forwarded to n8n server-side)
+    await page.route('**/api/v1/chat', async route => {
+      try {
+        const req = route.request();
+        const body = req.postData();
+        if (body) webhookBodies.push(body);
+      } catch (e) {
+        // ignore
+      }
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ output: 'Hello Asha! Welcome back to Niyati.' })
+      });
+    });
     
     // Also mock the profile endpoint
     await page.route('**/api/v1/users/profile', route => {

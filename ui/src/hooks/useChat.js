@@ -7,6 +7,8 @@ import { bffFetchWithRetry, sendClientLog } from '../services/api';
 import { N8N_WEBHOOK_URL, N8N_WEBHOOK_FALLBACK_URL } from '../config';
 // BFF chat endpoint (server-side canonicalization + forwarding to n8n)
 const BFF_CHAT_ENDPOINT = '/api/v1/chat';
+// BFF classify endpoint (server-side query classification for billing)
+const BFF_CLASSIFY_ENDPOINT = '/api/v1/chat/classify';
 import { getSessionReqId } from '../utils/uuid';
 import { hasAllRequiredFields, missingProfileFields } from '../utils/profile';
 
@@ -69,148 +71,34 @@ function extractPaymentInfo(text) {
   return result;
 }
 
-// Check if user is asking about horoscope (allowed for free users)
-function isHoroscopeQuery(text) {
-  const horoscopeKeywords = [
-    'horoscope', 'today', 'daily', 'zodiac', 'sign', 'aries', 'taurus', 'gemini',
-    'cancer', 'leo', 'virgo', 'libra', 'scorpio', 'sagittarius', 'capricorn',
-    'aquarius', 'pisces', 'rashifal', 'rashi', 'sun sign', 'moon sign'
-  ];
-  const lowerText = text.toLowerCase();
-  return horoscopeKeywords.some(keyword => lowerText.includes(keyword));
-}
-
-// Check if user is asking a premium astrology question (requires payment for free users)
-// This excludes casual conversation which should be allowed through to n8n
-function isPremiumAstrologyQuery(text) {
-  const premiumKeywords = [
-    // Birth chart and kundli
-    'birth chart', 'kundli', 'kundali', 'natal chart', 'chart analysis',
-    // Life areas
-    'career', 'job', 'work', 'profession', 'business', 'money', 'wealth', 'finance', 'financial',
-    'love', 'relationship', 'marriage', 'partner', 'spouse', 'compatibility', 'soulmate',
-    'health', 'medical', 'disease', 'illness',
-    'education', 'studies', 'exam', 'results',
-    'travel', 'abroad', 'foreign', 'immigration', 'visa',
-    'children', 'kids', 'pregnancy', 'fertility',
-    'property', 'house', 'real estate', 'land',
-    // Predictions and timing
-    'predict', 'prediction', 'future', 'forecast', 'when will', 'will i',
-    'dasha', 'mahadasha', 'antardasha', 'transit', 'gochar',
-    // Remedies
-    'remedy', 'remedies', 'solution', 'mantra', 'gemstone', 'stone', 'yantra',
-    // Planets and houses
-    'saturn', 'shani', 'rahu', 'ketu', 'jupiter', 'guru', 'venus', 'shukra',
-    'mars', 'mangal', 'mercury', 'budh', 'moon', 'chandra', 'sun', 'surya',
-    'house', 'bhava', 'ascendant', 'lagna'
-  ];
-  const lowerText = text.toLowerCase();
-  return premiumKeywords.some(keyword => lowerText.includes(keyword));
-}
-
-// Check if message is casual conversation/banter (should NOT deduct credits)
-// This helps distinguish between:
-// a) Questions asking for predictions/prophecies -> deduct credits
-// b) Casual conversation/greetings/banter -> no credit deduction
-// c) Profile information sharing -> no credit deduction (user onboarding)
-function isCasualConversation(text) {
-  const lowerText = text.toLowerCase().trim();
-  
-  // Predictive/astrology keywords that indicate a real query (NOT casual)
-  // If ANY of these appear, the message is billable, regardless of greeting prefix
-  const predictiveWords = [
-    'future', 'predict', 'happen', 'luck', 'career', 'love', 'marriage', 'job', 'money',
-    'horoscope', 'zodiac', 'kundli', 'kundali', 'chart', 'dasha', 'transit',
-    'promotion', 'health', 'wealth', 'children', 'baby', 'travel', 'abroad',
-    'forecast', 'prophecy', 'destiny', 'fate', 'rashifal'
-  ];
-  const hasPredictive = predictiveWords.some(p => lowerText.includes(p));
-  if (hasPredictive) return false; // NOT casual — billable
-
-  // Profile information patterns - NEVER billable (user onboarding)
-  // Matches: "I am X, born in Y on Z at T", "My name is X", "I was born on", etc.
-  const profilePatterns = [
-    /\b(i am|i'm|my name is|name is|this is)\b.*\b(born|dob|birth|birthday)\b/i,
-    /\bborn\s+(in|on|at)\b/i,  // "born in Delhi", "born on 19 May", "born at 7:31"
-    /\b(my|i was)\s+born\b/i,  // "I was born", "my born"
-    /\b(date of birth|dob|birthday)\s*(is|:)?\s*\d/i,  // "DOB is 19", "date of birth: 1979"
-    /\b(birth\s*place|place of birth|birthplace)\b/i,
-    /\b(birth\s*time|time of birth)\b/i,
-    /\b\d{1,2}[:\s]?\d{2}\s*(am|pm)\b/i,  // Time patterns like "7:31 am"
-    /\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}/i,  // "May 19"
-    /\b\d{1,2}\s+(january|february|march|april|may|june|july|august|september|october|november|december)/i,  // "19 May"
-    /\b(19|20)\d{2}\b/i,  // Years like 1979, 2001 (birth years)
-  ];
-  
-  // If message contains profile information, it's not billable
-  if (profilePatterns.some(pattern => pattern.test(lowerText))) {
-    return true;
-  }
-  
-  // Greetings and pleasantries
-  const casualPatterns = [
-    /^(hi|hello|hey|namaste|good\s*(morning|afternoon|evening|night))\b/i,
-    /^(how are you|how're you|how do you do|what's up|wassup|sup)/i,
-    /^(thank|thanks|thx)/i,
-    /^(bye|goodbye|see you|take care|good night)/i,
-    /^(ok|okay|alright|sure|yes|no|yeah|nope|yep)/i,
-    /^(nice|great|awesome|cool|wow|amazing|wonderful)/i,
-    /\b(how are you|how're you)\??$/i,
-    // Memory/identity questions - conversational, not predictions
-    /do you (remember|know|recall)/i,  // Matches "do you remember me", "do you remember the time", etc.
-    /you remember/i,
-    /who am i/i,
-    /what('s| is) my name/i,
-    /tell me about (myself|me)/i,
-    // Small talk about Niyati
-    /who are you/i,
-    /what('s| is) your name/i,
-    /where are you (from|located|based|living)/i,
-    /where do you live/i,
-    /how old are you/i,
-    /are you (real|human|ai|bot)/i,
-    // Time-related casual questions
-    /what('s| is) the time/i,
-    /what time is it/i,
-    /what('s| is) the date/i,
-    /what day is (it|today)/i,
-    // Appreciation and feedback
-    /you('re| are) (great|amazing|awesome|wonderful|helpful)/i,
-    /i (like|love|enjoy) (talking|chatting) (to|with) you/i,
-    /this is (fun|interesting|cool)/i,
-    // Simple responses
-    /^(really|oh|ah|hmm|haha|lol|ha ha)\??!?$/i,
-    /^(i see|got it|understood|makes sense)$/i,
-    // General "tell me about today" - casual but may lead to horoscope
-    /^(can you )?(tell|talk) (me )?(about )?today\??$/i,
-    // Introduction without birth details
-    /^(i am|i'm|my name is)\s+[a-z]+$/i,  // Just "I am Ankur" or "My name is Vatsa"
-  ];
-  
-  // Check if message matches casual patterns
-  if (casualPatterns.some(pattern => pattern.test(lowerText))) {
-    return true;
-  }
-  
-  // Short messages (<=6 words) without predictive keywords are also casual
-  // (Note: predictive keywords already checked above, so at this point we know there are none)
-  const words = lowerText.split(/\s+/).filter(w => w.length > 0);
-  if (words.length <= 6) {
-    // Additional patterns for casual statements
-    if (lowerText.includes('life has been') || 
-        lowerText.includes('i am') || 
-        lowerText.includes("i'm") ||
-        lowerText.includes('been good') ||
-        lowerText.includes('been great') ||
-        lowerText.includes('been fine') ||
-        lowerText.includes('weather') ||
-        lowerText.includes('miss you') ||
-        lowerText.includes('missed you')) {
-      return true;
+// Server-side query classification via BFF
+// Returns: { queryType, creditCost, isBillable, config }
+async function classifyQuery(message) {
+  try {
+    const response = await bffFetchWithRetry(BFF_CLASSIFY_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message })
+    });
+    if (response && response.ok) {
+      // Prefer JSON body when available
+      try {
+        const data = await response.json();
+        if (data && data.status === 'ok' && data.data) return data.data;
+      } catch (e) {
+        // fallthrough to handle non-JSON
+      }
     }
+  } catch (e) {
+    console.warn('Failed to classify query via BFF, using defaults:', e);
   }
-  
-  return false;
+  // Fallback defaults if BFF call fails
+  return {
+    queryType: 'horoscope',
+    creditCost: 2,
+    isBillable: true,
+    config: { credits_horoscope_cost: 2, credits_premium_cost: 4 }
+  };
 }
 
 // Get credits config from localStorage (set by useLogin)
@@ -255,13 +143,6 @@ function getLowCreditsWarning(credits) {
     `⚠️ Low credits alert: ${credits} remaining. Top up soon to continue exploring your astrological insights.`
   ];
   return messages[Math.floor(Math.random() * messages.length)];
-}
-
-// Determine credit cost based on query type (uses configurable values)
-function getQueryCreditCost(text) {
-  const config = getCreditsConfig();
-  if (isHoroscopeQuery(text)) return config.credits_horoscope_cost;
-  return config.credits_premium_cost;
 }
 
 // Deduct credits after successful response
@@ -495,14 +376,17 @@ export function useChat(profile, updateProfile, addMessage, auth) {
       const totalPaidAmount = currentProfile.user_totalPaidAmount ?? 0;
       const isPaidUser = totalPaidAmount > 0;
       const qrAlreadyShown = hasPaymentQRBeenShown();
-      const queryCost = getQueryCreditCost(inputText);
-      const config = getCreditsConfig();
+      
+      // Get classification from BFF (server-side)
+      const classification = await classifyQuery(inputText);
+      const { queryType, creditCost: queryCost, isBillable } = classification;
+      const config = { ...getCreditsConfig(), ...classification.config };
       const creditsFromPayment = Math.floor(config.payment_amount_inr / 10);
       
       // IMPORTANT: Check if this is casual conversation FIRST
       // Casual messages should pass through to n8n without credit checks
-      const isCasualMessage = isCasualConversation(inputText);
-      console.log('[useChat] Message classification:', { text: inputText.substring(0, 50), isCasual: isCasualMessage });
+      const isCasualMessage = !isBillable;
+      console.log('[useChat] Message classification (from BFF):', { text: inputText.substring(0, 50), queryType, queryCost, isBillable });
       
       // Check if user has enough credits (ONLY for non-casual messages)
       if (!isCasualMessage && userCredits < queryCost && hasAllRequiredFields(currentProfile)) {
@@ -588,7 +472,7 @@ export function useChat(profile, updateProfile, addMessage, auth) {
       // For free users (no payment history), restrict premium astrology queries only
       // Casual conversation and horoscope queries are allowed through to n8n
       if (!isPaidUser && hasAllRequiredFields(currentProfile)) {
-        if (isPremiumAstrologyQuery(inputText) && !isHoroscopeQuery(inputText)) {
+        if (queryType === 'premium') {
           addMessage({
             id: Date.now() + Math.random(),
             image: '/payment/PayQR.jpeg',
@@ -690,8 +574,8 @@ export function useChat(profile, updateProfile, addMessage, auth) {
       let usedFallback = false;
 
       try {
-        // Call BFF instead of n8n directly
-        response = await callWebhook(BFF_CHAT_ENDPOINT, webhookReqId, messageToSend, currentProfile);
+        // Call n8n webhook directly (per BFF-first architecture: UI → n8n → classify → deduct)
+        response = await callWebhook(N8N_WEBHOOK_URL, webhookReqId, messageToSend, currentProfile);
         if (response.status >= 500) {
           throw new Error(`Server error: ${response.status}`);
         }
@@ -758,7 +642,8 @@ export function useChat(profile, updateProfile, addMessage, auth) {
       } catch (e) { /* use currentProfile */ }
       
       // Skip credit deduction for casual conversation (greetings, banter, etc.)
-      const skipCreditDeduction = isCasualConversation(inputText);
+      // isBillable comes from BFF classification done earlier
+      const skipCreditDeduction = !isBillable;
       
       console.log('[useChat] Credit deduction check:', { 
         phoneNumber, 
@@ -830,4 +715,4 @@ export function useChat(profile, updateProfile, addMessage, auth) {
 }
 
 // Export helper functions for testing
-export { getQueryCreditCost, isHoroscopeQuery, getCreditsConfig };
+export { classifyQuery, getCreditsConfig };

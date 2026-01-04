@@ -52,8 +52,18 @@ test.describe('Credits threshold and payment prompt', () => {
     // Wait for chat
     await page.waitForSelector('textarea');
 
-    // Payment prompt for low-credit returning users is shown on login; wait briefly
-    await page.waitForTimeout(1500);
+    // Payment prompt for low-credit returning users is shown on login; wait until
+    // either the localStorage flag is set or page contains payment indicators.
+    await page.waitForFunction(() => {
+      try {
+        const qrFlag = localStorage.getItem('niyati_payment_qr_shown');
+        const hasQrImage = !!document.querySelector('img[src*="PayQR"], img[src*="payment"]');
+        const hasPaymentText = document.body.innerText.includes('scan the QR') || 
+                              document.body.innerText.includes('UPI') ||
+                              document.body.innerText.includes('payment');
+        return qrFlag === 'true' || qrFlag === '1' || hasQrImage || hasPaymentText;
+      } catch (e) { return false; }
+    }, { timeout: 5000 });
 
     // Check for payment prompt / QR presence using multiple strategies:
     // 1. Check localStorage flag

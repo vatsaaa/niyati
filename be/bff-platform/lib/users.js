@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const axios = require('axios');
 const { logger, sanitize, ErrorCodes, config } = require('../../commons');
-const { classify } = require('./queryClassifier');
+const { classify, getQueryCreditCost, getQueryType } = require('./queryClassifier');
 
 // Cache for app_config values (refresh every 5 minutes)
 let configCache = {};
@@ -510,28 +510,36 @@ router.post('/can-ask', async (req, res) => {
     if (!db) return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Database not configured');
 
     const appConfig = await getAppConfig(db);
-    const costToday = parseInt(appConfig.credits_horoscope_cost, 10) || 2;
-    const costFuture = parseInt(appConfig.credits_premium_cost, 10) || 4;
 
+    // Normalize config values to integers for classifier
+    const parsedConfig = {
+      credits_horoscope_cost: parseInt(appConfig.credits_horoscope_cost, 10) || 2,
+      credits_premium_cost: parseInt(appConfig.credits_premium_cost, 10) || 4
+    };
+
+    // Determine temporal type (today|future) and credit cost (uses centralized classifier)
     const qType = classify(question || ''); // 'today' | 'future'
-    const cost = qType === 'future' ? costFuture : costToday;
+    const cost = parseInt(getQueryCreditCost(question || '', parsedConfig), 10) || 0;
 
     const userRes = await db.query(`SELECT credits, is_paid FROM users WHERE regexp_replace(phone_number, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g') LIMIT 1`, [phone]);
     const user = userRes && userRes.rows && userRes.rows[0];
 
     if (!user) {
-      // New user: allow today's (default cheaper) but no deduction yet
-      return res.sendSuccess({ allowed: qType === 'today', cost, qType });
+      // New user: allow today's questions or casual (cost 0) queries; no deduction yet
+      return res.sendSuccess({ allowed: qType === 'today' || cost === 0, cost, qType });
     }
 
     const credits = typeof user.credits === 'number' ? user.credits : 0;
 
-    if (credits <= 0) {
-      return res.sendSuccess({ allowed: false, reason: 'exhausted_credits', message: 'You have exhausted your credits for this month. Consider upgrading to paid subscription to continue asking questions.' });
-    }
+    // If query is free (casual), allow regardless of credit count
+    if (cost > 0) {
+      if (credits <= 0) {
+        return res.sendSuccess({ allowed: false, reason: 'exhausted_credits', message: 'You have exhausted your credits for this month. Consider upgrading to paid subscription to continue asking questions.' });
+      }
 
-    if (credits < cost) {
-      return res.sendSuccess({ allowed: false, reason: 'insufficient_credits', message: 'You have insufficient credits to ask this question. Upgrade to paid subscription to continue asking questions.' });
+      if (credits < cost) {
+        return res.sendSuccess({ allowed: false, reason: 'insufficient_credits', message: 'You have insufficient credits to ask this question. Upgrade to paid subscription to continue asking questions.' });
+      }
     }
 
     // Users with <=10 credits can only ask 'today' questions

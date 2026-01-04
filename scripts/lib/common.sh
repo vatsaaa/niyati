@@ -302,15 +302,26 @@ check_url_with_retries() {
     local max_attempts="${2:-10}"
     local base_sleep="${3:-2}"
     local attempt=1
+    local max_sleep=10
     
     log_info "Checking $url (up to $max_attempts attempts)"
     while [[ $attempt -le $max_attempts ]]; do
-        if curl -fsS --max-time 8 "$url" >/dev/null 2>&1; then
-            log_success "$url is reachable"
+        local http_code
+        http_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$url" 2>/dev/null || echo "000")
+        
+        if [[ "$http_code" == "200" ]]; then
+            log_success "$url is reachable (HTTP $http_code)"
             return 0
         fi
-        log_debug "Attempt $attempt/$max_attempts failed for $url"
-        sleep $((base_sleep * attempt))
+        
+        # Calculate sleep with cap
+        local sleep_time=$((base_sleep * attempt))
+        if [[ $sleep_time -gt $max_sleep ]]; then
+            sleep_time=$max_sleep
+        fi
+        
+        log_debug "Attempt $attempt/$max_attempts: $url returned HTTP $http_code, sleeping ${sleep_time}s"
+        sleep "$sleep_time"
         ((attempt++))
     done
     
@@ -319,6 +330,8 @@ check_url_with_retries() {
 }
 
 # Run health checks on standard endpoints
+# NOTE: This function assumes ports are exposed to host (dev mode).
+# For production, use deploy_niyati.sh which checks via docker exec.
 run_health_checks() {
     local base_url="${1:-http://localhost}"
     local platform_port="${BFF_PLATFORM_PORT:-3000}"

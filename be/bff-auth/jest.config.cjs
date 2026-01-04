@@ -6,4 +6,5 @@ module.exports = {
   moduleNameMapper: {
     '^@test-helpers$': '<rootDir>/../commons/test/helpers.js',
   },
+  globalTeardown: '<rootDir>/../commons/jest-teardown.js'
 };

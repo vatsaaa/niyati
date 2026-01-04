@@ -1,26 +1,89 @@
+# CI Docker Compose Overlay
+# =============================================================================
+# Use with: docker compose --env-file .env.ci -f docker-compose.yml -f docker-compose.ci.yml up -d
+#
+# This overlay:
+# - Uses different ports to avoid conflicts with dev/production
+# - Runs mock-n8n instead of real n8n
+# - Builds UI in production mode for static file serving
+# - Exposes Postgres for test data seeding
+# =============================================================================
+
 services:
+  # Mock N8N for CI (avoids dependency on real n8n)
   n8n:
     image: node:20-alpine
     volumes:
-      - ./scripts/mock-n8n.js:/app/mock-n8n.js
+      - ./scripts/mock-n8n.js:/app/mock-n8n.js:ro
     command: node /app/mock-n8n.js
+    # Expose internally on 5678 (standard n8n port) so Caddy config works unchanged
+    expose:
+      - "5678"
+    # Also expose externally on CI port for debugging
     ports:
-      - "5678:5678"
+      - "${N8N_PORT:-6678}:5678"
     networks:
       - niyati
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:5678/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Expose Postgres externally for CI data seeding and debugging
   postgres:
     ports:
-      - "55432:5432"
-    networks:
-      - niyati
-  # Override UI service to use local webhook instead of ngrok for CI
+      - "${POSTGRES_PORT:-56432}:5432"
+
+  # Expose Redis externally for CI debugging
+  redis:
+    ports:
+      - "${REDIS_PORT:-7379}:6379"
+
+  # BFF Platform - expose for direct API testing
+  bff-platform:
+    ports:
+      - "${BFF_PLATFORM_PORT:-4000}:${BFF_PLATFORM_PORT:-4000}"
+    environment:
+      PORT: ${BFF_PLATFORM_PORT:-4000}
+      SERVICE_TOKEN: ${SERVICE_TOKEN:-ci-test-token}
+      # Point to internal n8n mock
+      N8N_WEBHOOK_URL: http://n8n:5678/webhook/chat
+
+  # BFF Auth - expose for direct API testing  
+  bff-auth:
+    ports:
+      - "${BFF_AUTH_PORT:-4001}:${BFF_AUTH_PORT:-4001}"
+    environment:
+      PORT: ${BFF_AUTH_PORT:-4001}
+      SERVICE_TOKEN: ${SERVICE_TOKEN:-ci-test-token}
+      # Point to bff-platform using the CI port
+      BFF_PLATFORM_BASE: http://bff-platform:${BFF_PLATFORM_PORT:-4000}/api/v1
+
+  # UI Service - build in production mode for static files
   ui-service:
     build:
       context: ./ui
+      dockerfile: Dockerfile
+      target: production
       args:
-        - VITE_N8N_WEBHOOK_URL=/webhook/chat
-        - VITE_BFF_BASE_URL=
-        - VITE_DEBUG_MODE=true
+        VITE_N8N_WEBHOOK_URL: ${VITE_N8N_WEBHOOK_URL:-/webhook/chat}
+        VITE_BFF_BASE_URL: ${VITE_BFF_BASE_URL:-}
+        VITE_DEBUG_MODE: ${VITE_DEBUG_MODE:-true}
+
+  # Caddy - expose on CI port
+  caddy:
+    ports:
+      - "${CADDY_HTTP_PORT:-6173}:5173"
+    environment:
+      # Tell Caddy where BFF services are (using internal ports)
+      BFF_PLATFORM_PORT: ${BFF_PLATFORM_PORT:-4000}
+      BFF_AUTH_PORT: ${BFF_AUTH_PORT:-4001}
+    depends_on:
+      - ui-service
+      - bff-platform
+      - bff-auth
+      - n8n
 
 networks:
   niyati:

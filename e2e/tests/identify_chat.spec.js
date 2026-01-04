@@ -104,6 +104,9 @@ test('ui identify -> chat -> credits deducted', async ({ page, baseURL }) => {
 
   // Type a chat message and submit
   const textarea = page.locator('textarea');
+  // Ensure the textarea is visible and enabled before typing to avoid flakiness
+  await expect(textarea).toBeVisible({ timeout: 5000 });
+  await expect(textarea).toBeEnabled({ timeout: 5000 });
   // If running REAL, first provide profile details so the client can extract and persist them,
   // then request the horoscope. This ensures the n8n greeting doesn't ask for DOB/place again.
   if (REAL) {

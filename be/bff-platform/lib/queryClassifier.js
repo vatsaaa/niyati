@@ -1,5 +1,6 @@
-// Query classifier to decide if a user question is "today" vs "future"
+// Query classifier for billing and temporal classification
 // Uses winkNLP for better natural language understanding
+// Centralizes all classification logic server-side for security and auditability
 
 let winkNLP, model, nlp;
 try {
@@ -10,6 +11,187 @@ try {
   // winkNLP not available, will use fallback
   nlp = null;
 }
+
+// ============================================================================
+// BILLING CLASSIFICATION (horoscope vs premium vs casual)
+// ============================================================================
+
+// Horoscope keywords - basic daily/zodiac queries (lower cost)
+const HOROSCOPE_KEYWORDS = [
+  'horoscope', 'today', 'daily', 'zodiac', 'sign', 'aries', 'taurus', 'gemini',
+  'cancer', 'leo', 'virgo', 'libra', 'scorpio', 'sagittarius', 'capricorn',
+  'aquarius', 'pisces', 'rashifal', 'rashi', 'sun sign', 'moon sign'
+];
+
+// Premium astrology keywords - detailed readings (higher cost)
+const PREMIUM_KEYWORDS = [
+  // Birth chart and kundli
+  'birth chart', 'kundli', 'kundali', 'natal chart', 'chart analysis',
+  // Life areas
+  'career', 'job', 'work', 'profession', 'business', 'money', 'wealth', 'finance', 'financial',
+  'love', 'relationship', 'marriage', 'partner', 'spouse', 'compatibility', 'soulmate',
+  'health', 'medical', 'disease', 'illness',
+  'education', 'studies', 'exam', 'results',
+  'travel', 'abroad', 'foreign', 'immigration', 'visa',
+  'children', 'kids', 'pregnancy', 'fertility',
+  'property', 'house', 'real estate', 'land',
+  // Predictions and timing
+  'predict', 'prediction', 'future', 'forecast', 'when will', 'will i',
+  'dasha', 'mahadasha', 'antardasha', 'transit', 'gochar',
+  // Remedies
+  'remedy', 'remedies', 'solution', 'mantra', 'gemstone', 'stone', 'yantra',
+  // Planets and houses
+  'saturn', 'shani', 'rahu', 'ketu', 'jupiter', 'guru', 'venus', 'shukra',
+  'mars', 'mangal', 'mercury', 'budh', 'moon', 'chandra', 'sun', 'surya',
+  'house', 'bhava', 'ascendant', 'lagna'
+];
+
+// Predictive words that indicate billable content (NOT casual)
+const PREDICTIVE_WORDS = [
+  'future', 'predict', 'happen', 'luck', 'career', 'love', 'marriage', 'job', 'money',
+  'horoscope', 'zodiac', 'kundli', 'kundali', 'chart', 'dasha', 'transit',
+  'promotion', 'health', 'wealth', 'children', 'baby', 'travel', 'abroad',
+  'forecast', 'prophecy', 'destiny', 'fate', 'rashifal'
+];
+
+// Profile information patterns - NEVER billable (user onboarding)
+const PROFILE_PATTERNS = [
+  /\b(i am|i'm|my name is|name is|this is)\b.*\b(born|dob|birth|birthday)\b/i,
+  /\bborn\s+(in|on|at)\b/i,
+  /\b(my|i was)\s+born\b/i,
+  /\b(date of birth|dob|birthday)\s*(is|:)?\s*\d/i,
+  /\b(birth\s*place|place of birth|birthplace)\b/i,
+  /\b(birth\s*time|time of birth)\b/i,
+  /\b\d{1,2}[:\s]?\d{2}\s*(am|pm)\b/i,
+  /\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}/i,
+  /\b\d{1,2}\s+(january|february|march|april|may|june|july|august|september|october|november|december)/i,
+  /\b(19|20)\d{2}\b/i
+];
+
+// Casual conversation patterns - NOT billable
+const CASUAL_PATTERNS = [
+  /^(hi|hello|hey|namaste|good\s*(morning|afternoon|evening|night))\b/i,
+  /^(how are you|how're you|how do you do|what's up|wassup|sup)/i,
+  /^(thank|thanks|thx)/i,
+  /^(bye|goodbye|see you|take care|good night)/i,
+  /^(ok|okay|alright|sure|yes|no|yeah|nope|yep)/i,
+  /^(nice|great|awesome|cool|wow|amazing|wonderful)/i,
+  /\b(how are you|how're you)\??$/i,
+  /do you (remember|know|recall)/i,
+  /you remember/i,
+  /who am i/i,
+  /what('s| is) my name/i,
+  /tell me about (myself|me)/i,
+  /who are you/i,
+  /what('s| is) your name/i,
+  /where are you (from|located|based|living)/i,
+  /where do you live/i,
+  /how old are you/i,
+  /are you (real|human|ai|bot)/i,
+  /what('s| is) the time/i,
+  /what time is it/i,
+  /what('s| is) the date/i,
+  /what day is (it|today)/i,
+  /you('re| are) (great|amazing|awesome|wonderful|helpful)/i,
+  /i (like|love|enjoy) (talking|chatting) (to|with) you/i,
+  /this is (fun|interesting|cool)/i,
+  /^(really|oh|ah|hmm|haha|lol|ha ha)\??!?$/i,
+  /^(i see|got it|understood|makes sense)$/i,
+  /^(can you )?(tell|talk) (me )?(about )?today\??$/i,
+  /^(i am|i'm|my name is)\s+[a-z]+$/i
+];
+
+/**
+ * Check if user is asking about horoscope (lower cost)
+ */
+function isHoroscopeQuery(text) {
+  if (!text || typeof text !== 'string') return false;
+  const lowerText = text.toLowerCase();
+  return HOROSCOPE_KEYWORDS.some(keyword => lowerText.includes(keyword));
+}
+
+/**
+ * Check if user is asking a premium astrology question (higher cost)
+ */
+function isPremiumAstrologyQuery(text) {
+  if (!text || typeof text !== 'string') return false;
+  const lowerText = text.toLowerCase();
+  return PREMIUM_KEYWORDS.some(keyword => lowerText.includes(keyword));
+}
+
+/**
+ * Check if message is casual conversation (NOT billable)
+ */
+function isCasualConversation(text) {
+  if (!text || typeof text !== 'string') return false;
+  const lowerText = text.toLowerCase().trim();
+  
+  // If ANY predictive words appear, it's billable (NOT casual)
+  if (PREDICTIVE_WORDS.some(p => lowerText.includes(p))) return false;
+  
+  // Profile information is not billable
+  if (PROFILE_PATTERNS.some(pattern => pattern.test(lowerText))) return true;
+  
+  // Check casual patterns
+  if (CASUAL_PATTERNS.some(pattern => pattern.test(lowerText))) return true;
+  
+  // Short messages (<=6 words) without predictive keywords are casual
+  const words = lowerText.split(/\s+/).filter(w => w.length > 0);
+  if (words.length <= 6) {
+    if (lowerText.includes('life has been') || 
+        lowerText.includes('i am') || 
+        lowerText.includes("i'm") ||
+        lowerText.includes('been good') ||
+        lowerText.includes('been great') ||
+        lowerText.includes('been fine') ||
+        lowerText.includes('weather') ||
+        lowerText.includes('miss you') ||
+        lowerText.includes('missed you')) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+/**
+ * Determine credit cost for a query
+ * @param {string} text - The user's message
+ * @param {object} config - Credits configuration from app_config
+ * @returns {number} Credit cost (0 for casual, horoscope cost, or premium cost)
+ */
+function getQueryCreditCost(text, config = {}) {
+  const horoscopeCost = config.credits_horoscope_cost || 2;
+  const premiumCost = config.credits_premium_cost || 4;
+  
+  // Casual conversation = no charge
+  if (isCasualConversation(text)) return 0;
+  
+  // Horoscope queries = lower cost
+  if (isHoroscopeQuery(text)) return horoscopeCost;
+  
+  // Premium queries or default = higher cost
+  if (isPremiumAstrologyQuery(text)) return premiumCost;
+  
+  // Default to horoscope cost for ambiguous queries
+  return horoscopeCost;
+}
+
+/**
+ * Get query type classification
+ * @param {string} text - The user's message
+ * @returns {string} 'casual' | 'horoscope' | 'premium'
+ */
+function getQueryType(text) {
+  if (isCasualConversation(text)) return 'casual';
+  if (isPremiumAstrologyQuery(text)) return 'premium';
+  if (isHoroscopeQuery(text)) return 'horoscope';
+  return 'horoscope'; // default
+}
+
+// ============================================================================
+// TEMPORAL CLASSIFICATION (today vs future) - existing functionality
+// ============================================================================
 
 // Keywords for classification
 const TODAY_KEYWORDS = [
@@ -190,6 +372,13 @@ function getExhaustedCreditsMessage() {
 }
 
 module.exports = { 
+  // Billing classification (new)
+  isHoroscopeQuery,
+  isPremiumAstrologyQuery,
+  isCasualConversation,
+  getQueryCreditCost,
+  getQueryType,
+  // Temporal classification (existing)
   classify, 
   isTodayQuestion, 
   isFutureQuestion, 

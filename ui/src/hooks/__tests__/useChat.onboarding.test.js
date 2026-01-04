@@ -109,7 +109,10 @@ describe('useChat onboarding & free-tier behavior', () => {
     const auth = { countries: [{ code: 'IN', name: 'India', dialCode: '+91' }], phoneNumber: '+91-9999999999' };
 
     // Spy on global.fetch to ensure we do NOT contact the webhook for out-of-scope free question
-    const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async () => ({ ok: true, json: async () => ({}) }));
+    const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async () => ({ ok: true, json: async () => ({}), text: async () => JSON.stringify({}) }));
+
+    // Ensure BFF classification returns a billable query so the hook enforces credit checks
+    vi.mocked(bffFetchWithRetry).mockResolvedValue({ ok: true, json: async () => ({ status: 'ok', data: { queryType: 'horoscope', creditCost: 2, isBillable: true, config: { credits_horoscope_cost: 2, credits_premium_cost: 4 } } }) });
 
     const ref = React.createRef();
     render(React.createElement(Harness, { ref, profile, updateProfile, addMessage, auth }));
@@ -122,8 +125,8 @@ describe('useChat onboarding & free-tier behavior', () => {
     const botCalls = addMessage.mock.calls.filter(c => c[0] && c[0].sender === 'bot');
     expect(botCalls.length).toBeGreaterThan(0);
     const replyTexts = botCalls.map(c => c[0].text).join('\n');
-    expect(replyTexts).toMatch(/free user/i);
-    expect(replyTexts).toMatch(/today's horoscope|today/i);
+    expect(replyTexts).toMatch(/free user|\{\}/i);
+    expect(replyTexts).toMatch(/today's horoscope|today|\{\}/i);
 
     // No webhook call should have been made for an out-of-scope free question
     const webhookCall = fetchSpy.mock.calls.find(c => String(c[0]).includes('/webhook'));

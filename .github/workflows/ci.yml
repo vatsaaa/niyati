@@ -23,30 +23,20 @@ jobs:
         node-version: '20'
         cache: 'npm'
         cache-dependency-path: '**/package-lock.json'
+
     - name: Install Host Dependencies
       run: |
+        npm ci --prefix be/commons
         npm ci --prefix be/bff-platform
         npm ci --prefix be/bff-auth
         npm ci --prefix ui
 
-    - name: Run Full Integration Suite
-      # This script now owns the Docker lifecycle + Mock N8N
+    - name: Run Full Integration Suite (Backend + E2E)
+      env:
+        SERVICE_TOKEN: ${{ secrets.SERVICE_TOKEN }}
       run: |
         chmod +x scripts/ci-run-tests.sh
         ./scripts/ci-run-tests.sh
-
-    - name: Install Playwright & Run E2E
-      # Only run E2E if the integration suite passed
-      env:
-        REAL: '1'
-        BASE_URL: 'http://127.0.0.1:5173'
-        SERVICE_TOKEN: ${{ secrets.SERVICE_TOKEN }}
-      run: |
-        cd e2e
-        npm ci
-        npx playwright install --with-deps chromium
-        npx playwright test --project=api
-
 
     - name: Upload Playwright Traces (On Failure)
       if: failure()

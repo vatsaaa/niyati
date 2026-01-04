@@ -123,24 +123,44 @@ app.get('/', (req, res) => res.sendSuccess({ service: 'bff-auth', version: API_V
 // Health endpoint
 app.get('/api/v1/telemetry/health', (req, res) => res.sendSuccess({ service: 'bff-auth' }));
 
-const server = app.listen(PORT, () => {
-  logger.info({ msg: `BFF Auth listening on http://localhost:${PORT}` });
-});
+// Register DB pool for centralized shutdown (helps tests/CI)
+if (app.get('db') && commons && typeof commons.registerShutdown === 'function') {
+  try { commons.registerShutdown(app.get('db')); } catch (e) { logger.warn({ msg: 'failed_registering_auth_pool', err: e && e.message }); }
+}
 
-// Graceful shutdown handler
-process.on('SIGTERM', async () => {
-  logger.info({ msg: 'SIGTERM received, shutting down gracefully' });
-  server.close(async () => {
-    const db = app.get('db');
-    if (db) {
-      await db.end().catch(err => logger.error({ msg: 'Error closing DB pool', err }));
+// Wrap app.listen to auto-register servers for cleanup in tests
+try {
+  const _origListen = app.listen.bind(app);
+  app.listen = (...args) => {
+    const srv = _origListen(...args);
+    if (commons && typeof commons.registerShutdown === 'function') {
+      try { commons.registerShutdown(srv); } catch (e) { logger.warn({ msg: 'failed_registering_auth_server', err: e && e.message }); }
     }
-    process.exit(0);
+    return srv;
+  };
+} catch (e) {}
+
+// Start server only when running directly (not during tests or when required)
+if (process.env.NODE_ENV !== 'test' && require.main === module) {
+  const server = app.listen(PORT, () => {
+    logger.info({ msg: `BFF Auth listening on http://localhost:${PORT}` });
   });
-  
-  // Force shutdown after 30s
-  setTimeout(() => {
-    logger.error({ msg: 'Forced shutdown after timeout' });
-    process.exit(1);
-  }, 30000);
-});
+
+  // Graceful shutdown handler
+  process.on('SIGTERM', async () => {
+    logger.info({ msg: 'SIGTERM received, shutting down gracefully' });
+    server.close(async () => {
+      const db = app.get('db');
+      if (db) {
+        await db.end().catch(err => logger.error({ msg: 'Error closing DB pool', err }));
+      }
+      process.exit(0);
+    });
+    
+    // Force shutdown after 30s
+    setTimeout(() => {
+      logger.error({ msg: 'Forced shutdown after timeout' });
+      process.exit(1);
+    }, 30000);
+  });
+}

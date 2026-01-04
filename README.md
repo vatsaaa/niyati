@@ -132,6 +132,21 @@ Rationale: this pattern centralizes sensitive logic (billing, age computation) o
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
+## Component Interaction
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   Browser   │────▶│    Caddy    │────▶│ bff-platform│────▶│     n8n     │
+│  (React UI) │◀────│  (Reverse   │◀────│  (Express)  │◀────│  (AI Agent) │
+└─────────────┘     │   Proxy)    │     └─────────────┘     └─────────────┘
+                    │             │     ┌─────────────┐     ┌─────────────┐
+                    │             │────▶│  bff-auth   │────▶│  PostgreSQL │
+                    └─────────────┘     │  (Express)  │     └─────────────┘
+                                        └─────────────┘     ┌─────────────┐
+                                        ┌─────────────┐     │    Redis    │
+                                        │   Worker    │◀────│   (Queue)   │
+                                        └─────────────┘     └─────────────┘
+```
+
 ### Project Structure
 
 ```
@@ -1086,43 +1101,4 @@ docker inspect --format='{{.State.Health.Status}}' niyati-bff-auth-1
 **Built with ❤️ using React, Node.js, PostgreSQL, and Docker**
 
 
-
-
-Niyati chats flow is: UI <--> Caddy <--> n8n, but that makes the client heavier with business logic. Make client lightweight with responsibilities to collect & validate inputs, render UI, and delegate business rules to trusted servers, by extending bff-platform client and accomodating following:
-
-- Server/BFF First: Add a small backend endpoint (BFF) between the UI and n8n (or extend bff-platform) that:
-- - Accepts UI payloads, normalizes metadata (ISO dateOfBirth, timeOfBirth, placeOfBirth, userName).
-- - Computes derived fields (age, ageConfirmed) and stores authoritative state.
-- - Decides isSystemContext and returns a short payload to UI for display.
-- - Forwards a canonical request to n8n (so n8n always receives consistent, server-validated data).
-
-- n8n as Orchestrator, not Validator: Keep n8n focused on conversation/memory and side effects:
-- - n8n should persist memory (age, dob, name) and produce isBillable for responses.
-- - Do any LLM-facing prompt control and output sanitization here (e.g., strip *smiles* in a post-process node).
-- - Because n8n runs server-side, it can be the authoritative place to persist session memory that the agent reads before generating replies.
-
-- Centralize Billing & Charge Decisions Server-side:
-- - Only the backend (BFF or bff-platform) or n8n should decrement credits after validating isBillable and message type.
-- - UI should never decide/perform the actual charge; it may optimistically show pending changes but must wait for server confirmation before committing.
-
-- UI Responsibilities — keep them tiny:
-- - Collect inputs and do minimal client-side validation (format DOB to ISO YYYY-MM-DD, basic syntactic checks).
-- - Send raw canonical payload to BFF/n8n; do not implement business rules (age logic, billing rules).
-- - Render messages; sanitize display (strip stage directions) as a defensive UX measure only.
-- - Poll or fetch credit balance from backend when needed; show server-confirmed status.
-
-- Auth, Trust & Idempotency:
-- - Use short-lived tokens/session IDs so backend can validate requests.
-- - Make charge endpoints idempotent (use request IDs) to avoid double deductions during retries.
-- - Validate client-provided flags (like isSystemContext) server-side; treat them as hints, not authority.
-
-- Observability & Safety:
-- - Log parsed DOB/age and isBillable decisions server-side for audits.
-- - Add feature flags for turning on/off server-side auto-confirmation or new heuristics without client changes.
-
-- Quick migration path (minimal code changes):
-1. Add BFF endpoint that accepts UI payloads and returns canonical payload.
-2. Have useChat.js call BFF rather than n8n directly.
-3. Move age compute + persistence + billing gate to BFF/n8n.
-4. Update UI to display server-provided isBillable and credit-balance endpoints.
 

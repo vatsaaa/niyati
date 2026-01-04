@@ -89,6 +89,10 @@ if (process.env.DATABASE_URL) {
   });
   
   app.set('db', pool);
+  // Register DB pool for centralized shutdown to help tests/CI exit cleanly
+  if (commons && typeof commons.registerShutdown === 'function') {
+    try { commons.registerShutdown(pool); } catch (e) { logger.warn({ msg: 'failed_registering_pool_for_shutdown', err: e && e.message }); }
+  }
 } else {
   logger.warn({ msg: 'DATABASE_URL not set for bff-platform, DB features disabled' });
 }
@@ -134,6 +138,13 @@ apiRouter.use('/telemetry', telemetryRouter);
 // Users sync endpoint
 const usersRouter = require('../lib/users');
 apiRouter.use('/users', usersRouter);
+
+// Import query classifier for billing classification and chat routes
+const { getQueryCreditCost, getQueryType, isCasualConversation } = require('../lib/queryClassifier');
+const chatRouter = require('../lib/chat');
+
+// Mount chat router (authentication middleware applied earlier for /chat)
+apiRouter.use('/chat', chatRouter);
 
 // POST /api/v1/chat
 // Acts as a lightweight BFF: normalizes metadata, computes derived fields (age, ageConfirmed),
@@ -352,6 +363,21 @@ if (process.env.NODE_ENV !== 'test' && require.main === module) {
       process.exit(1);
     }, 30000);
   });
+}
+
+// Wrap `app.listen` so tests that start servers via `app.listen()` get the server
+// automatically registered for shutdown. This avoids leaking handles when tests forget to close.
+try {
+  const _originalListen = app.listen.bind(app);
+  app.listen = (...args) => {
+    const srv = _originalListen(...args);
+    if (commons && typeof commons.registerShutdown === 'function') {
+      try { commons.registerShutdown(srv); } catch (e) { logger.warn({ msg: 'failed_registering_server_for_shutdown', err: e && e.message }); }
+    }
+    return srv;
+  };
+} catch (e) {
+  // ignore
 }
 
 // Export app for tests

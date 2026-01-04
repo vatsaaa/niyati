@@ -57,15 +57,15 @@ export async function extractProfileFields(text) {
   let chrono = null;
   let nlp = null;
   try {
-    chrono = await import('chrono-node');
+    chrono = await import(/* @vite-ignore */ 'chrono-node');
   } catch (e) {
     chrono = null;
   }
     try {
-    const wink = await import('wink-nlp');
+    const wink = await import(/* @vite-ignore */ 'wink-nlp');
     try {
       const modelName = 'wink-eng-lite-model';
-      const model = await import(modelName);
+      const model = await import(/* @vite-ignore */ modelName);
       nlp = wink.default ? wink.default(model.default) : wink(model.default);
     } catch (mErr) {
       try {

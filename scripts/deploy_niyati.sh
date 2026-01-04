@@ -529,7 +529,7 @@ get_service_health() {
     docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}running{{end}}' "$cid" 2>/dev/null || echo "unknown"
 }
 
-# Verify service health via HTTP endpoint
+# Verify service health via HTTP endpoint (from host)
 verify_service_health() {
     local name="$1"
     local url="$2"
@@ -539,6 +539,25 @@ verify_service_health() {
     log_debug "Checking $name at $url"
     while [[ $attempt -le $max_attempts ]]; do
         if curl -fsS --max-time 5 "$url" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 2
+        ((attempt++))
+    done
+    return 1
+}
+
+# Verify service health via docker exec (for services not exposed to host)
+verify_service_health_internal() {
+    local service="$1"
+    local url="$2"
+    local max_attempts="${3:-10}"
+    local attempt=1
+    
+    log_debug "Checking $service internally at $url"
+    while [[ $attempt -le $max_attempts ]]; do
+        # Use docker compose exec to curl from inside the container
+        if $COMPOSE_CMD exec -T "$service" sh -c "wget -q -O /dev/null --timeout=5 '$url' 2>/dev/null || curl -fsS --max-time 5 '$url' >/dev/null 2>&1" 2>/dev/null; then
             return 0
         fi
         sleep 2
@@ -592,8 +611,9 @@ run_health_checks() {
     echo ""
     echo "HTTP Health Endpoints:"
     
+    # BFF services are not exposed to host in production; check via docker exec
     echo -n "  BFF Platform (/api/v1/telemetry/health): "
-    if verify_service_health "bff-platform" "http://127.0.0.1:${platform_port}/api/v1/telemetry/health" 5; then
+    if verify_service_health_internal "bff-platform" "http://localhost:${platform_port}/api/v1/telemetry/health" 5; then
         echo -e "${GREEN}healthy${NC}"
     else
         echo -e "${RED}unhealthy${NC}"
@@ -601,13 +621,14 @@ run_health_checks() {
     fi
     
     echo -n "  BFF Auth (/api/v1/telemetry/health): "
-    if verify_service_health "bff-auth" "http://127.0.0.1:${auth_port}/api/v1/telemetry/health" 5; then
+    if verify_service_health_internal "bff-auth" "http://localhost:${auth_port}/api/v1/telemetry/health" 5; then
         echo -e "${GREEN}healthy${NC}"
     else
         echo -e "${RED}unhealthy${NC}"
         failed=1
     fi
     
+    # UI is proxied through Caddy which is exposed to host
     echo -n "  UI (via Caddy): "
     if verify_service_health "ui" "http://127.0.0.1:${ui_port}/" 5; then
         echo -e "${GREEN}healthy${NC}"
@@ -791,42 +812,45 @@ action_clean() {
     acquire_lock
     
     # Step 1: Stop and remove all containers for BOTH project names
-    log_info "Stopping all services from all project names..."
+    log_info "Step 1/7: Stopping all services from all project names..."
     run_cmd "docker compose -p niyati -f docker-compose.yml -f docker-compose.override.yml down --remove-orphans --volumes 2>/dev/null || true"
     run_cmd "docker compose -p niyati-prod -f docker-compose.yml -f docker-compose.prod.yml down --remove-orphans --volumes 2>/dev/null || true"
+    # Also handle CI project name
+    run_cmd "docker compose -p niyati --env-file .env.ci -f docker-compose.yml -f docker-compose.ci.yml down --remove-orphans --volumes 2>/dev/null || true"
     
     # Step 2: Force remove any orphaned niyati containers by name
-    log_info "Removing any orphaned niyati containers..."
+    log_info "Step 2/7: Removing any orphaned niyati containers..."
     run_cmd "docker ps -a --filter 'name=niyati' -q | xargs -r docker rm -f 2>/dev/null || true"
     
     # Step 3: Remove niyati networks
-    log_info "Removing niyati networks..."
+    log_info "Step 3/7: Removing niyati networks..."
     run_cmd "docker network rm niyati_niyati niyati_default niyati-prod_niyati niyati-prod_default 2>/dev/null || true"
     run_cmd "docker network prune -f"
     
     # Step 4: Remove niyati volumes
-    log_info "Removing niyati volumes..."
+    log_info "Step 4/7: Removing niyati volumes..."
     run_cmd "docker volume ls --filter 'name=niyati' -q | xargs -r docker volume rm -f 2>/dev/null || true"
     
     # Step 5: Remove niyati images
     if deploy_prompt "Remove all niyati Docker images?"; then
-        log_info "Removing niyati images..."
+        log_info "Step 5/7: Removing niyati images..."
         run_cmd "docker images --filter 'reference=niyati/*' -q | xargs -r docker rmi -f 2>/dev/null || true"
     fi
     
     # Step 6: Prune unused images
     if deploy_prompt "Prune unused Docker images?"; then
-        log_info "Pruning unused images..."
+        log_info "Step 6/7: Pruning unused images..."
         run_cmd "docker image prune -f"
     fi
     
     # Step 7: Prune build cache
     if deploy_prompt "Prune Docker build cache?"; then
-        log_info "Pruning build cache..."
+        log_info "Step 7/7: Pruning build cache..."
         run_cmd "docker builder prune -f"
     fi
     
     log_success "Cleanup complete!"
+    log_info "For a complete wipe including ALL images and buildx cache, use: --action=fresh"
 }
 
 # ACTION: fresh - Complete fresh start (clean + rebuild + deploy)
@@ -837,7 +861,9 @@ action_fresh() {
     log_warn "  - Stop all niyati containers"
     log_warn "  - Remove all volumes (DATABASE DATA WILL BE LOST)"
     log_warn "  - Remove all networks"
-    log_warn "  - Remove all niyati images"
+    log_warn "  - Remove ALL niyati images"
+    log_warn "  - Prune ALL unused Docker images, containers, networks"
+    log_warn "  - Prune ALL Docker build cache (including buildx)"
     log_warn "  - Rebuild everything from scratch"
     log_warn "  - Run migrations on fresh database"
     echo ""
@@ -849,38 +875,52 @@ action_fresh() {
     
     acquire_lock
     
-    # Step 1: Thorough cleanup
-    log_info "=== Step 1/6: Complete cleanup ==="
+    # Step 1: Thorough cleanup - stop all compose projects
+    log_info "=== Step 1/8: Stop all compose projects ==="
     run_cmd "docker compose -p niyati -f docker-compose.yml -f docker-compose.override.yml down --remove-orphans --volumes 2>/dev/null || true"
     run_cmd "docker compose -p niyati-prod -f docker-compose.yml -f docker-compose.prod.yml down --remove-orphans --volumes 2>/dev/null || true"
+    run_cmd "docker compose -p niyati --env-file .env.ci -f docker-compose.yml -f docker-compose.ci.yml down --remove-orphans --volumes 2>/dev/null || true"
     run_cmd "docker ps -a --filter 'name=niyati' -q | xargs -r docker rm -f 2>/dev/null || true"
     
     # Step 2: Remove networks
-    log_info "=== Step 2/6: Remove networks ==="
+    log_info "=== Step 2/8: Remove networks ==="
     run_cmd "docker network rm niyati_niyati niyati_default niyati-prod_niyati niyati-prod_default 2>/dev/null || true"
-    run_cmd "docker network prune -f"
     
-    # Step 3: Remove volumes
-    log_info "=== Step 3/6: Remove volumes ==="
+    # Step 3: Remove all niyati volumes
+    log_info "=== Step 3/8: Remove all niyati volumes ==="
     run_cmd "docker volume ls --filter 'name=niyati' -q | xargs -r docker volume rm -f 2>/dev/null || true"
     
-    # Step 4: Remove images and prune
-    log_info "=== Step 4/6: Remove images and prune ==="
+    # Step 4: Remove all niyati images specifically
+    log_info "=== Step 4/8: Remove all niyati images ==="
     run_cmd "docker images --filter 'reference=niyati/*' -q | xargs -r docker rmi -f 2>/dev/null || true"
-    run_cmd "docker system prune -f"
+    run_cmd "docker images --filter 'reference=*/niyati*' -q | xargs -r docker rmi -f 2>/dev/null || true"
     
-    # Step 5: Build fresh images
-    log_info "=== Step 5/6: Build fresh images (no-cache) ==="
+    # Step 5: Full system prune (removes ALL unused images, containers, networks, volumes)
+    log_info "=== Step 5/8: Docker system prune (all unused resources) ==="
+    run_cmd "docker system prune -a --volumes -f"
+    
+    # Step 6: Prune ALL build cache including buildx
+    log_info "=== Step 6/8: Prune build cache (including buildx) ==="
+    run_cmd "docker builder prune --all -f"
+    run_cmd "docker buildx prune --all -f 2>/dev/null || true"
+    
+    # Step 7: Build fresh images
+    log_info "=== Step 7/8: Build fresh images (no-cache) ==="
     run_cmd "$COMPOSE_CMD build --no-cache"
     
-    # Step 6: Start services (migrations run automatically via healthcheck dependencies)
-    log_info "=== Step 6/6: Start services ==="
+    # Step 8: Start services (migrations run automatically via healthcheck dependencies)
+    log_info "=== Step 8/8: Start services ==="
     run_cmd "$COMPOSE_CMD up -d"
     
     # Wait for services to be healthy
     log_info "Waiting for services to become healthy..."
     sleep 10
     run_health_checks
+    
+    # Show disk usage after fresh deploy
+    echo ""
+    log_info "Docker disk usage after fresh deployment:"
+    docker system df
     
     echo ""
     log_success "Fresh deployment complete!"

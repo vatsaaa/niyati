@@ -4,7 +4,12 @@ const {
   isFutureQuestion,
   isAstrologyRelated,
   getInsufficientCreditsMessage,
-  getExhaustedCreditsMessage
+  getExhaustedCreditsMessage,
+  isHoroscopeQuery,
+  isPremiumAstrologyQuery,
+  isCasualConversation,
+  getQueryCreditCost,
+  getQueryType
 } = require('../lib/queryClassifier');
 
 describe('queryClassifier', () => {
@@ -118,6 +123,110 @@ describe('queryClassifier', () => {
       const msg = getExhaustedCreditsMessage();
       expect(msg).toBeTruthy();
       expect(msg.toLowerCase()).toContain('credit');
+    });
+  });
+
+  // === Billing Classification Tests ===
+  describe('isHoroscopeQuery', () => {
+    test('identifies horoscope queries', () => {
+      expect(isHoroscopeQuery("What's my horoscope today?")).toBe(true);
+      expect(isHoroscopeQuery('Daily rashifal please')).toBe(true);
+      expect(isHoroscopeQuery('My zodiac prediction')).toBe(true);
+      expect(isHoroscopeQuery('Tell me my daily fortune')).toBe(true);
+    });
+
+    test('returns false for non-horoscope queries', () => {
+      expect(isHoroscopeQuery('When will I get married?')).toBe(false);
+      expect(isHoroscopeQuery('Hello')).toBe(false);
+      expect(isHoroscopeQuery('What is my birth chart?')).toBe(false);
+    });
+  });
+
+  describe('isPremiumAstrologyQuery', () => {
+    test('identifies premium astrology queries', () => {
+      expect(isPremiumAstrologyQuery('Show me my birth chart')).toBe(true);
+      expect(isPremiumAstrologyQuery('My kundli analysis')).toBe(true);
+      expect(isPremiumAstrologyQuery('When will I get married?')).toBe(true);
+      expect(isPremiumAstrologyQuery('Career prediction for next year')).toBe(true);
+      expect(isPremiumAstrologyQuery('What remedies should I do?')).toBe(true);
+      expect(isPremiumAstrologyQuery('Shani mahadasha effects')).toBe(true);
+    });
+
+    test('returns false for casual/horoscope queries', () => {
+      expect(isPremiumAstrologyQuery('Hello')).toBe(false);
+      expect(isPremiumAstrologyQuery("What's my horoscope?")).toBe(false);
+    });
+  });
+
+  describe('isCasualConversation', () => {
+    test('identifies greetings', () => {
+      expect(isCasualConversation('Hello')).toBe(true);
+      expect(isCasualConversation('Hi there!')).toBe(true);
+      expect(isCasualConversation('Hey')).toBe(true);
+      expect(isCasualConversation('Good morning')).toBe(true);
+      expect(isCasualConversation('Namaste')).toBe(true);
+    });
+
+    test('identifies thanks and feedback', () => {
+      expect(isCasualConversation('Thank you')).toBe(true);
+      expect(isCasualConversation('Thanks!')).toBe(true);
+      expect(isCasualConversation('Great answer')).toBe(true);
+    });
+
+    test('identifies profile updates', () => {
+      expect(isCasualConversation('My name is Priya')).toBe(true);
+      expect(isCasualConversation('I was born in Mumbai')).toBe(true);
+      expect(isCasualConversation('Born on Jan 15, 1990')).toBe(true);
+    });
+
+    test('returns false for astrology queries', () => {
+      expect(isCasualConversation('What is my horoscope?')).toBe(false);
+      expect(isCasualConversation('When will I get married?')).toBe(false);
+    });
+  });
+
+  describe('getQueryCreditCost', () => {
+    const config = {
+      credits_horoscope_cost: 2,
+      credits_premium_cost: 4
+    };
+
+    test('returns horoscope cost for horoscope queries', () => {
+      expect(getQueryCreditCost("Today's horoscope", config)).toBe(2);
+      expect(getQueryCreditCost('My zodiac reading', config)).toBe(2);
+    });
+
+    test('returns premium cost for premium queries', () => {
+      expect(getQueryCreditCost('My birth chart analysis', config)).toBe(4);
+      expect(getQueryCreditCost('When will I get married?', config)).toBe(4);
+    });
+
+    test('returns 0 for casual conversation', () => {
+      expect(getQueryCreditCost('Hello!', config)).toBe(0);
+      expect(getQueryCreditCost('Thank you', config)).toBe(0);
+    });
+
+    test('uses default config when not provided', () => {
+      expect(getQueryCreditCost("Today's horoscope")).toBe(2);
+      expect(getQueryCreditCost('Birth chart please')).toBe(4);
+      expect(getQueryCreditCost('Hi')).toBe(0);
+    });
+  });
+
+  describe('getQueryType', () => {
+    test('returns horoscope for daily horoscope queries', () => {
+      expect(getQueryType("What's my horoscope?")).toBe('horoscope');
+      expect(getQueryType('Daily rashifal')).toBe('horoscope');
+    });
+
+    test('returns premium for deep astrology queries', () => {
+      expect(getQueryType('My kundli analysis')).toBe('premium');
+      expect(getQueryType('Marriage prediction')).toBe('premium');
+    });
+
+    test('returns casual for greetings and profile', () => {
+      expect(getQueryType('Hello')).toBe('casual');
+      expect(getQueryType('My name is Raj')).toBe('casual');
     });
   });
 });

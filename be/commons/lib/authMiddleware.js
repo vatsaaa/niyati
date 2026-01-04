@@ -4,7 +4,9 @@ const { logger } = require('./logger');
 const { ErrorCodes } = require('./responses');
 
 // Cache validated tokens for short TTL to avoid repeated remote calls
-const cache = new NodeCache({ stdTTL: 30, checkperiod: 60 });
+// Disable checkperiod (0) so NodeCache does not create a background
+// interval which can keep the Node process alive during tests.
+const cache = new NodeCache({ stdTTL: 30, checkperiod: 0 });
 
 /**
  * Validate access token by calling bff-auth /api/v1/auth/validate

@@ -69,12 +69,20 @@ test.describe('Payment & Credit Flow', () => {
     let expectedNewCredits = initialCredits;
     if (REAL) {
       console.log(`Simulating payment of ${PAYMENT_AMOUNT} INR via API...`);
-      const response = await request.post(`${base}/api/v1/users/add-credits`, {
-        data: {
-          phoneNumber: TEST_PHONE,
-          amount: PAYMENT_AMOUNT
-        }
-      });
+      // Retry transient failures (e.g., 404 during service startup)
+      let response = null;
+      const maxAttempts = 3;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        response = await request.post(`${base}/api/v1/users/add-credits`, {
+          data: {
+            phoneNumber: TEST_PHONE,
+            amount: PAYMENT_AMOUNT
+          }
+        });
+        if (response.status() === 200) break;
+        console.warn(`Payment API attempt ${attempt} returned ${response.status()}, retrying...`);
+        await new Promise(r => setTimeout(r, 500 * attempt));
+      }
       expect(response.status()).toBe(200);
       const body = await response.json();
       // Trust backend-reported new total credits as the authoritative value

@@ -19,6 +19,7 @@ const { createRateLimiter } = require('./lib/rateLimiter');
 const createTelemetryRouter = require('./lib/telemetry');
 const { validateEnv, validateChecks, validateOrExit } = require('./lib/validateEnv');
 const { authenticateOrReject } = require('./lib/authMiddleware');
+const { registerShutdown, unregisterShutdown, shutdownAll } = require('./lib/shutdown');
 
 // Re-export config for services to use
 const config = require('./config');
@@ -39,6 +40,9 @@ module.exports = {
   validateChecks,
   validateOrExit,
   authenticateOrReject,
+  registerShutdown,
+  unregisterShutdown,
+  shutdownAll,
   config
 };
 

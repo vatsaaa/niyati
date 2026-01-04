@@ -23,6 +23,7 @@ export default defineConfig({
       drop: ['console', 'debugger']
     },
     rollupOptions: {
+      external: ['wink-nlp', 'wink-eng-lite-model', 'chrono-node'],
       output: {
         manualChunks(id) {
           if (id.includes('node_modules')) return 'vendor'

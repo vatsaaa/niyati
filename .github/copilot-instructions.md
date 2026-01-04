@@ -1,1029 +1,414 @@
-# Copilot / AI Agent Instructions for Niyati
+# Niyati — AI Agent Instructions
 
-> **Purpose**: Enable any AI coding agent (Claude, Gemini, GPT, etc.) to continue development of Niyati following the established patterns, conventions, and quality standards.
+AI-powered astrology platform. BFF architecture, JavaScript only.
 
----
-
-## Table of Contents
-1. [Architecture Overview](#architecture-overview)
-2. [Directory Structure](#directory-structure)
-3. [Coding Style & Conventions](#coding-style--conventions)
-4. [API Design Patterns](#api-design-patterns)
-5. [Testing Philosophy & Patterns](#testing-philosophy--patterns)
-6. [CI/CD Infrastructure](#cicd-infrastructure)
-7. [Database & Migrations](#database--migrations)
-8. [Docker & Deployment](#docker--deployment)
-9. [Feature Development Workflow](#feature-development-workflow)
-10. [Code Examples & Templates](#code-examples--templates)
-
----
-
-## Architecture Overview
-
-Niyati is an AI-powered astrology chat platform with a **BFF (Backend-for-Frontend) architecture**:
+## Architecture & Data Flow
 
 ```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   Browser   │────▶│    Caddy    │────▶│ bff-platform│────▶│     n8n     │
-│  (React UI) │◀────│  (Reverse   │◀────│  (Express)  │◀────│  (AI Agent) │
-└─────────────┘     │   Proxy)    │     └─────────────┘     └─────────────┘
-                    │             │     ┌─────────────┐     ┌─────────────┐
-                    │             │────▶│  bff-auth   │────▶│  PostgreSQL │
-                    └─────────────┘     │  (Express)  │     └─────────────┘
-                                        └─────────────┘     ┌─────────────┐
-                                        ┌─────────────┐     │    Redis    │
-                                        │   Worker    │◀────│   (Queue)   │
-                                        └─────────────┘     └─────────────┘
+Browser (React) → Caddy (proxy) → bff-platform/bff-auth → PostgreSQL
+                                         ↓
+                                    n8n (AI agent) ← Ollama (LLM)
+                                          
+Worker ← Redis (queue) — handles async jobs (email, etc.)
 ```
 
-### Core Components
+- **Pattern**: BFF-first. UI is a thin renderer — all business logic, billing, and validation happens server-side.
+- **Frontend**: React + Vite (ES modules: `import`/`export`)
+- **Backend**: Node.js + Express (CommonJS: `require`/`module.exports`)
+- **n8n**: Runs locally on port 5678 (NOT containerized). Handles AI orchestration, conversation memory, LLM prompt control.
 
-| Component | Port | Technology | Purpose |
-|-----------|------|------------|---------|
-| `ui` | 5173 | React + Vite | Single-page chat interface |
-| `bff-platform` | 3000 | Express.js | Chat, astrology, payments, telemetry |
-| `bff-auth` | 3001 | Express.js | Authentication, user management |
-| `caddy` | 80/443 | Caddy | Reverse proxy, SSL termination |
-| `postgres` | 5432 | PostgreSQL | Persistent data storage |
-| `redis` | 6379 | Redis | Session cache, job queue |
-| `worker` | - | Node.js | Background job processing |
-| `n8n` | 5678 | n8n (host) | AI workflow orchestration |
+### BFF-First Philosophy
 
-### Data Flow for Chat
-1. **UI** sends chat message to `/api/v1/chat` (BFF endpoint)
-2. **Caddy** routes to `bff-platform`
-3. **bff-platform** normalizes payload, computes derived fields (age from DOB), syncs to DB
-4. **bff-platform** forwards canonical payload to **n8n** webhook
-5. **n8n** orchestrates AI response via Ollama LLM
-6. Response flows back through chain to UI
+UI NEVER performs authoritative actions:
+- **Billing**: Only BFF/n8n decrements credits after validating `isBillable`. UI shows optimistic updates but waits for server confirmation.
+- **Validation**: BFF normalizes inputs (ISO dates, sanitization) and computes derived fields (`age`, `ageConfirmed`).
+- **Charges**: Must be idempotent (use `reqId`) to prevent double deductions on retry.
 
----
+Flow: `UI → n8n webhook (AI response) → UI calls BFF /chat/classify → UI calls BFF /deduct-credits → BFF deducts`
 
-## Directory Structure
+### Lightweight UI Principles
 
-```
-niyati/
-├── be/                          # Backend services
-│   ├── bff-platform/            # Platform BFF service
-│   │   ├── src/index.js         # Express server bootstrap
-│   │   ├── lib/                 # Route handlers & utilities
-│   │   │   ├── users.js         # User management routes
-│   │   │   ├── telemetry.js     # Health & logging routes
-│   │   │   ├── astrology.js     # Astrology calculation routes
-│   │   │   ├── geocode.js       # Location resolution
-│   │   │   └── queryClassifier.js # Message classification
-│   │   ├── services/            # External service integrations
-│   │   └── test/                # Jest unit tests
-│   ├── bff-auth/                # Auth BFF service
-│   │   ├── src/index.js         # Express server bootstrap
-│   │   ├── lib/                 # Auth routes (auth.js, users.js)
-│   │   └── test/                # Jest unit tests
-│   ├── commons/                 # Shared utilities (imported by BFFs)
-│   │   ├── index.js             # Main export
-│   │   ├── lib/
-│   │   │   ├── responses.js     # sendSuccess/sendError helpers
-│   │   │   ├── logger.js        # Pino logger configuration
-│   │   │   ├── sanitize.js      # Input sanitization
-│   │   │   └── rateLimiter.js   # Rate limiting utilities
-│   │   └── config/              # Configuration management
-│   ├── migrations/              # SQL migration files
-│   ├── scripts/                 # Shell scripts for operations
-│   └── worker/                  # Background job processor
-├── ui/                          # React frontend
-│   ├── src/
-│   │   ├── components/          # React components
-│   │   ├── hooks/               # Custom React hooks
-│   │   │   ├── useChat.js       # Main chat logic
-│   │   │   ├── useLogin.js      # Authentication flow
-│   │   │   └── __tests__/       # Vitest unit tests
-│   │   ├── services/            # API clients
-│   │   ├── utils/               # Utility functions
-│   │   └── config.js            # Environment configuration
-│   └── test/                    # Additional test utilities
-├── e2e/                         # Playwright E2E tests
-│   └── tests/                   # Test specifications
-├── scripts/                     # Deployment & CI scripts
-│   ├── deploy_niyati.sh         # Main deployment script
-│   └── ci-run-tests.sh          # CI test runner
-├── .github/
-│   └── workflows/               # GitHub Actions CI/CD
-├── docker-compose.yml           # Base compose configuration
-├── docker-compose.prod.yml      # Production overrides
-├── docker-compose.override.yml  # Development overrides
-├── Caddyfile                    # Reverse proxy configuration
-└── Makefile                     # Common commands
-```
+UI is a **thin rendering layer** — no heavy processing, NLP, or business logic:
 
----
+| ❌ Avoid in UI | ✅ Do in BFF |
+|----------------|---------------|
+| NLP/text classification (winkNLP) | Query classification via `/chat/classify` |
+| Credit calculations | `/users/deduct-credits` returns balance |
+| Date parsing/normalization | BFF normalizes to ISO format |
+| Complex validation | BFF validates and returns errors |
+| Direct DB queries | All data through BFF endpoints |
 
-## Coding Style & Conventions
+**Why**: Smaller bundle size, faster load times, single source of truth for business logic, easier testing.
 
-### Language & Module System
-- **JavaScript only** — no TypeScript (intentional for simplicity)
-- **ES Modules (ESM)** for frontend (`import/export`)
-- **CommonJS** for backend (`require/module.exports`)
-- Node.js 20+ required
+**Pattern**: UI calls BFF → BFF processes → UI renders result. If you're tempted to add a new npm dependency to UI for processing, consider if it belongs in bff-platform instead.
 
-### Naming Conventions
+## Key Directories
+
+| Purpose | Location |
+|---------|----------|
+| BFF routes | [be/bff-platform/lib/](be/bff-platform/lib/), [be/bff-auth/lib/](be/bff-auth/lib/) |
+| Shared utilities | [be/commons/](be/commons/) — logger, sanitize, ErrorCodes, responses |
+| Test helpers | [be/commons/test/helpers.js](be/commons/test/helpers.js) — `createTestApp`, `createMockDb` |
+| Frontend hooks | [ui/src/hooks/](ui/src/hooks/), services in [ui/src/services/api.js](ui/src/services/api.js) |
+| Migrations | [be/migrations/](be/migrations/) (format: `YYYYMMDD_XX_desc.up.sql`) |
+| E2E tests | [e2e/tests/](e2e/tests/) — Playwright browser tests |
+| CI/Deploy | [scripts/](scripts/) — **all** automation lives here |
+
+## Integration Points
+
+### n8n Workflow (AI Orchestration)
+- Runs on **local machine port 5678** — not in Docker
+- Receives chat messages via webhook, executes AI agent with Ollama LLM, returns `{output}`
+- Workflow definition: [be/n8n/NiyatiWorkflow.json](be/n8n/NiyatiWorkflow.json)
+- **CI uses mock**: [scripts/mock-n8n.js](scripts/mock-n8n.js) — simple HTTP server returning canned responses
+
+### Worker Service (Background Jobs)
+- Location: [be/worker/worker.js](be/worker/worker.js)
+- Polls Redis queue for jobs (`email`, webhooks)
+- Authenticates via `WORKER_TOKEN` from secrets
+- Uses `getSecret()` pattern for Docker secrets (`_FILE` env vars)
+
+### Secrets Pattern (Docker)
+
+Services use `getSecret(envVar, fileEnvVar)` to read secrets from files in production:
 
 ```javascript
-// Files: kebab-case
-// lib/query-classifier.js, utils/date-normalizer.js
+function getSecret(envVar, fileEnvVar) {
+  if (process.env[fileEnvVar]) {
+    return fs.readFileSync(process.env[fileEnvVar], 'utf8').trim();
+  }
+  return process.env[envVar];
+}
 
-// Variables & Functions: camelCase
-const userCredits = 10;
-function calculateAge(dob) { }
-
-// Constants: UPPER_SNAKE_CASE
-const MAX_RETRY_COUNT = 3;
-const API_VERSION = 'v1';
-
-// Database columns: snake_case
-// phone_number, date_of_birth, created_at
-
-// Environment variables: UPPER_SNAKE_CASE
-// DATABASE_URL, N8N_WEBHOOK_URL
+const WORKER_TOKEN = getSecret('WORKER_TOKEN', 'WORKER_TOKEN_FILE');
 ```
 
-### Code Organization Patterns
+- **Dev**: Set `WORKER_TOKEN=xxx` in `.env`
+- **Prod**: Mount secret file, set `WORKER_TOKEN_FILE=/run/secrets/worker_token`
+- Secrets location: [secrets/](secrets/) (gitignored in prod)
 
-**Backend Route Handler Pattern**:
+### Credits System
+
+**Schema** ([be/migrations/20251217_01_baseline.up.sql](be/migrations/20251217_01_baseline.up.sql)):
+- `credits`: Current balance (default: 10)
+- `credits_last_reset`: Monthly reset timestamp
+- `total_paid_amount`: Lifetime INR paid
+
+**Configuration** (from `app_config` table, cached 5 min):
+| Key | Default | Description |
+|-----|---------|-------------|
+| `credits_monthly_free` | 10 | Free credits per month |
+| `credits_horoscope_cost` | 2 | Cost for daily horoscope |
+| `credits_premium_cost` | 4 | Cost for birth chart/predictions |
+| `credits_low_threshold` | 4 | Show payment prompt when below |
+| `payment_amount_inr` | 500 | Payment amount (INR) |
+
+**Billing Flow** (see [ui/src/hooks/useChat.js](ui/src/hooks/useChat.js), [be/bff-platform/lib/queryClassifier.js](be/bff-platform/lib/queryClassifier.js)):
+1. UI sends message directly to n8n webhook, receives AI response
+2. UI calls `POST /api/v1/chat/classify` with `{message}` → BFF returns `{queryType, creditCost, isBillable}`
+3. If `isBillable`, UI calls `POST /api/v1/users/deduct-credits` with `{phoneNumber, amount: creditCost}`
+4. **BFF** deducts credits from DB, returns updated balance
+5. UI displays server-confirmed balance
+
+**Query Classification** (server-side in [be/bff-platform/lib/queryClassifier.js](be/bff-platform/lib/queryClassifier.js)):
+- `isHoroscopeQuery()`: horoscope, zodiac, rashifal → `credits_horoscope_cost` (2)
+- `isPremiumAstrologyQuery()`: birth chart, predictions, remedies → `credits_premium_cost` (4)
+- `isCasualConversation()`: greetings, profile info → no charge
+
+**Classification Endpoint**: `POST /api/v1/chat/classify`
+- Request: `{ message: string }`
+- Response: `{ queryType: 'casual'|'horoscope'|'premium', creditCost: number, isBillable: boolean, config }`
+
+**Monthly Reset**: Checked in `/users/identify` — if `credits_last_reset` is from a previous month, reset to `credits_monthly_free`.
+
+## Backend Route Pattern
+
+All BFF routes follow this structure ([be/bff-platform/lib/users.js](be/bff-platform/lib/users.js)):
+
 ```javascript
-// be/bff-platform/lib/users.js
-const express = require('express');
-const router = express.Router();
-const { logger, sanitize, ErrorCodes, config } = require('../../commons');
+const { logger, sanitize, ErrorCodes } = require('../../commons');
 
-// Route: POST /api/v1/users/deduct-credits
-router.post('/deduct-credits', async (req, res) => {
+router.post('/action', async (req, res) => {
   try {
     const db = req.app.get('db');
-    if (!db) {
-      return res.sendError(ErrorCodes.SERVICE_UNAVAILABLE, 'Database not available');
-    }
+    const { input } = req.body;
+    if (!input) return res.sendError(ErrorCodes.VALIDATION_ERROR, 'Input required');
     
-    const { phoneNumber, amount } = req.body;
+    const result = await db.query('SELECT * FROM items WHERE id = $1', [sanitize(input)]);
+    if (result.rowCount === 0) return res.sendError(ErrorCodes.NOT_FOUND, 'Not found');
     
-    // Input validation
-    if (!phoneNumber || typeof amount !== 'number') {
-      return res.sendError(ErrorCodes.VALIDATION_ERROR, 'phoneNumber and amount required');
-    }
-    
-    // Business logic
-    const result = await db.query(
-      'UPDATE users SET credits = GREATEST(0, credits - $2) WHERE phone_number = $1 RETURNING *',
-      [sanitize(phoneNumber), amount]
-    );
-    
-    if (result.rowCount === 0) {
-      return res.sendError(ErrorCodes.NOT_FOUND, 'User not found');
-    }
-    
-    // Success response
-    return res.sendSuccess({ credits: result.rows[0].credits });
+    logger.info({ msg: 'action_success', id: input });
+    return res.sendSuccess({ data: result.rows[0] });
   } catch (err) {
-    logger.error({ msg: 'deduct_credits_failed', err: err.stack });
-    return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Failed to deduct credits');
+    logger.error({ msg: 'action_failed', err: err.stack });
+    return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Failed');
   }
 });
-
-module.exports = router;
 ```
 
-**Frontend Hook Pattern**:
+## Frontend Hook Pattern
+
+All hooks use `bffFetchWithRetry` ([ui/src/hooks/useChat.js](ui/src/hooks/useChat.js)):
+
 ```javascript
-// ui/src/hooks/useChat.js
-import { useState } from 'react';
 import { bffFetchWithRetry } from '../services/api';
 
-export function useChat(profile, updateProfile, addMessage, auth) {
-  const [isLoading, setIsLoading] = useState(false);
-
-  const handleSend = async (text, onComplete) => {
-    if (!text?.trim()) return;
-    
-    setIsLoading(true);
-    try {
-      // Add user message immediately (optimistic UI)
-      addMessage({
-        id: Date.now(),
-        text: text.trim(),
-        sender: 'user',
-        timestamp: new Date()
-      });
-
-      // Call BFF endpoint
-      const response = await bffFetchWithRetry('/api/v1/chat', {
-        method: 'POST',
-        body: JSON.stringify({ message: text, sessionId: auth.phoneNumber })
-      });
-
-      // Add bot response
-      if (response?.data?.n8nResponse?.output) {
-        addMessage({
-          id: Date.now() + 1,
-          text: response.data.n8nResponse.output,
-          sender: 'bot',
-          timestamp: new Date()
-        });
-      }
-    } catch (err) {
-      console.error('Chat error:', err);
-      addMessage({
-        id: Date.now() + 1,
-        text: 'Sorry, I encountered an error. Please try again.',
-        sender: 'bot',
-        timestamp: new Date()
-      });
-    } finally {
-      setIsLoading(false);
-      onComplete?.();
-    }
+export function useMyFeature() {
+  const performAction = async (payload) => {
+    const res = await bffFetchWithRetry('/api/v1/resource/action', {
+      method: 'POST', body: JSON.stringify(payload)
+    });
+    return res.data;
   };
-
-  return { handleSend, isLoading };
+  return { performAction };
 }
 ```
 
-### Error Handling Philosophy
-
-1. **Always use try/catch** for async operations
-2. **Use standardized error codes** from `ErrorCodes` enum
-3. **Log errors with context** for debugging
-4. **Return user-friendly messages** — never expose stack traces
-5. **Graceful degradation** — continue operation when possible
-
-```javascript
-// Good: Comprehensive error handling
-try {
-  const result = await db.query(sql, params);
-  return res.sendSuccess(result.rows);
-} catch (err) {
-  logger.error({ msg: 'query_failed', sql, err: err.message });
-  return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Database operation failed');
-}
-
-// Bad: Letting errors propagate unhandled
-const result = await db.query(sql, params); // Could crash server!
-```
-
-### Response Format Standards
-
-All API responses use consistent format via `res.sendSuccess()` / `res.sendError()`:
-
-```javascript
-// Success response
-{
-  "status": "ok",
-  "data": { /* payload */ },
-  "meta": { /* optional pagination, etc. */ }
-}
-
-// Error response
-{
-  "status": "error",
-  "error": {
-    "code": "VALIDATION_ERROR",
-    "message": "phoneNumber is required",
-    "details": { /* optional */ }
-  }
-}
-```
-
----
-
-## API Design Patterns
-
-### URL Structure
-```
-/api/v1/{resource}/{action}
-
-Examples:
-POST /api/v1/chat                    # Send chat message
-POST /api/v1/users/identify          # Identify user by phone
-POST /api/v1/users/deduct-credits    # Deduct user credits
-GET  /api/v1/telemetry/health        # Health check
-```
-
-### Request/Response Patterns
-
-**Idempotent Operations** (use request IDs):
-```javascript
-// Request
-POST /api/v1/users/deduct-credits
-Headers: { "X-Idempotency-Key": "uuid-here" }
-Body: { "phoneNumber": "+91-9876543210", "amount": 2 }
-
-// Implementation checks if idempotency key was already processed
-const existing = await db.query(
-  'SELECT * FROM charge_transactions WHERE request_id = $1',
-  [idempotencyKey]
-);
-if (existing.rowCount > 0) {
-  return res.sendSuccess({ credits: existing.rows[0].credits_after, cached: true });
-}
-```
-
-**Health Check Endpoint** (required for all services):
-```javascript
-// GET /api/v1/telemetry/health
-router.get('/health', (req, res) => {
-  res.sendSuccess({
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime()
-  });
-});
-```
-
----
-
-## Testing Philosophy & Patterns
-
-### Test Pyramid
-```
-        ┌───────────────┐
-        │     E2E       │  ← Few, slow, high-value
-        │  (Playwright) │
-        ├───────────────┤
-        │  Integration  │  ← Moderate count
-        │    (Jest)     │
-        ├───────────────┤
-        │     Unit      │  ← Many, fast
-        │ (Jest/Vitest) │
-        └───────────────┘
-```
+## Testing
 
 ### Backend Unit Tests (Jest)
 
-Location: `be/bff-platform/test/*.test.js`
+Location: `be/bff-platform/test/`, `be/bff-auth/test/`
 
-**Pattern: Mock dependencies, test route handlers**
+Use `createTestApp` and `createMockDb` from [be/commons/test/helpers.js](be/commons/test/helpers.js). These wire up `res.sendSuccess`/`res.sendError` automatically via `attachResponseHelpers` middleware.
 
 ```javascript
-// be/bff-platform/test/credits.test.js
 const request = require('supertest');
-const express = require('express');
+const { createTestApp, createMockDb, createMockCommons } = require('@test-helpers');
 
-describe('credits endpoints', () => {
+describe('My Feature', () => {
   let app;
 
   beforeEach(() => {
     jest.resetModules();
+    // Mock commons to isolate from real logger/config
+    jest.mock('../commons', () => createMockCommons());
     
-    // Mock commons — keep real response helpers, mock logger
-    jest.mock('../commons', () => {
-      const responses = require('../../commons/lib/responses');
-      return {
-        logger: { warn: jest.fn(), error: jest.fn(), info: jest.fn() },
-        sanitize: v => v,
-        ErrorCodes: responses.ErrorCodes,
-        config: {}
-      };
-    });
-
-    // Setup Express app with router under test
-    const router = require('../lib/users');
-    app = express();
-    app.use(express.json());
-    const { attachResponseHelpers } = require('../../commons/lib/responses');
-    app.use('/api/v1/users', attachResponseHelpers, router);
+    const router = require('../lib/my-feature');
+    // createTestApp mounts router with attachResponseHelpers middleware
+    ({ app } = createTestApp('/api/v1/my-feature', router));
   });
 
   afterEach(() => jest.restoreAllMocks());
 
-  test('POST /deduct-credits reduces credits when sufficient', async () => {
-    // Create fake database
-    const fakeDb = {
-      async query(sql, params) {
-        if (sql.trim().toUpperCase().startsWith('UPDATE USERS')) {
-          return { rows: [{ id: 1, credits: 3 }], rowCount: 1 };
-        }
-        return { rows: [], rowCount: 0 };
-      }
-    };
-    app.set('db', fakeDb);
-
+  test('POST /action returns success', async () => {
+    // createMockDb accepts static result or custom handler function
+    const mockDb = createMockDb({ rows: [{ id: 1 }], rowCount: 1 });
+    app.set('db', mockDb);
+    
     const res = await request(app)
-      .post('/api/v1/users/deduct-credits')
-      .send({ phoneNumber: '+91-1234', amount: 2 });
-
+      .post('/api/v1/my-feature/action')
+      .send({ input: 'test' });
+    
     expect(res.statusCode).toBe(200);
     expect(res.body.status).toBe('ok');
-    expect(res.body.data).toHaveProperty('credits', 3);
+    expect(res.body.data).toHaveProperty('id', 1);
   });
 
-  test('POST /deduct-credits returns error for missing phone', async () => {
-    app.set('db', { query: jest.fn() });
-
-    const res = await request(app)
-      .post('/api/v1/users/deduct-credits')
-      .send({ amount: 2 }); // Missing phoneNumber
-
-    expect(res.statusCode).toBe(400);
-    expect(res.body.status).toBe('error');
-    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+  test('POST /action with custom DB handler', async () => {
+    // Handler function for complex query logic
+    const mockDb = createMockDb(async (sql, params) => {
+      if (sql.includes('INSERT')) return { rows: [{ id: 99 }], rowCount: 1 };
+      return { rows: [], rowCount: 0 };
+    });
+    app.set('db', mockDb);
+    
+    const res = await request(app).post('/api/v1/my-feature/action').send({ input: 'new' });
+    expect(res.body.data.id).toBe(99);
   });
 });
 ```
-
-**Key Jest Patterns**:
-- Use `jest.resetModules()` in `beforeEach` to reset module state
-- Mock `commons` to control logger behavior
-- Use `supertest` for HTTP testing
-- Create fake DB objects that return expected results
-- Run with `--runInBand` to avoid parallel DB conflicts
-
-### Frontend Unit Tests (Vitest)
-
-Location: `ui/src/hooks/__tests__/*.test.js`
-
-**Pattern: Test hooks via React test harness**
-
-```javascript
-// ui/src/hooks/__tests__/useChat.test.js
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render } from '@testing-library/react';
-import React, { forwardRef, useImperativeHandle } from 'react';
-import { act } from 'react';
-
-// Mock external dependencies
-vi.mock('../../utils/profileExtractor', () => ({
-  extractProfileFields: vi.fn(async () => ({}))
-}));
-vi.mock('../../services/geo', () => ({
-  resolveLocationAndTimezone: vi.fn()
-}));
-vi.mock('../../services/api', () => ({
-  bffFetchWithRetry: vi.fn(),
-  sendClientLog: vi.fn()
-}));
-vi.mock('../../config', () => ({
-  N8N_WEBHOOK_URL: 'https://n8n.test/webhook',
-  N8N_WEBHOOK_FALLBACK_URL: ''
-}));
-
-import { useChat } from '../useChat';
-
-// Test harness to access hook methods
-function HookHarness({ profile, updateProfile, addMessage, auth }, ref) {
-  const { handleSend, isLoading } = useChat(profile, updateProfile, addMessage, auth);
-  useImperativeHandle(ref, () => ({ handleSend, isLoading }));
-  return null;
-}
-const Harness = forwardRef(HookHarness);
-
-describe('useChat', () => {
-  beforeEach(() => {
-    vi.restoreAllMocks();
-    try { localStorage.clear(); } catch (e) {}
-  });
-
-  it('does nothing for empty input', async () => {
-    const addMessage = vi.fn();
-    const ref = React.createRef();
-    
-    render(React.createElement(Harness, {
-      ref,
-      profile: {},
-      updateProfile: vi.fn(),
-      addMessage,
-      auth: { countries: [], phoneNumber: '+1-111' }
-    }));
-
-    await act(async () => {
-      await ref.current.handleSend('   ', () => {});
-    });
-
-    expect(addMessage).not.toHaveBeenCalled();
-  });
-
-  it('adds user message and calls API', async () => {
-    const addMessage = vi.fn();
-    const ref = React.createRef();
-    
-    // Mock fetch to return bot response
-    vi.spyOn(global, 'fetch').mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        status: 'ok',
-        data: { n8nResponse: { output: 'Hello from bot!' } }
-      })
-    });
-
-    render(React.createElement(Harness, {
-      ref,
-      profile: { user_name: 'Test' },
-      updateProfile: vi.fn(),
-      addMessage,
-      auth: { countries: [], phoneNumber: '+1-111' }
-    }));
-
-    await act(async () => {
-      await ref.current.handleSend('Hello', () => {});
-    });
-
-    // Verify user message was added
-    expect(addMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ sender: 'user', text: 'Hello' })
-    );
-  });
-});
-```
-
-**Key Vitest Patterns**:
-- Use `vi.mock()` at module level for dependencies
-- Use `forwardRef` + `useImperativeHandle` to expose hook methods
-- Wrap async hook calls in `act()`
-- Use `vi.spyOn(global, 'fetch')` to mock fetch calls
-- Clear localStorage in `beforeEach`
 
 ### E2E Tests (Playwright)
 
-Location: `e2e/tests/*.spec.js`
+Location: [e2e/tests/](e2e/tests/)
 
-**Pattern: Stub API routes, test user flows**
+E2E tests run against the full stack with route interception for deterministic behavior:
 
 ```javascript
-// e2e/tests/identify_chat.spec.js
 const { test, expect } = require('@playwright/test');
 
-const PHONE = process.env.E2E_PHONE || '9992223333';
-
-test('ui identify -> chat -> credits deducted', async ({ page, baseURL }) => {
-  const base = process.env.BASE_URL || baseURL || 'http://127.0.0.1';
-  await page.goto(base + '/');
-
-  // Track credits in memory for stubbing
-  let creditsValue = 10;
-
-  // Stub API endpoints
+test('user flow with stubbed API', async ({ page, baseURL }) => {
+  // Stub API responses for deterministic tests
   await page.route('**/api/v1/users/identify', route => {
     route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
         status: 'ok',
-        data: {
-          returning: true,
-          user: {
-            id: '1',
-            name: 'Test User',
-            phone_number: `+91-${PHONE}`,
-            credits: creditsValue
-          }
-        }
+        data: { returning: true, user: { id: 1, credits: 10 } }
       })
     });
   });
 
-  await page.route('**/api/v1/users/deduct-credits', async (route, request) => {
-    const post = JSON.parse(request.postData() || '{}');
-    creditsValue = Math.max(0, creditsValue - (post.amount || 2));
-    await route.fulfill({
+  // Stub n8n webhook (always stub external services)
+  await page.route('**/webhook/**', route => {
+    route.fulfill({
       status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ status: 'ok', data: { credits: creditsValue } })
+      body: JSON.stringify({ output: "Today's horoscope..." })
     });
   });
 
-  // Stub n8n webhook
-  await page.route('**/webhook/**', async route => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ output: "Today's horoscope looks great!" })
-    });
-  });
-
-  // Perform login flow
-  await page.waitForSelector('text=Begin Your Journey');
-  await page.fill('input[type="tel"]', PHONE);
-  await page.click('text=Begin Your Journey');
-
-  // Wait for chat interface
-  await page.waitForSelector('[data-testid="chat-input"]', { timeout: 10000 });
-
-  // Send chat message
-  await page.fill('[data-testid="chat-input"]', "What's my horoscope?");
-  await page.click('[data-testid="send-button"]');
-
-  // Verify bot response appears
-  await expect(page.locator('text=horoscope')).toBeVisible({ timeout: 15000 });
-
-  // Verify credits were deducted
-  expect(creditsValue).toBeLessThan(10);
+  await page.goto(baseURL + '/');
+  // ... interact with UI and assert
 });
 ```
 
-**Key Playwright Patterns**:
-- Use `page.route()` to intercept and stub API calls
-- Use in-memory variables to track state changes
-- Wait for elements with explicit timeouts
-- Use `data-testid` attributes for reliable element selection
-- Support both stubbed and real (`REAL=1`) modes
+**REAL mode**: Set `REAL=1` to run against actual stack (CI). Only n8n webhook is stubbed.
 
----
+## TDD/BDD Development Workflow
 
-## CI/CD Infrastructure
+⚠️ **MANDATORY: Every code change MUST follow Test-Driven Development. No code without tests first.**
 
-### GitHub Actions Workflows
+### The TDD Cycle (Red-Green-Refactor)
 
-**Main CI Pipeline** (`.github/workflows/ci.yml`):
-```yaml
-name: CI
-on:
-  push:
-    branches: [main, master]
-  pull_request:
-    branches: [main, master]
+1. **Write test first** — Define expected behavior BEFORE writing any implementation
+2. **Run test (RED)** — Verify test fails for the right reason (not syntax error)
+3. **Implement minimal code (GREEN)** — Just enough to pass the test
+4. **Refactor** — Clean up while keeping tests green
+5. **Run full test suite** — Ensure no regressions
+6. **Repeat** — Add next test case
 
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: '**/package-lock.json'
+### AI Agent Requirements
 
-      - name: Install Dependencies
-        run: npm ci
+When implementing features or fixing bugs, AI agents MUST:
 
-      - name: Run Full Test Suite
-        run: ./scripts/ci-run-tests.sh
+1. **Identify test file** — Locate or create the appropriate test file first
+2. **Write failing test** — Add test case that captures the requirement/bug
+3. **Verify RED** — Run test to confirm it fails (proves test is valid)
+4. **Implement code** — Write minimal code to make test pass
+5. **Verify GREEN** — Run test to confirm it passes
+6. **Run CI** — Execute `./scripts/ci-run-tests.sh` before considering work complete
 
-      - name: Run E2E Tests
-        env:
-          REAL: '1'
-          BASE_URL: 'http://127.0.0.1:5173'
-        run: |
-          cd e2e
-          npm ci
-          npx playwright install --with-deps chromium
-          npx playwright test --project=api
+**Never skip tests**. If asked to "just fix it quickly", still write the test first.
 
-      - name: Upload Traces on Failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-traces
-          path: e2e/test-results/
-```
+### Backend (Jest)
 
-**CI Test Runner** (`scripts/ci-run-tests.sh`):
-1. Start Docker Compose stack with mock n8n
-2. Wait for Postgres to be ready
-3. Apply migrations and seed data
-4. Run backend unit tests against real DB
-5. Run E2E tests
-6. Tear down stack
-
-### Required CI Checks
-- All backend unit tests pass
-- All frontend unit tests pass
-- E2E tests pass
-- No lint errors
-- Bundle size under threshold
-
----
-
-## Database & Migrations
-
-### Migration File Convention
-```
-be/migrations/YYYYMMDD_XX_description.up.sql
-
-Examples:
-20251217_01_baseline.up.sql
-20251217_02_baseline_seed.sql
-20260102_01_add_charge_transactions.up.sql
-```
-
-### Migration Pattern
-```sql
--- 20260102_01_add_charge_transactions.up.sql
--- Purpose: Add idempotency tracking for credit charges
-
-CREATE TABLE IF NOT EXISTS charge_transactions (
-    id SERIAL PRIMARY KEY,
-    request_id VARCHAR(64) UNIQUE NOT NULL,
-    phone_number VARCHAR(32) NOT NULL,
-    amount INTEGER NOT NULL,
-    credits_before INTEGER,
-    credits_after INTEGER,
-    created_at TIMESTAMP DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_charge_transactions_phone 
-ON charge_transactions(phone_number);
-
--- Migration runs idempotently via CREATE IF NOT EXISTS
-```
-
-### Core Tables
-- `users` — User profiles (phone, DOB, credits, etc.)
-- `charge_transactions` — Idempotent credit operations
-- `refresh_tokens` — JWT refresh token storage
-- `password_resets` — Password reset tokens
-- `oauth_accounts` — OAuth provider links
-- `app_config` — Runtime configuration
-
----
-
-## Docker & Deployment
-
-### Compose File Strategy
-```
-docker-compose.yml          # Base configuration (always loaded)
-docker-compose.override.yml # Development defaults (auto-loaded)
-docker-compose.prod.yml     # Production overrides (explicit)
-docker-compose.e2e.yml      # E2E test overrides (explicit)
-docker-compose.ci.yml       # CI environment overrides
-```
-
-### Deployment Commands
 ```bash
-# Fresh production deployment
-./scripts/deploy_niyati.sh --env=prod --action=fresh -y
+# Run specific test file in watch mode while developing
+cd be/bff-platform && npm test -- --watch queryClassifier.test.js
 
-# Regular production deploy
-./scripts/deploy_niyati.sh --env=prod --action=deploy
-
-# Development mode
-docker compose up -d
-
-# View logs
-docker compose logs -f bff-platform
-
-# Run E2E tests
-make e2e
-```
-
-### Health Check Pattern
-All services expose `/api/v1/telemetry/health` for Docker healthchecks:
-
-```yaml
-# docker-compose.yml
-healthcheck:
-  test: ["CMD-SHELL", "/usr/local/bin/healthcheck-http.sh http://localhost:3000/api/v1/telemetry/health"]
-  interval: 30s
-  timeout: 10s
-  retries: 3
-  start_period: 40s
-```
-
----
-
-## Feature Development Workflow
-
-### Adding a New Backend Endpoint
-
-1. **Create/update route handler** in `be/bff-platform/lib/`
-2. **Follow the standard pattern**:
-   - Get DB from `req.app.get('db')`
-   - Validate inputs
-   - Use `res.sendSuccess()` / `res.sendError()`
-   - Log operations with `logger.info/warn/error`
-3. **Add unit test** in `be/bff-platform/test/`
-4. **Update Caddyfile** if new route prefix
-5. **Run tests**: `cd be/bff-platform && npm test`
-
-### Adding a New UI Feature
-
-1. **Create component** in `ui/src/components/`
-2. **Create hook** if complex logic in `ui/src/hooks/`
-3. **Add unit test** in `ui/src/hooks/__tests__/` or `ui/src/components/__tests__/`
-4. **Run tests**: `cd ui && npm test`
-
-### Adding Database Changes
-
-1. **Create migration** in `be/migrations/YYYYMMDD_XX_description.up.sql`
-2. **Use CREATE IF NOT EXISTS** for idempotency
-3. **Update affected queries** in route handlers
-4. **Test locally**: `docker compose down -v && docker compose up -d`
-
-### Checklist Before PR
-
-- [ ] Unit tests added/updated and passing
-- [ ] No lint errors (`npm run lint`)
-- [ ] Works in Docker: `docker compose up -d`
-- [ ] API responses use `sendSuccess`/`sendError`
-- [ ] Errors logged with context
-- [ ] New env vars documented
-- [ ] Migration idempotent (CREATE IF NOT EXISTS)
-
----
-
-## Code Examples & Templates
-
-### New Route Handler Template
-```javascript
-// be/bff-platform/lib/{resource}.js
-const express = require('express');
-const router = express.Router();
-const { logger, sanitize, ErrorCodes } = require('../../commons');
-
-/**
- * POST /api/v1/{resource}/{action}
- * Description of what this endpoint does
- */
-router.post('/{action}', async (req, res) => {
-  try {
-    const db = req.app.get('db');
-    if (!db) {
-      return res.sendError(ErrorCodes.SERVICE_UNAVAILABLE, 'Database unavailable');
-    }
-
-    // 1. Extract and validate input
-    const { field1, field2 } = req.body;
-    if (!field1) {
-      return res.sendError(ErrorCodes.VALIDATION_ERROR, 'field1 is required');
-    }
-
-    // 2. Business logic
-    const result = await db.query('SELECT * FROM table WHERE id = $1', [field1]);
-    
-    if (result.rowCount === 0) {
-      return res.sendError(ErrorCodes.NOT_FOUND, 'Resource not found');
-    }
-
-    // 3. Log for observability
-    logger.info({ msg: '{action}_success', field1 });
-
-    // 4. Return success
-    return res.sendSuccess({ data: result.rows[0] });
-  } catch (err) {
-    logger.error({ msg: '{action}_failed', err: err.stack });
-    return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Operation failed');
-  }
-});
-
-module.exports = router;
-```
-
-### New Unit Test Template
-```javascript
-// be/bff-platform/test/{resource}.test.js
-const request = require('supertest');
-const express = require('express');
-
-describe('{resource} endpoints', () => {
-  let app;
-
-  beforeEach(() => {
-    jest.resetModules();
-    jest.mock('../commons', () => {
-      const responses = require('../../commons/lib/responses');
-      return {
-        logger: { warn: jest.fn(), error: jest.fn(), info: jest.fn() },
-        sanitize: v => v,
-        ErrorCodes: responses.ErrorCodes,
-        config: {}
-      };
-    });
-
-    const router = require('../lib/{resource}');
-    app = express();
-    app.use(express.json());
-    const { attachResponseHelpers } = require('../../commons/lib/responses');
-    app.use('/api/v1/{resource}', attachResponseHelpers, router);
-  });
-
-  afterEach(() => jest.restoreAllMocks());
-
-  test('POST /{action} succeeds with valid input', async () => {
-    const fakeDb = {
-      async query(sql, params) {
-        return { rows: [{ id: 1 }], rowCount: 1 };
-      }
-    };
-    app.set('db', fakeDb);
-
-    const res = await request(app)
-      .post('/api/v1/{resource}/{action}')
-      .send({ field1: 'value' });
-
-    expect(res.statusCode).toBe(200);
-    expect(res.body.status).toBe('ok');
-  });
-
-  test('POST /{action} returns error for missing field', async () => {
-    app.set('db', { query: jest.fn() });
-
-    const res = await request(app)
-      .post('/api/v1/{resource}/{action}')
-      .send({});
-
-    expect(res.statusCode).toBe(400);
-    expect(res.body.error.code).toBe('VALIDATION_ERROR');
-  });
-});
-```
-
-### New Frontend Hook Test Template
-```javascript
-// ui/src/hooks/__tests__/{hook}.test.js
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render } from '@testing-library/react';
-import React, { forwardRef, useImperativeHandle } from 'react';
-import { act } from 'react';
-
-vi.mock('../../services/api', () => ({
-  bffFetchWithRetry: vi.fn()
-}));
-
-import { useMyHook } from '../{hook}';
-
-function HookHarness(props, ref) {
-  const hookResult = useMyHook(props.arg1, props.arg2);
-  useImperativeHandle(ref, () => hookResult);
-  return null;
-}
-const Harness = forwardRef(HookHarness);
-
-describe('useMyHook', () => {
-  beforeEach(() => {
-    vi.restoreAllMocks();
-    try { localStorage.clear(); } catch (e) {}
-  });
-
-  it('returns expected initial state', () => {
-    const ref = React.createRef();
-    render(React.createElement(Harness, { ref, arg1: 'test', arg2: {} }));
-    
-    expect(ref.current.someValue).toBeDefined();
-  });
-
-  it('handles async operation', async () => {
-    const ref = React.createRef();
-    render(React.createElement(Harness, { ref, arg1: 'test', arg2: {} }));
-
-    await act(async () => {
-      await ref.current.asyncMethod();
-    });
-
-    expect(ref.current.result).toBe('expected');
-  });
-});
-```
-
----
-
-## Key Files Reference
-
-| File | Purpose |
-|------|---------|
-| `be/commons/lib/responses.js` | API response helpers (`sendSuccess`, `sendError`, `ErrorCodes`) |
-| `be/commons/lib/logger.js` | Pino logger configuration |
-| `be/bff-platform/src/index.js` | Platform server bootstrap |
-| `be/bff-platform/lib/users.js` | User management routes |
-| `ui/src/hooks/useChat.js` | Main chat logic hook |
-| `ui/src/hooks/useLogin.js` | Authentication flow hook |
-| `scripts/deploy_niyati.sh` | Deployment script with fresh/clean/deploy actions |
-| `scripts/ci-run-tests.sh` | CI test runner |
-| `Caddyfile` | Reverse proxy routing configuration |
-| `docker-compose.yml` | Base Docker configuration |
-
----
-
-## Quick Reference
-
-### Run Tests
-```bash
-# Backend unit tests
+# Run all backend tests
 cd be/bff-platform && npm test
 cd be/bff-auth && npm test
 
-# Frontend unit tests
-cd ui && npm test
-
-# E2E tests
-cd e2e && npm test
-# or
-make e2e
+# Check coverage (should maintain or improve)
+cd be/bff-platform && npm test -- --coverage
 ```
 
-### Common Commands
+**Test file naming**: `<module>.test.js` in `test/` directory.
+
+**Coverage requirement**: New code should maintain or improve coverage.
+
+### E2E (Playwright - BDD style)
+
+E2E tests describe user behavior scenarios:
+
+```javascript
+test('user sees payment prompt when credits are low', async ({ page }) => {
+  // Given: user has low credits
+  await stubIdentifyResponse(page, { credits: 2 });
+  
+  // When: user sends a premium query
+  await page.goto('/');
+  await page.fill('[data-testid=chat-input]', 'My birth chart');
+  await page.click('[data-testid=send-button]');
+  
+  // Then: payment prompt appears
+  await expect(page.locator('[data-testid=payment-prompt]')).toBeVisible();
+});
+```
+
 ```bash
-# Start development stack
-docker compose up -d
+# Run E2E tests
+cd e2e && npx playwright test
 
-# Fresh production deploy
-./scripts/deploy_niyati.sh --env=prod --action=fresh -y
+# Run specific test file
+cd e2e && npx playwright test credits_threshold.spec.js
 
-# View logs
-docker compose logs -f bff-platform
-
-# Check service health
-curl http://localhost/api/v1/telemetry/health
-
-# Access database
-docker exec -it niyati-postgres-prod psql -U niyati -d niyati_dev
+# Debug mode with browser visible
+cd e2e && npx playwright test --headed --debug
 ```
 
----
+### When Adding New Features (TDD Checklist)
 
-*This codebase was developed using Claude Opus 4.5 with GitHub Copilot. Follow these patterns to maintain consistency.*
+| Change Type | Step 1: Write Test | Step 2: Implement | Step 3: Verify |
+|-------------|-------------------|-------------------|----------------|
+| **New BFF endpoint** | Add test in `be/bff-*/test/` using `createTestApp`/`createMockDb` | Implement route in `lib/` | Run `npm test` |
+| **New UI hook** | Add unit test or E2E spec | Implement hook | Run E2E tests |
+| **Query classification** | Add test case in `queryClassifier.test.js` | Update classifier | Run `npm test` |
+| **Bug fix** | Write failing test that reproduces bug | Fix the code | Verify test passes |
+| **Any change** | — | — | Run `./scripts/ci-run-tests.sh` |
+
+**Workflow for Bug Fixes:**
+```bash
+# 1. Write test that reproduces the bug (should FAIL)
+cd be/bff-platform && npm test -- queryClassifier.test.js
+
+# 2. Implement fix
+# ... edit code ...
+
+# 3. Verify test now passes
+cd be/bff-platform && npm test -- queryClassifier.test.js
+
+# 4. Run full CI before committing
+./scripts/ci-run-tests.sh
+```
+
+## Commands
+
+| Task | Command |
+|------|---------|
+| **Run CI locally** | `./scripts/ci-run-tests.sh` |
+| Backend tests (platform) | `cd be/bff-platform && npm test` |
+| Backend tests (auth) | `cd be/bff-auth && npm test` |
+| E2E tests | `cd e2e && npx playwright test` |
+| Start dev UI | `cd ui && npm run dev` |
+| Deploy | `./scripts/deploy_niyati.sh --env=prod --action=deploy` |
+| Dev stack | `docker compose up -d` |
+| CI stack (manual) | `docker compose --env-file .env.ci -f docker-compose.yml -f docker-compose.ci.yml up -d` |
+| Start mock n8n | `node scripts/mock-n8n.js` |
+| Check CI ports | `lsof -i :6173 -i :4000 -i :4001` |
+
+## Critical Rules
+
+1. **SQL**: Always parameterized (`$1`, `$2`). Never concatenate strings.
+2. **Async**: All async code wrapped in try/catch with proper error responses.
+3. **Migrations**: Use `CREATE TABLE IF NOT EXISTS`. Name: `YYYYMMDD_XX_desc.up.sql`.
+4. **CI**: Logic lives in [scripts/ci-run-tests.sh](scripts/ci-run-tests.sh), not GitHub workflow YAML.
+5. **Billing**: Server-side only. UI displays but never performs authoritative charges.
+6. **TDD Required**: All code changes MUST have tests written FIRST. No exceptions.
+
+## Environment Configs
+
+- **Dev**: `docker-compose.yml` + `docker-compose.override.yml`
+- **Prod**: `docker-compose.yml` + `docker-compose.prod.yml`
+- **CI**: `docker-compose.yml` + `docker-compose.ci.yml` + `.env.ci` (uses mock-n8n)
+
+### Port Configuration (CI vs Dev/Prod)
+
+CI uses separate ports to avoid conflicts when running alongside dev environment:
+
+| Service | Dev/Prod | CI | Notes |
+|---------|----------|-----|-------|
+| Caddy (UI) | 5173 | **6173** | External browser access |
+| BFF Platform | 3000 | **4000** | Internal container port |
+| BFF Auth | 3001 | **4001** | Internal container port |
+| Postgres | 5432 | **56432** | External for test seeding |
+| Redis | 6379 | **7379** | External for debugging |
+| n8n/mock | 5678 | **6678** | External for debugging |
+
+**Key Files**:
+- [.env.ci](.env.ci) — CI-specific environment variables and ports
+- [docker-compose.ci.yml](docker-compose.ci.yml) — CI overlay with port mapping and mock-n8n
+
+**Running CI locally**:
+```bash
+# Full CI suite (recommended)
+./scripts/ci-run-tests.sh
+
+# Manual Docker compose with CI config
+docker compose --env-file .env.ci -f docker-compose.yml -f docker-compose.ci.yml up -d
+```
+
+**Important**: When `bff-auth` calls `bff-platform` internally, it uses `BFF_PLATFORM_BASE` environment variable. In CI, this is set to `http://bff-platform:4000/api/v1` to match the CI port.
