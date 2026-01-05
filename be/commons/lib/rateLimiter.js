@@ -46,7 +46,7 @@ function createRateLimiter(cfg = {}) {
   });
 
   const passwordReset = makeLimiter({
-    windowMs: general.windowMs || 60 * 60 * 1000,
+    windowMs: general.passwordResetWindowMs || 60 * 60 * 1000,
     max: general.passwordResetMax || 3,
     message: { status: 'error', error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many password reset requests, please try again later' } }
   });
