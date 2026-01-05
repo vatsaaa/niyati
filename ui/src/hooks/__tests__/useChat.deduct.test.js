@@ -49,8 +49,13 @@ describe('useChat deduction flow', () => {
         // return updated credits = 8
         return { ok: true, json: async () => ({ data: { credits: 8 } }) };
       }
-      // geocode current-location or profile save
-      return { ok: true, json: async () => ({ status: 'ok', data: {} }) };
+      // geocode current-location or profile save OR webhook call
+      // Ensure text() is available for webhook response handling
+      return {
+        ok: true,
+        json: async () => ({ status: 'ok', data: {} }),
+        text: async () => JSON.stringify({ output: 'stubbed response' })
+      };
     });
 
     const ref = React.createRef();

@@ -5,8 +5,23 @@ import { render } from '@testing-library/react';
 
 vi.mock('../../utils/profileExtractor', () => ({ extractProfileFields: vi.fn(async () => ({})) }));
 vi.mock('../../services/geo', () => ({ resolveLocationAndTimezone: vi.fn() }));
-vi.mock('../../services/api', () => ({ bffFetchWithRetry: vi.fn(), sendClientLog: vi.fn() }));
-vi.mock('../../config', () => ({ N8N_WEBHOOK_URL: 'https://n8n.test/webhook', N8N_WEBHOOK_FALLBACK_URL: '' }));
+
+// Don't mock api module fully so we can use the real bffFetchWithRetry which calls global.fetch
+vi.mock('../../services/api', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    sendClientLog: vi.fn(), // mock log only
+  };
+});
+
+// Mock config fully but provide necessary exports
+vi.mock('../../config', () => ({
+  N8N_WEBHOOK_URL: 'https://n8n.test/webhook',
+  N8N_WEBHOOK_FALLBACK_URL: '',
+  RETRY_CONFIG: { maxRetries: 2, baseDelayMs: 100 },
+  buildApiUrl: (path) => path.startsWith('http') ? path : `http://localhost${path}`,
+}));
 
 import { useChat } from '../useChat';
 

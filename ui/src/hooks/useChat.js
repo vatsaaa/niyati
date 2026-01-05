@@ -80,6 +80,18 @@ async function classifyQuery(message) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message })
     });
+
+    // Explicitly handle 401 Unauthorized - do NOT deduct credits
+    if (response && response.status === 401) {
+      console.warn('Classify query unauthorized (401), treating as non-billable');
+      return {
+        queryType: 'unknown',
+        creditCost: 0,
+        isBillable: false,
+        config: { credits_horoscope_cost: 2, credits_premium_cost: 4 }
+      };
+    }
+
     if (response && response.ok) {
       // Prefer JSON body when available
       try {
@@ -196,7 +208,6 @@ function isProfileUpdateAttempt(text) {
 
 export function useChat(profile, updateProfile, addMessage, auth) {
   const [isLoading, setIsLoading] = useState(false);
-
   const handleSend = async (inputText, setInputText) => {
     // Enhanced input validation
     if (!inputText || typeof inputText !== 'string') return;

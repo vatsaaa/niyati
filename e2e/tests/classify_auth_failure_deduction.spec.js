@@ -94,12 +94,10 @@ test('classify auth failure causes deduction (regression)', async ({ page, baseU
   // Wait briefly for UI to perform classify -> webhook -> (maybe) deduct
   await page.waitForTimeout(1200);
 
-  // Assert: because classify returned 401, the UI currently FALLS BACK to default and may deduct.
-  // This regression test asserts that a deduct request was seen (reproducing the bug).
-  // Future fix will invert this expectation to assert no deduction.
-  expect(deductSeen).toBe(true);
+  // Assert: because classify returned 401, the UI should NOT fall back to default billable.
+  // It should treat the query as non-billable and NOT deduct credits.
+  expect(deductSeen).toBe(false);
 
-  // Also ensure the UI updated the credits display to reflect deduction
-  const expected = Math.max(0, initialCredits - DEDUCT_AMOUNT);
-  await expect(creditsLocator).toHaveText(String(expected), { timeout: 5000 });
+  // Ensure the UI shows NO deduction
+  await expect(creditsLocator).toHaveText(String(initialCredits), { timeout: 5000 });
 });

@@ -45,7 +45,8 @@ describe('useChat onboarding & free-tier behavior', () => {
     // 1. Setup Mocks
     const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue({
       ok: true,
-      json: async () => ({ status: 'success' })
+      json: async () => ({ status: 'success' }),
+      text: async () => JSON.stringify({ output: 'stubbed response' })
     });
 
     // Ensure backend save resolves successfully
@@ -111,6 +112,9 @@ describe('useChat onboarding & free-tier behavior', () => {
     // Spy on global.fetch to ensure we do NOT contact the webhook for out-of-scope free question
     const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async () => ({ ok: true, json: async () => ({}), text: async () => JSON.stringify({}) }));
 
+    // Mock extractor to return empty object (no profile update)
+    vi.mocked(extractProfileFields).mockResolvedValue({});
+
     // Ensure BFF classification returns a billable query so the hook enforces credit checks
     vi.mocked(bffFetchWithRetry).mockResolvedValue({ ok: true, json: async () => ({ status: 'ok', data: { queryType: 'horoscope', creditCost: 2, isBillable: true, config: { credits_horoscope_cost: 2, credits_premium_cost: 4 } } }) });
 
@@ -121,14 +125,14 @@ describe('useChat onboarding & free-tier behavior', () => {
       await ref.current.handleSend("Will I be promoted next year?", () => {});
     });
 
-    // Expect the hook to have replied with a polite restriction message
+    // Expect the hook to have replied with a polite restriction message (exhausted credits)
     const botCalls = addMessage.mock.calls.filter(c => c[0] && c[0].sender === 'bot');
     expect(botCalls.length).toBeGreaterThan(0);
     const replyTexts = botCalls.map(c => c[0].text).join('\n');
-    expect(replyTexts).toMatch(/free user|\{\}/i);
-    expect(replyTexts).toMatch(/today's horoscope|today|\{\}/i);
+    // It matches exhausted credits message
+    expect(replyTexts).toMatch(/credits|add more|insufficient/i);
 
-    // No webhook call should have been made for an out-of-scope free question
+    // No webhook call should have been made
     const webhookCall = fetchSpy.mock.calls.find(c => String(c[0]).includes('/webhook'));
     expect(webhookCall).toBeUndefined();
 
