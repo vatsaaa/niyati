@@ -289,7 +289,6 @@ router.post('/login', loginLimiter, async (req, res) => {
 
 // POST /auth/request-password-reset
 // Body: { email }
-// TODO: Add rate limiting to prevent email enumeration and spam
 router.post('/request-password-reset', passwordResetLimiter, async (req, res) => {
   try {
     const { email } = req.body || {};
