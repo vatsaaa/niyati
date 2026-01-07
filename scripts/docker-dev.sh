@@ -53,6 +53,9 @@ ${YELLOW}Examples:${NC}
 EOF
 }
 
+# Initialize COMPOSE_CMD
+COMPOSE_CMD=$(get_compose_cmd "dev")
+
 # =============================================================================
 # COMMANDS
 # =============================================================================
@@ -95,7 +98,7 @@ cmd_setup() {
 cmd_up() {
     ensure_env_files "$PROJECT_ROOT" || true
     log_info "Starting development services..."
-    docker compose up -d
+    eval "$COMPOSE_CMD up -d"
     log_success "Services started"
     echo ""
     log_info "Access points:"
@@ -108,35 +111,35 @@ cmd_up() {
 
 cmd_down() {
     log_info "Stopping services..."
-    docker compose down
+    eval "$COMPOSE_CMD down"
     log_success "Services stopped"
 }
 
 cmd_restart() {
     log_info "Restarting services..."
-    docker compose restart
+    eval "$COMPOSE_CMD restart"
     log_success "Services restarted"
 }
 
 cmd_logs() {
-    docker compose logs -f
+    eval "$COMPOSE_CMD logs -f"
 }
 
 cmd_logs_bff() {
-    docker compose logs -f bff-platform
+    eval "$COMPOSE_CMD logs -f bff-platform"
 }
 
 cmd_logs_auth() {
-    docker compose logs -f bff-auth
+    eval "$COMPOSE_CMD logs -f bff-auth"
 }
 
 cmd_logs_ui() {
-    docker compose logs -f ui-service
+    eval "$COMPOSE_CMD logs -f ui-service"
 }
 
 cmd_build() {
     log_info "Building images..."
-    docker compose build --no-cache
+    eval "$COMPOSE_CMD build --no-cache"
     log_success "Build complete"
 }
 
@@ -144,7 +147,7 @@ cmd_clean() {
     log_warn "This will stop services and remove volumes."
     if confirm_action "Continue?" "n"; then
         log_info "Cleaning up..."
-        docker compose down -v
+        eval "$COMPOSE_CMD down -v"
         log_success "Cleanup complete"
     else
         log_info "Cancelled"
@@ -153,17 +156,17 @@ cmd_clean() {
 
 cmd_shell_bff() {
     log_info "Opening shell in BFF Platform container..."
-    docker compose exec bff-platform sh
+    eval "$COMPOSE_CMD exec bff-platform sh"
 }
 
 cmd_shell_auth() {
     log_info "Opening shell in BFF Auth container..."
-    docker compose exec bff-auth sh
+    eval "$COMPOSE_CMD exec bff-auth sh"
 }
 
 cmd_shell_ui() {
     log_info "Opening shell in UI container..."
-    docker compose exec ui-service sh
+    eval "$COMPOSE_CMD exec ui-service sh"
 }
 
 cmd_ps() {

@@ -77,13 +77,19 @@ print_header() {
 find_project_root() {
     local dir="${1:-$(pwd)}"
     while [[ "$dir" != "/" ]]; do
+        # New structure: apps/ and packages/ directories with infra/docker-compose.yml
+        if [[ -d "$dir/apps" && -d "$dir/packages" && -f "$dir/infra/docker-compose.yml" ]]; then
+            echo "$dir"
+            return 0
+        fi
+        # Legacy structure: be/ and ui/ directories with docker-compose.yml
         if [[ -f "$dir/docker-compose.yml" && -d "$dir/be" && -d "$dir/ui" ]]; then
             echo "$dir"
             return 0
         fi
         dir="$(dirname "$dir")"
     done
-    log_error "Could not find project root (no docker-compose.yml with be/ and ui/ directories)"
+    log_error "Could not find project root (no apps/packages structure or legacy be/ui structure)"
     return 1
 }
 
@@ -108,8 +114,10 @@ load_project_env() {
     local project_root="${1:-$(find_project_root)}"
     cd "$project_root"
     
-    # Load main .env first
-    [[ -f ".env" ]] && load_env ".env"
+    local infra_dir="infra"
+    
+    # Load main .env from infra dir
+    [[ -f "$infra_dir/.env" ]] && load_env "$infra_dir/.env"
     
     # Export common defaults
     export POSTGRES_USER="${POSTGRES_USER:-niyati}"
@@ -123,63 +131,63 @@ load_project_env() {
 # Ensure required environment files exist
 ensure_env_files() {
     local project_root="${1:-$(pwd)}"
+    local infra_dir="infra"
     local created_any=0
     
-    log_info "Checking environment files..."
+    log_info "Checking environment files in $infra_dir/..."
     
-    # Check main .env
-    if [[ ! -f "$project_root/.env" ]]; then
-        if [[ -f "$project_root/.env.example" ]]; then
-            log_step "Creating .env from .env.example..."
-            cp "$project_root/.env.example" "$project_root/.env"
-            log_success "Created .env"
+    # Check main .env in infra
+    if [[ ! -f "$project_root/$infra_dir/.env" ]]; then
+        if [[ -f "$project_root/$infra_dir/.env.example" ]]; then
+            log_step "Creating $infra_dir/.env from example..."
+            cp "$project_root/$infra_dir/.env.example" "$project_root/$infra_dir/.env"
+            log_success "Created $infra_dir/.env"
             created_any=1
         else
-            log_warn ".env and .env.example not found"
+            log_warn "$infra_dir/.env and example not found"
         fi
     else
-        log_success ".env exists"
+        log_success "$infra_dir/.env exists"
     fi
     
-    # Check service-specific env files
+    # Check service-specific env files in infra
     for svc in auth platform; do
-        local env_file="$project_root/.env.bff.${svc}"
-        local example_file="$project_root/.env.bff.${svc}.example"
+        local env_file="$project_root/$infra_dir/.env.bff.${svc}"
+        local example_file="$project_root/$infra_dir/.env.bff.${svc}.example"
         
         if [[ ! -f "$env_file" ]]; then
             if [[ -f "$example_file" ]]; then
-                log_step "Creating .env.bff.${svc} from example..."
+                log_step "Creating $infra_dir/.env.bff.${svc} from example..."
                 cp "$example_file" "$env_file"
-                log_success "Created .env.bff.${svc}"
+                log_success "Created $infra_dir/.env.bff.${svc}"
                 created_any=1
             else
-                log_warn ".env.bff.${svc}.example not found - skipping"
+                log_warn "$infra_dir/.env.bff.${svc} not found - skipping"
             fi
         else
-            log_success ".env.bff.${svc} exists"
+            log_success "$infra_dir/.env.bff.${svc} exists"
         fi
     done
     
-    # Check UI env file
-    if [[ ! -f "$project_root/.env.ui" ]]; then
-        if [[ -f "$project_root/.env.ui.example" ]]; then
-            log_step "Creating .env.ui from example..."
-            cp "$project_root/.env.ui.example" "$project_root/.env.ui"
-            log_success "Created .env.ui"
+    # Check UI env file in infra
+    if [[ ! -f "$project_root/$infra_dir/.env.ui" ]]; then
+        if [[ -f "$project_root/$infra_dir/.env.ui.example" ]]; then
+            log_step "Creating $infra_dir/.env.ui from example..."
+            cp "$project_root/$infra_dir/.env.ui.example" "$project_root/$infra_dir/.env.ui"
+            log_success "Created $infra_dir/.env.ui"
             created_any=1
         else
-            # Create with defaults
-            log_step "Creating .env.ui with defaults..."
-            cat > "$project_root/.env.ui" << 'EOF'
+            log_step "Creating $infra_dir/.env.ui with defaults..."
+            cat > "$project_root/$infra_dir/.env.ui" << 'EOF'
 VITE_APP_VERSION=0.1.0-dev
 VITE_BFF_BASE_URL=http://localhost:3000
 VITE_DEBUG_MODE=true
 EOF
-            log_success "Created .env.ui"
+            log_success "Created $infra_dir/.env.ui"
             created_any=1
         fi
     else
-        log_success ".env.ui exists"
+        log_success "$infra_dir/.env.ui exists"
     fi
     
     return $created_any
@@ -211,19 +219,20 @@ check_docker() {
 get_compose_cmd() {
     local mode="${1:-dev}"
     local base_cmd="docker compose"
+    local infra_dir="infra"
     
     case "$mode" in
         dev|development)
-            echo "$base_cmd"
+            echo "$base_cmd -f $infra_dir/docker-compose.yml -f $infra_dir/docker-compose.override.yml"
             ;;
         override)
-            echo "$base_cmd -f docker-compose.yml -f docker-compose.override.yml"
+            echo "$base_cmd -f $infra_dir/docker-compose.yml -f $infra_dir/docker-compose.override.yml"
             ;;
         prod|production)
-            echo "$base_cmd -f docker-compose.yml -f docker-compose.prod.yml"
+            echo "$base_cmd -f $infra_dir/docker-compose.yml -f $infra_dir/docker-compose.prod.yml"
             ;;
         ci)
-            echo "$base_cmd -f docker-compose.yml -f docker-compose.ci.yml"
+            echo "$base_cmd -f $infra_dir/docker-compose.yml -f $infra_dir/docker-compose.ci.yml"
             ;;
         *)
             echo "$base_cmd"

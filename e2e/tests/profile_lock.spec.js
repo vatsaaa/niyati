@@ -9,9 +9,9 @@ const PHONE = process.env.E2E_PHONE || '9992223333';
 test.describe('Profile Locking', () => {
   test('profile cannot be updated via chat after initial send', async ({ page, baseURL }) => {
     const base = process.env.BASE_URL || baseURL || 'http://127.0.0.1';
-    
+
     let profileSaveCount = 0;
-    
+
     // Mock the identify endpoint to return a complete returning user
     await page.route('**/api/v1/users/identify', route => {
       const identified = {
@@ -26,13 +26,13 @@ test.describe('Profile Locking', () => {
         total_paid_amount: 0,
         last_login_location: 'Mumbai'
       };
-      route.fulfill({ 
-        status: 200, 
-        contentType: 'application/json', 
-        body: JSON.stringify({ 
-          status: 'ok', 
-          data: { 
-            returning: true, 
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          status: 'ok',
+          data: {
+            returning: true,
             user: identified,
             config: {
               credits_monthly_free: 10,
@@ -41,8 +41,8 @@ test.describe('Profile Locking', () => {
               credits_low_threshold: 4,
               payment_amount_inr: 500
             }
-          } 
-        }) 
+          }
+        })
       });
     });
 
@@ -55,28 +55,28 @@ test.describe('Profile Locking', () => {
         console.log('[TEST DEBUG] /api/v1/users/profile POST body: <unavailable>');
       }
       profileSaveCount++;
-      route.fulfill({ 
-        status: 200, 
-        contentType: 'application/json', 
-        body: JSON.stringify({ status: 'ok', data: { user: { credits: 10 } } }) 
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ status: 'ok', data: { user: { credits: 10 } } })
       });
     });
 
     // Mock webhook
     await page.route('**/webhook/**', async route => {
-      route.fulfill({ 
-        status: 200, 
-        contentType: 'application/json', 
-        body: JSON.stringify({ output: "Welcome back! I am ready to help reveal what your future holds." }) 
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ output: "Welcome back! I am ready to help reveal what your future holds." })
       });
     });
 
     // Mock deduct credits
     await page.route('**/api/v1/users/deduct-credits', async route => {
-      route.fulfill({ 
-        status: 200, 
-        contentType: 'application/json', 
-        body: JSON.stringify({ status: 'ok', data: { credits: 8 } }) 
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ status: 'ok', data: { credits: 8 } })
       });
     });
 
@@ -92,43 +92,41 @@ test.describe('Profile Locking', () => {
 
     // Wait for chat to load
     await page.waitForSelector('textarea');
-    
+
     // Note the profile save count BEFORE first message
     const countBeforeFirstMessage = profileSaveCount;
-    
+
     // First message - should trigger profile send to n8n
     const textarea = page.locator('textarea');
     await textarea.fill("Hi Niyati, give me today's horoscope");
     await textarea.press('Enter');
-    
+
     // Wait for bot response
-    await page.waitForSelector('.bot-message, [class*="bot"]', { timeout: 5000 }).catch(() => {});
+    await page.waitForSelector('.bot-message', { timeout: 10000 });
     await page.waitForTimeout(1500);
-    
+
     // Note the profile save count after first message (this may have incremented)
     const countAfterFirstMessage = profileSaveCount;
-    
+
     // Try to update profile via chat - this should be blocked
     await textarea.fill("Change my name to Rahul");
     await textarea.press('Enter');
-    
-    // Wait for response
+
+    // Wait for response (the block message)
+    await page.waitForSelector('.bot-message:nth-child(2)', { timeout: 5000 }).catch(() => { });
     await page.waitForTimeout(2000);
-    
+
     // The profile save count should NOT increase after the profile update attempt
     const countAfterUpdateAttempt = profileSaveCount;
-    
+
     // Look for the rejection/guidance message in the chat
-    const messages = await page.locator('.message, [class*="message"]').allTextContents();
-    const hasLockMessage = messages.some(m => 
-      m.toLowerCase().includes('locked') || 
-      m.toLowerCase().includes('cannot be changed') ||
-      m.toLowerCase().includes('profile settings') ||
-      m.toLowerCase().includes('double-click') ||
+    const messages = await page.locator('.message').allTextContents();
+    const hasLockMessage = messages.some(m =>
       m.toLowerCase().includes('edit') ||
+      m.toLowerCase().includes('double-click') ||
       m.toLowerCase().includes('profile section')
     );
-    
+
     // Debug: dump localStorage and counters to help triage failures
     const ls = await page.evaluate(() => {
       try {
@@ -146,26 +144,26 @@ test.describe('Profile Locking', () => {
 
     // Either we see a lock/guidance message OR the profile save count didn't increase after the update attempt
     // The key check is: countAfterUpdateAttempt === countAfterFirstMessage (no new saves after update attempt)
-    expect(hasLockMessage || countAfterUpdateAttempt === countAfterFirstMessage).toBeTruthy();
+    expect(hasLockMessage || countAfterUpdateAttempt <= countAfterFirstMessage).toBeTruthy();
   });
 
   test('new user can provide profile details via chat', async ({ page, baseURL }) => {
     const base = process.env.BASE_URL || baseURL || 'http://127.0.0.1';
-    
+
     let profileData = {};
-    
+
     // Mock identify - return as new user
     await page.route('**/api/v1/users/identify', route => {
-      route.fulfill({ 
-        status: 200, 
-        contentType: 'application/json', 
-        body: JSON.stringify({ 
-          status: 'ok', 
-          data: { 
-            returning: false, 
-            user: null 
-          } 
-        }) 
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          status: 'ok',
+          data: {
+            returning: false,
+            user: null
+          }
+        })
       });
     });
 
@@ -174,20 +172,20 @@ test.describe('Profile Locking', () => {
       try {
         const postData = JSON.parse(request.postData() || '{}');
         profileData = { ...profileData, ...postData };
-      } catch (e) {}
-      route.fulfill({ 
-        status: 200, 
-        contentType: 'application/json', 
-        body: JSON.stringify({ status: 'ok', data: { user: { credits: 10 } } }) 
+      } catch (e) { }
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ status: 'ok', data: { user: { credits: 10 } } })
       });
     });
 
     // Mock webhook
     await page.route('**/webhook/**', async route => {
-      route.fulfill({ 
-        status: 200, 
-        contentType: 'application/json', 
-        body: JSON.stringify({ output: "Thank you for sharing! Let me read your stars..." }) 
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ output: "Thank you for sharing! Let me read your stars..." })
       });
     });
 
@@ -196,15 +194,15 @@ test.describe('Profile Locking', () => {
       route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ 
-          status: 'ok', 
-          data: { 
-            location: { 
+        body: JSON.stringify({
+          status: 'ok',
+          data: {
+            location: {
               display_name: 'Mumbai, Maharashtra, India',
               lat: '19.0760',
               lon: '72.8777'
-            } 
-          } 
+            }
+          }
         })
       });
     });
@@ -221,15 +219,15 @@ test.describe('Profile Locking', () => {
 
     // Wait for chat to load
     await page.waitForSelector('textarea');
-    
+
     // Provide profile details
     const textarea = page.locator('textarea');
     await textarea.fill("My name is Test User, born on 1995-06-15 at 10:30 in Mumbai");
     await textarea.press('Enter');
-    
+
     // Wait for processing
     await page.waitForTimeout(2000);
-    
+
     // Profile data should have been captured
     // Note: exact behavior depends on extractProfileFields implementation
     // This test verifies the flow works for new users
@@ -239,15 +237,15 @@ test.describe('Profile Locking', () => {
 test.describe('Credits Display', () => {
   test('credits are displayed prominently for users', async ({ page, baseURL }) => {
     const base = process.env.BASE_URL || baseURL || 'http://127.0.0.1';
-    
+
     await page.route('**/api/v1/users/identify', route => {
-      route.fulfill({ 
-        status: 200, 
-        contentType: 'application/json', 
-        body: JSON.stringify({ 
-          status: 'ok', 
-          data: { 
-            returning: true, 
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          status: 'ok',
+          data: {
+            returning: true,
             user: {
               id: 'credits-test-1',
               name: 'Ankur',
@@ -266,16 +264,16 @@ test.describe('Credits Display', () => {
               credits_low_threshold: 4,
               payment_amount_inr: 500
             }
-          } 
-        }) 
+          }
+        })
       });
     });
 
     await page.route('**/webhook/**', async route => {
-      route.fulfill({ 
-        status: 200, 
-        contentType: 'application/json', 
-        body: JSON.stringify({ output: "Welcome back!" }) 
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ output: "Welcome back!" })
       });
     });
 
@@ -290,15 +288,15 @@ test.describe('Credits Display', () => {
 
     // Wait for profile header to load
     await page.waitForTimeout(1500);
-    
+
     // Credits should be visible somewhere in the UI
     const creditsElement = page.locator('div[title*="credits"], span:has-text("credits"), [class*="credit"]');
     const creditsVisible = await creditsElement.count() > 0;
-    
+
     // Either credits element is visible OR we can find "7" displayed somewhere related to credits
     const pageContent = await page.content();
     const hasCreditsDisplay = creditsVisible || pageContent.includes('7 credits') || pageContent.includes('credits remaining');
-    
+
     expect(hasCreditsDisplay).toBeTruthy();
   });
 });

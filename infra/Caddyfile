@@ -1,0 +1,277 @@
+# Production (example)
+#niyati.ai {
+#    reverse_proxy /api/* bff-platform:3000
+#    reverse_proxy ui-service:80
+#}
+# Caddyfile - Production reverse proxy with automatic HTTPS
+# Caddy automatically obtains and renews Let's Encrypt certificates
+{
+    # Global options
+    # The CADDY_EMAIL environment variable can be provided by compose; if
+    # it's not set, use the fallback below so Caddyfile parsing doesn't fail.
+    email {$CADDY_EMAIL:ankur.vatsa@gmail.com}
+    # Enable debug logging to capture detailed proxy traces during local debugging
+    debug
+    # Use Caddy's internal CA for localhost (self-signed certs)
+    # This enables HTTPS for localhost without Let's Encrypt
+    local_certs
+    # Use staging for testing, remove 'acme_ca' for production Let's Encrypt
+    # acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+
+# HTTP server on port 80 - no automatic redirect to HTTPS (ngrok handles HTTPS)
+# Accept both localhost and ngrok domain
+http://localhost:5173, http://{$DOMAIN:localhost}, http://nonexperientially-nonascetical-agnes.ngrok-free.dev {
+
+    # Enable gzip compression
+    encode gzip
+
+    # Security headers
+    header {
+        # Enable HSTS
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        # Prevent clickjacking
+        X-Frame-Options "SAMEORIGIN"
+        # Prevent MIME sniffing
+        X-Content-Type-Options "nosniff"
+        # XSS protection
+        X-XSS-Protection "1; mode=block"
+        # Referrer policy
+        Referrer-Policy "strict-origin-when-cross-origin"
+        # Remove server header
+        -Server
+    }
+
+    # CORS headers for API routes and webhook
+    @api_and_webhook path /api/* /webhook/*
+    header @api_and_webhook {
+        # Remove any upstream Access-Control-Allow-Origin and set a reflected Origin
+        -Access-Control-Allow-Origin
+        Access-Control-Allow-Origin "{http.request.header.Origin}"
+        Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+        Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With"
+        Access-Control-Allow-Credentials "true"
+        Access-Control-Max-Age "3600"
+    }
+
+    # Handle preflight OPTIONS requests for CORS
+    @options method OPTIONS
+    handle @options {
+        header {
+            # Remove any upstream Access-Control-Allow-Origin and set reflected Origin for preflight
+            -Access-Control-Allow-Origin
+            Access-Control-Allow-Origin "{http.request.header.Origin}"
+            Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+            Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With"
+            Access-Control-Allow-Credentials "true"
+            Access-Control-Max-Age "3600"
+        }
+        respond "" 204
+    }
+
+    # Health check endpoint
+    handle /health {
+        respond "healthy" 200
+    }
+
+    # BFF Auth API routes (specific auth endpoints + users)
+    # Route platform-only user actions (deductions) to bff-platform
+    # This ensures POST /api/v1/users/deduct-credits (implemented in bff-platform)
+    # is forwarded to the platform service instead of bff-auth which returns 404.
+    route /api/v1/users/* {
+        handle /api/v1/users/deduct-credits {
+            reverse_proxy bff-platform:{$BFF_PLATFORM_PORT:3000} {
+                # Health check
+                health_uri /api/v1/telemetry/health
+                health_interval 30s
+                health_timeout 10s
+                header_up Host {host}
+                header_up X-Real-IP {remote_host}
+                header_up X-Forwarded-For {remote_host}
+                header_up X-Forwarded-Proto {scheme}
+            }
+        }
+
+        # Route platform-only add-credits to bff-platform (implemented in platform)
+        handle /api/v1/users/add-credits {
+            reverse_proxy bff-platform:{$BFF_PLATFORM_PORT:3000} {
+                # Health check
+                health_uri /api/v1/telemetry/health
+                health_interval 30s
+                health_timeout 10s
+                header_up Host {host}
+                header_up X-Real-IP {remote_host}
+                header_up X-Forwarded-For {remote_host}
+                header_up X-Forwarded-Proto {scheme}
+            }
+        }
+
+        handle {
+            reverse_proxy bff-auth:{$BFF_AUTH_PORT:3001} {
+                health_uri /api/v1/telemetry/health
+                health_interval 30s
+                health_timeout 10s
+                header_up Host {host}
+                header_up X-Real-IP {remote_host}
+                header_up X-Forwarded-For {remote_host}
+                header_up X-Forwarded-Proto {scheme}
+            }
+        }
+    }
+
+    handle /api/v1/auth/* {
+        reverse_proxy bff-auth:{$BFF_AUTH_PORT:3001} {
+            # Health check
+            health_uri /api/v1/telemetry/health
+            health_interval 30s
+            health_timeout 10s
+            
+            # Headers
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # N8N Webhook route - proxy to local n8n instance
+    handle /webhook/* {
+        reverse_proxy host.docker.internal:5678 {
+            # N8N doesn't have a health endpoint, so no health check
+            # Headers
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # BFF Platform API routes (platform-specific endpoints and general API catch-all)
+    handle /api/* {
+        reverse_proxy bff-platform:{$BFF_PLATFORM_PORT:3000} {
+            # Health check
+            health_uri /api/v1/telemetry/health
+            health_interval 30s
+            health_timeout 10s
+            
+            # Headers
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # UI - serve static files from /srv
+    # In production: /srv contains built files from ui-service
+    handle /* {
+        root * /srv
+        try_files {path} /index.html
+        file_server
+    }
+
+    # Error pages
+    handle_errors {
+        @5xx expression `{err.status_code} >= 500 && {err.status_code} < 600`
+        respond @5xx "Service temporarily unavailable" 503
+
+        @4xx expression `{err.status_code} >= 400 && {err.status_code} < 500`
+        respond @4xx "Not found" 404
+    }
+
+    # Access log (optional, can be disabled for performance)
+    log {
+        output stdout
+        format json
+        level INFO
+    }
+}
+
+# HTTPS server for localhost - uses Caddy's internal CA (self-signed certs)
+# Browser will show certificate warning on first visit - click "Advanced" > "Proceed"
+https://localhost {
+    tls internal
+
+    # Enable gzip compression
+    encode gzip
+
+    # Security headers
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Frame-Options "SAMEORIGIN"
+        X-Content-Type-Options "nosniff"
+        X-XSS-Protection "1; mode=block"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        -Server
+    }
+
+    # CORS headers for API routes and webhook
+    @api_and_webhook path /api/* /webhook/*
+    header @api_and_webhook {
+        -Access-Control-Allow-Origin
+        Access-Control-Allow-Origin "{http.request.header.Origin}"
+        Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+        Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With"
+        Access-Control-Allow-Credentials "true"
+        Access-Control-Max-Age "3600"
+    }
+
+    # Handle preflight OPTIONS requests
+    @options method OPTIONS
+    handle @options {
+        header {
+            -Access-Control-Allow-Origin
+            Access-Control-Allow-Origin "{http.request.header.Origin}"
+            Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+            Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With"
+            Access-Control-Allow-Credentials "true"
+            Access-Control-Max-Age "3600"
+        }
+        respond "" 204
+    }
+
+    # Health check endpoint
+    handle /health {
+        respond "healthy" 200
+    }
+
+    # BFF Auth API routes
+    handle /api/v1/users/deduct-credits {
+        reverse_proxy bff-platform:{$BFF_PLATFORM_PORT:3000}
+    }
+
+    handle /api/v1/users/add-credits {
+        reverse_proxy bff-platform:{$BFF_PLATFORM_PORT:3000}
+    }
+
+    handle /api/v1/users/* {
+        reverse_proxy bff-auth:{$BFF_AUTH_PORT:3001}
+    }
+
+    handle /api/v1/auth/* {
+        reverse_proxy bff-auth:{$BFF_AUTH_PORT:3001}
+    }
+
+    # N8N Webhook route
+    handle /webhook/* {
+        reverse_proxy host.docker.internal:5678
+    }
+
+    # BFF Platform API routes
+    handle /api/* {
+        reverse_proxy bff-platform:{$BFF_PLATFORM_PORT:3000}
+    }
+
+    # UI - serve static files
+    handle /* {
+        root * /srv
+        try_files {path} /index.html
+        file_server
+    }
+
+    log {
+        output stdout
+        format json
+        level INFO
+    }
+}

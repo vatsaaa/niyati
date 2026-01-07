@@ -1,0 +1,184 @@
+# Docker Compose - Production Overrides
+# Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# This file extends the base configuration with:
+#   - Environment variables for sensitive credentials (instead of Docker secrets)
+#   - Production-optimized settings
+#   - Additional services (migration, backup, proxy)
+#   - Explicit container naming for management
+
+# =============================================================================
+# YAML ANCHORS FOR PRODUCTION (DRY Configuration)
+# =============================================================================
+
+# Shared production environment settings
+x-prod-env: &prod-env
+  NODE_ENV: production
+  LOG_PRETTY_PRINT: "false"
+  LOG_LEVEL: info
+
+services:
+  postgres:
+    container_name: niyati-postgres-prod
+    ports:
+      - "0.0.0.0:5432:5432"
+    volumes:
+      - postgres-data-prod:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-niyati_prod}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-niyati_prod}
+      POSTGRES_MAX_CONNECTIONS: "200"
+      POSTGRES_SHARED_BUFFERS: "1GB"
+      POSTGRES_EFFECTIVE_CACHE: "3GB"
+    restart: always
+
+  redis:
+    container_name: niyati-redis-prod
+    volumes:
+      - redis-data-prod:/data
+    restart: always
+
+  bff-auth:
+    build:
+      target: production
+    image: niyati/bff-auth:production
+    container_name: niyati-bff-auth-prod
+    ports: []
+    expose:
+      - "${BFF_AUTH_PORT:-3001}"
+    environment:
+      <<: *prod-env
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      CORS_ALLOWED: ${CORS_ALLOWED}
+      ALLOW_CROSS_SITE_COOKIES: ${ALLOW_CROSS_SITE_COOKIES:-false}
+    restart: always
+
+  bff-platform:
+    build:
+      target: production
+    image: niyati/bff-platform:production
+    container_name: niyati-bff-platform-prod
+    ports: []
+    expose:
+      - "${BFF_PLATFORM_PORT:-3000}"
+    environment:
+      <<: *prod-env
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      CORS_ALLOWED: ${CORS_ALLOWED}
+      ALLOW_CROSS_SITE_COOKIES: ${ALLOW_CROSS_SITE_COOKIES:-false}
+    restart: always
+
+  ui-service:
+    build:
+      target: production
+    image: niyati/ui:production
+    container_name: niyati-ui-prod
+    ports: []
+    expose:
+      - "${UI_PROD_PORT:-80}"
+    environment:
+      <<: *prod-env
+    restart: always
+
+  worker:
+    container_name: niyati-worker-prod
+    environment:
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      WORKER_TOKEN: ${WORKER_TOKEN}
+    restart: always
+    profiles: []  # Enable in production (override base profile)
+
+  # Migration runner (one-shot)
+  migrate:
+    image: postgres:15-alpine
+    container_name: niyati-migrate-prod
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-niyati_prod}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB:-niyati_prod}
+      - PGHOST=postgres
+      - PGPORT=5432
+    networks:
+      - niyati
+    volumes:
+      - ../packages/migrations:/migrations:ro
+      - ../be/scripts/run_migrations.sh:/scripts/run_migrations.sh:ro
+    command: ["sh", "/scripts/run_migrations.sh"]
+    profiles:
+      - migration
+
+  # Database backup worker
+  db-backup:
+    build:
+      context: ../be/scripts/backup
+      dockerfile: Dockerfile
+    image: niyati/db-backup:prod
+    container_name: niyati-db-backup-prod
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - PGHOST=postgres
+      - PGPORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-niyati_prod}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB:-niyati_prod}
+      - BACKUP_INTERVAL=${BACKUP_INTERVAL_SECONDS:-86400}
+      - S3_BUCKET=${S3_BUCKET}
+      - S3_PREFIX=${S3_PREFIX:-backups}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION}
+    networks:
+      - niyati
+    profiles:
+      - backup
+
+  # Caddy reverse proxy
+  caddy:
+    image: caddy:2-alpine
+    container_name: niyati-caddy-prod
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+      - CADDY_EMAIL=${CADDY_EMAIL:-admin@example.com}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data-prod:/data
+      - caddy-config-prod:/config
+    networks:
+      - niyati
+    depends_on:
+      - ui-service
+      - bff-auth
+      - bff-platform
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  postgres-data-prod:
+    driver: local
+  redis-data-prod:
+    driver: local
+  caddy-data-prod:
+    driver: local
+  caddy-config-prod:
+    driver: local

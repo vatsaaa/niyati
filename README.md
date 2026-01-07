@@ -31,7 +31,7 @@ AI-powered conversational astrology platform delivering personalized horoscopes,
 Purpose: make the UI a thin collector and renderer while moving business logic, policy, and billing to trusted servers (BFF / `bff-platform` + `n8n`). This reduces client complexity, improves security, and centralizes audit/logging and feature flags.
 
 - Server/BFF First
-  - Add a small backend endpoint (extend `be/bff-platform`) that accepts UI payloads, normalizes metadata (ISO `dateOfBirth`, `timeOfBirth`, `placeOfBirth`, `userName`), computes derived fields (`age`, `ageConfirmed`) and stores authoritative state.
+  - Add a small backend endpoint (extend `apps/bff-platform`) that accepts UI payloads, normalizes metadata (ISO `dateOfBirth`, `timeOfBirth`, `placeOfBirth`, `userName`), computes derived fields (`age`, `ageConfirmed`) and stores authoritative state.
   - The BFF should decide `isSystemContext` for system-initiated messages and return a short canonical payload to the UI for display.
   - The BFF forwards a canonical, validated request to `n8n` so the workflow always receives consistent, server-validated data.
 
@@ -58,7 +58,7 @@ Purpose: make the UI a thin collector and renderer while moving business logic, 
 
 - Quick migration path (minimal changes)
   1. Add a BFF endpoint: `POST /api/v1/chat/proxy` that accepts UI payloads and returns canonical payload plus `isBillable` and credit balance.
-  2. Update `ui/src/hooks/useChat.js` to call the BFF instead of posting directly to `n8n`.
+  2. Update `apps/ui/src/hooks/useChat.js` to call the BFF instead of posting directly to `n8n`.
   3. Move age computation + persistence + billing-gate logic to BFF and/or `n8n` (pre-agent memory persistence).
   4. UI renders server-provided `isBillable` and updated credit-balance values returned by the BFF.
 
@@ -151,21 +151,23 @@ Rationale: this pattern centralizes sensitive logic (billing, age computation) o
 
 ```
 niyati/
-├── be/
+├── apps/
 │   ├── bff-auth/        # Auth service (port 3001)
 │   ├── bff-platform/    # Platform service (port 3000)
-│   ├── commons/         # Shared libraries
-│   ├── migrations/      # Database schema migrations
-│   ├── worker/          # Background jobs processor
-│   └── scripts/         # Backend utility scripts
-├── ui/                  # React frontend (port 5173)
-├── scripts/             # DevOps and utility scripts
+│   ├── ui/              # React frontend (port 5173)
+│   └── worker/          # Background jobs processor
+├── packages/
+│   ├── commons/         # Shared libraries (workspace dependency)
+│   └── migrations/      # SQL database migrations
+├── infra/               # Infrastructure and orchestration
+│   ├── docker-compose.yml
+│   ├── docker-compose.prod.yml
+│   ├── docker-compose.ci.yml
+│   ├── Caddyfile
+│   └── .env.example
+├── scripts/             # DevOps and automation scripts
 ├── secrets/             # Production secrets (gitignored)
-├── docker-compose.yml          # Base configuration
-├── docker-compose.override.yml # Dev overrides (auto-loaded)
-├── docker-compose.prod.yml     # Production overrides
-├── docker-compose.ci.yml       # CI test overrides
-└── Caddyfile                   # Reverse proxy config
+└── e2e/                 # Playwright end-to-end tests
 ```
 
 ---
@@ -253,14 +255,20 @@ docker compose ps postgres
 
 #### Migrations
 
-Migration files are in `be/migrations/` with naming convention: `YYYYMMDD_NN_description.up.sql`
+Migration files are in `packages/migrations/` with naming convention: `YYYYMMDD_NN_description.up.sql`
+
+> [!IMPORTANT]
+> **Idempotent Migration Strategy**: All DDL and DML must be idempotent.
+> - Use `CREATE TABLE IF NOT EXISTS`.
+> - Use `INSERT INTO ... ON CONFLICT DO NOTHING`.
+> - **STRICTLY AVOID** `UPDATE` and `ALTER` statements to simplify state management and ensure reproducibility.
 
 ```bash
 # Apply migrations manually
-docker compose exec postgres psql -U niyati -d niyati_dev -f /docker-entrypoint-initdb.d/20251217_01_baseline.up.sql
+docker exec -i niyati-postgres-prod psql -U niyati -d niyati_dev < packages/migrations/20251217_01_baseline.up.sql
 
 # Or use the migration runner
-docker compose run --rm bff-platform node /app/scripts/run_migrations.js
+./scripts/db.sh migrate
 ```
 
 #### Database Operations
@@ -423,7 +431,7 @@ n8n start
 #### Import Workflow
 
 1. Open n8n at http://localhost:5678
-2. Import workflow from `be/n8n/NiyatiWorkflow.json`
+2. Import workflow from `apps/bff-platform/n8n/NiyatiWorkflow.json` (or your local path)
 3. Configure the webhook URL in the workflow
 
 #### Mock n8n (CI)
@@ -504,7 +512,7 @@ docker compose up -d bff-auth
 docker compose logs -f bff-auth
 
 # Run tests
-cd be/bff-auth && npm test
+cd apps/bff-auth && npm test
 ```
 
 **API Endpoints:**
@@ -532,7 +540,7 @@ docker compose up -d bff-platform
 docker compose logs -f bff-platform
 
 # Run tests
-cd be/bff-platform && npm test
+cd apps/bff-platform && npm test
 ```
 
 **API Endpoints:**
@@ -556,7 +564,7 @@ Shared libraries used by both BFF services.
 
 ```bash
 # Run commons tests
-cd be/commons && npm test
+cd packages/commons && npm test
 ```
 
 #### worker
@@ -584,7 +592,7 @@ React single-page application with Vite, TailwindCSS, and PWA support.
 docker compose up -d ui-service
 
 # Or run locally for development
-cd ui && npm install && npm run dev
+cd apps/ui && npm install && npm run dev
 ```
 
 #### Build
@@ -806,15 +814,15 @@ Example:
 
 ```bash
 # All backend tests
-cd be/bff-platform && npm test
-cd be/bff-auth && npm test
-cd be/commons && npm test
+cd apps/bff-platform && npm test
+cd apps/bff-auth && npm test
+cd packages/commons && npm test
 ```
 
 ### Frontend Tests
 
 ```bash
-cd ui && npm test
+cd apps/ui && npm test
 ```
 
 ### E2E Tests
@@ -992,7 +1000,7 @@ The UI is a fully-featured Progressive Web App:
 
 ### Service Worker
 
-Located at `ui/public/sw.js`:
+Located at `apps/ui/public/sw.js`:
 - Precaches core assets
 - Handles navigation with preload
 - Manages cache size limits

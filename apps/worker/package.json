@@ -1,0 +1,16 @@
+{
+  "name": "niyati-worker",
+  "version": "0.1.0",
+  "private": true,
+  "main": "worker.js",
+  "scripts": {
+    "start": "node worker.js"
+  },
+  "dependencies": {
+    "@niyati/commons": "file:../../packages/commons",
+    "redis": "^4.6.7",
+    "nodemailer": "^6.9.4",
+    "axios": "^1.5.0",
+    "dotenv": "^16.3.1"
+  }
+}

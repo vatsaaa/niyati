@@ -1,0 +1,270 @@
+const request = require('supertest');
+const { createTestApp, createMockDb } = require('@test-helpers');
+
+describe('bff-platform users routes', () => {
+  let app;
+
+  beforeEach(() => {
+    jest.resetModules();
+
+    jest.mock('@niyati/commons', () => {
+      const responses = require('@niyati/commons/lib/responses');
+      return {
+        logger: { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn(), fatal: jest.fn(), trace: jest.fn(), warn: jest.fn(), error: jest.fn() },
+        sanitize: v => v,
+        ErrorCodes: responses.ErrorCodes,
+        config: {},
+        dateUtils: { computeIsAdult: jest.fn(() => true) }
+      };
+    });
+
+    const router = require('../lib/users');
+    const { app: testApp } = createTestApp('/api/v1/users', router);
+    app = testApp;
+  });
+
+  afterEach(() => jest.restoreAllMocks());
+
+  describe('POST /identify', () => {
+    test('returns returning false when user not found', async () => {
+      const fakeDb = { async query(sql, params) { return { rows: [], rowCount: 0 }; } };
+      app.set('db', fakeDb);
+      const res = await request(app).post('/api/v1/users/identify').send({ phoneNumber: '+1234' });
+      expect(res.statusCode).toBe(200);
+      expect(res.body.data.returning).toBe(false);
+    });
+
+    test('returns returning true and normalized user data for returning user', async () => {
+      const sampleUser = {
+        id: 7,
+        phone_number: '+91-8888888888',
+        name: 'Return User',
+        date_of_birth: '1990-01-01',
+        time_of_birth: '00:00:00',
+        place_of_birth: 'Delhi',
+        consent_given: true,
+        credits: 3,
+        credits_last_reset: null,
+        total_paid_amount: 0,
+        last_login_location: 'Mumbai',
+        is_adult: true
+      };
+      const fakeDb = createMockDb({ rows: [sampleUser], rowCount: 1 });
+      app.set('db', fakeDb);
+      const res = await request(app).post('/api/v1/users/identify').send({ phoneNumber: '+91-8888888888' });
+      expect(res.statusCode).toBe(200);
+      expect(res.body.status).toBe('ok');
+      expect(res.body.data.returning).toBe(true);
+      expect(res.body.data.user).toHaveProperty('id', 7);
+      expect(res.body.data.user).toHaveProperty('is_adult', true);
+    });
+  });
+
+  describe('POST /sync', () => {
+    test('returns 200 for valid profile', async () => {
+      const fakeDb = createMockDb(async (sql, params) => {
+        return { rows: [{ id: 1, phone_number: params[0] }], rowCount: 1 };
+      });
+      app.set('db', fakeDb);
+      const res = await request(app).post('/api/v1/users/sync').set('X-Service-Token', process.env.SERVICE_TOKEN || '').send({ phoneNumber: '+1234', consentGiven: true });
+      expect(res.statusCode).toBe(200);
+      expect(res.body.status).toBe('ok');
+    });
+
+    test('creates a new user with default credits and returns user object', async () => {
+      const fakeDb = createMockDb(async (sql, params) => {
+        if (sql.trim().toUpperCase().startsWith('INSERT INTO USERS')) {
+          return { rows: [{ id: 99, phone_number: params[0], credits: 10 }], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      });
+      app.set('db', fakeDb);
+      const res = await request(app).post('/api/v1/users/sync').set('X-Service-Token', process.env.SERVICE_TOKEN || '').send({ phoneNumber: '+919999999999', consentGiven: true });
+      expect(res.statusCode).toBe(200);
+      expect(res.body.status).toBe('ok');
+      expect(res.body.data.user).toHaveProperty('id', 99);
+      expect(res.body.data.user).toHaveProperty('credits', 10);
+    });
+  });
+
+  describe('POST /profile', () => {
+    test('computes and returns is_adult=true for adult DOB', async () => {
+      const fakeDb = createMockDb(async (sql, params) => {
+        if (sql.trim().toUpperCase().startsWith('INSERT INTO USERS')) {
+          return { rows: [{ id: 'uuid-1', phone_number: params[0], is_adult: true }], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      });
+      app.set('db', fakeDb);
+
+      const res = await request(app).post('/api/v1/users/profile').send({ phoneNumber: '+911234', dateOfBirth: '1990-01-01' });
+      expect(res.statusCode).toBe(200);
+      expect(res.body.status).toBe('ok');
+      expect(res.body.data.user).toHaveProperty('is_adult', true);
+    });
+  });
+
+  describe('POST /can-ask', () => {
+    test('free user with sufficient credits can ask today question', async () => {
+      const fakeDb = {
+        async query(sql, params) {
+          if (sql && sql.toUpperCase().startsWith('SELECT KEY')) return { rows: [], rowCount: 0 };
+          if (sql && sql.toUpperCase().includes('SELECT CREDITS')) {
+            return { rows: [{ credits: 15, is_paid: false }], rowCount: 1 };
+          }
+          return { rows: [], rowCount: 0 };
+        }
+      };
+      app.set('db', fakeDb);
+
+      const res = await request(app).post('/api/v1/users/can-ask').send({ phoneNumber: '+91111', question: 'How is my day today?' });
+      expect(res.statusCode).toBe(200);
+      expect(res.body.data.allowed).toBe(true);
+      expect(res.body.data.cost).toBe(2);
+    });
+
+    test('free user with low credits cannot ask future question', async () => {
+      const fakeDb = {
+        async query(sql, params) {
+          if (sql && sql.toUpperCase().startsWith('SELECT KEY')) return { rows: [], rowCount: 0 };
+          if (sql && sql.toUpperCase().includes('SELECT CREDITS')) {
+            return { rows: [{ credits: 8, is_paid: false }], rowCount: 1 };
+          }
+          return { rows: [], rowCount: 0 };
+        }
+      };
+      app.set('db', fakeDb);
+
+      const res = await request(app).post('/api/v1/users/can-ask').send({ phoneNumber: '+91222', question: 'How will my career be next 6 months?' });
+      expect(res.statusCode).toBe(200);
+      expect(res.body.data.allowed).toBe(false);
+      expect(res.body.data.reason).toBe('low_credits_restricts_future');
+    });
+
+    test('paid user can ask future question if has credits', async () => {
+      const fakeDb = {
+        async query(sql, params) {
+          if (sql && sql.toUpperCase().startsWith('SELECT KEY')) return { rows: [], rowCount: 0 };
+          if (sql && sql.toUpperCase().includes('SELECT CREDITS')) {
+            return { rows: [{ credits: 20, is_paid: true }], rowCount: 1 };
+          }
+          return { rows: [], rowCount: 0 };
+        }
+      };
+      app.set('db', fakeDb);
+
+      const res = await request(app).post('/api/v1/users/can-ask').send({ phoneNumber: '+91333', question: 'When will I get married?' });
+      expect(res.statusCode).toBe(200);
+      expect(res.body.data.allowed).toBe(true);
+      expect(res.body.data.cost).toBe(4);
+    });
+
+    test('user with insufficient credits is blocked', async () => {
+      const fakeDb = {
+        async query(sql, params) {
+          if (sql && sql.toUpperCase().startsWith('SELECT KEY')) return { rows: [], rowCount: 0 };
+          if (sql && sql.toUpperCase().includes('SELECT CREDITS')) {
+            return { rows: [{ credits: 1, is_paid: false }], rowCount: 1 };
+          }
+          return { rows: [], rowCount: 0 };
+        }
+      };
+      app.set('db', fakeDb);
+
+      const res = await request(app).post('/api/v1/users/can-ask').send({ phoneNumber: '+91444', question: 'How is my day today?' });
+      expect(res.statusCode).toBe(200);
+      expect(res.body.data.allowed).toBe(false);
+      expect(res.body.data.reason).toBe('insufficient_credits');
+    });
+  });
+
+  describe('Credits Management', () => {
+    test('POST /deduct-credits reduces credits when sufficient', async () => {
+      const fakeDb = {
+        async query(sql, params) {
+          if (sql.trim().toUpperCase().startsWith('UPDATE USERS')) {
+            const amt = params[1];
+            return { rows: [{ id: 1, credits: 5 - amt, total_paid_amount: 0 }], rowCount: 1 };
+          }
+          return { rows: [], rowCount: 0 };
+        }
+      };
+      app.set('db', fakeDb);
+
+      const res = await request(app).post('/api/v1/users/deduct-credits').send({ phoneNumber: '+911234', amount: 2 });
+      expect(res.statusCode).toBe(200);
+      expect(res.body.data).toHaveProperty('credits', 3);
+    });
+
+    test('POST /deduct-credits floors at zero when insufficient credits', async () => {
+      const fakeDb = {
+        async query(sql, params) {
+          if (sql.trim().toUpperCase().startsWith('UPDATE USERS')) {
+            return { rows: [{ id: 2, credits: 0, total_paid_amount: 0 }], rowCount: 1 };
+          }
+          return { rows: [], rowCount: 0 };
+        }
+      };
+      app.set('db', fakeDb);
+
+      const res = await request(app).post('/api/v1/users/deduct-credits').send({ phoneNumber: '+91999', amount: 4 });
+      expect(res.statusCode).toBe(200);
+      expect(res.body.data).toHaveProperty('credits', 0);
+    });
+
+    test('POST /add-credits adds credits and updates total_paid_amount', async () => {
+      const fakeDb = {
+        async query(sql, params) {
+          if (sql && sql.toUpperCase().startsWith('SELECT KEY')) return { rows: [], rowCount: 0 };
+          if (sql.trim().toUpperCase().startsWith('UPDATE USERS')) {
+            const creditsAdded = params[1];
+            const amountINR = params[2];
+            return { rows: [{ id: 3, credits: 7 + creditsAdded, total_paid_amount: amountINR }], rowCount: 1 };
+          }
+          return { rows: [], rowCount: 0 };
+        }
+      };
+      app.set('db', fakeDb);
+
+      const res = await request(app).post('/api/v1/users/add-credits').send({ phoneNumber: '+91988', amount: 500 });
+      expect(res.statusCode).toBe(200);
+      expect(res.body.data.creditsAdded).toBe(50);
+      expect(res.body.data.totalPaidAmount).toBe(500);
+    });
+
+    test('POST /add-credits rejects small amounts (<10 INR)', async () => {
+      const fakeDb = { async query(sql, params) { return { rows: [], rowCount: 0 }; } };
+      app.set('db', fakeDb);
+      const res = await request(app).post('/api/v1/users/add-credits').send({ phoneNumber: '+91111', amount: 5 });
+      expect(res.statusCode).toBe(400);
+    });
+  });
+
+  describe('GET /config', () => {
+    test('returns configurable settings', async () => {
+      const fakeDb = {
+        async query(sql) {
+          if (sql.includes('SELECT KEY')) {
+            return {
+              rows: [
+                { key: 'credits_monthly_free', value: '10' },
+                { key: 'credits_horoscope_cost', value: '2' },
+                { key: 'credits_premium_cost', value: '4' },
+                { key: 'credits_per_10_inr', value: '1' },
+                { key: 'credits_low_threshold', value: '4' },
+                { key: 'payment_amount_inr', value: '500' }
+              ]
+            };
+          }
+          return { rows: [] };
+        }
+      };
+      app.set('db', fakeDb);
+
+      const res = await request(app).get('/api/v1/users/config');
+      expect(res.statusCode).toBe(200);
+      expect(res.body.data.credits_monthly_free).toBe(10);
+      expect(res.body.data.credits_horoscope_cost).toBe(2);
+    });
+  });
+});
