@@ -35,9 +35,17 @@ for f in packages/migrations/*.up.sql; do
   cat "$f" | $COMPOSE_CMD exec -T postgres psql -U "${POSTGRES_USER:-niyati}" -d "${POSTGRES_DB:-niyati_ci}"
 done
 
-if [ -f be/seed_ci.sql ]; then
-  echo "Applying seed_ci.sql..."
-  cat be/seed_ci.sql | $COMPOSE_CMD exec -T postgres psql -U "${POSTGRES_USER:-niyati}" -d "${POSTGRES_DB:-niyati_ci}"
+seed_applied=false
+for sf in packages/migrations/*seed*.up.sql; do
+  if [[ -f "$sf" ]]; then
+    echo "Applying seed migration: $sf"
+    cat "$sf" | $COMPOSE_CMD exec -T postgres psql -U "${POSTGRES_USER:-niyati}" -d "${POSTGRES_DB:-niyati_ci}"
+    seed_applied=true
+  fi
+done
+
+if [ "$seed_applied" = false ]; then
+  echo "No seed migration found under packages/migrations. If you need seed data, add a *seed*.up.sql there."
 fi
 
 echo "Environment ready at http://localhost:${CADDY_PORT:-6173}"

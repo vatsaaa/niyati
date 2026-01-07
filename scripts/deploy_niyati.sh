@@ -739,10 +739,10 @@ run_migrations() {
         run_cmd "docker run --rm \
             --network $network \
             -v \"$PROJECT_ROOT/packages/migrations:/migrations:ro\" \
-            -v \"$PROJECT_ROOT/be/scripts/run_migrations.sh:/scripts/run_migrations.sh:ro\" \
+            -v \"$PROJECT_ROOT/scripts/run_migrations.js:/scripts/run_migrations.js:ro\" \
             -e DATABASE_URL=\"$db_url\" \
             niyati/bff-platform:local \
-            sh /scripts/run_migrations.sh"
+            node /scripts/run_migrations.js"
     fi
     
     log_success "Migrations completed"

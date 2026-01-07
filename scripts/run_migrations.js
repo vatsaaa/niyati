@@ -14,7 +14,7 @@ const path = require('path');
 
 const DEFAULT_DATABASE_URL = 'postgresql://postgres:postgres@localhost:5432/niyati_test';
 const DATABASE_URL = process.env.DATABASE_URL || DEFAULT_DATABASE_URL;
-const MIGRATIONS_DIR = path.join(__dirname, '..', 'migrations');
+const MIGRATIONS_DIR = path.join(__dirname, '..', 'packages', 'migrations');
 
 async function waitForDb(connectionString, attempts = 30, delayMs = 1000) {
   for (let i = 0; i < attempts; i++) {
@@ -62,11 +62,10 @@ async function applyMigration(client, name, sql) {
     console.log(`applied: ${name}`);
   } catch (err) {
     await client.query('ROLLBACK');
-    // Enhance error message with migration file context
     const enhancedErr = new Error(`Migration "${name}" failed: ${err.message}`);
     enhancedErr.migration = name;
     enhancedErr.originalError = err;
-    enhancedErr.position = err.position; // SQL position if available
+    enhancedErr.position = err.position;
     throw enhancedErr;
   }
 }
@@ -78,11 +77,9 @@ async function run() {
   try {
     console.log('Waiting for database to be ready...');
     await waitForDb(DATABASE_URL);
-    // connect the primary client we'll use for migrations
     await client.connect();
     console.log('Connected to database');
 
-    // ensure migrations table exists and use client for queries
     await ensureMigrationsTable(client);
 
     const files = listSqlFiles(MIGRATIONS_DIR);
@@ -116,14 +113,11 @@ async function run() {
     }
     try {
       await client.end();
-    } catch (e) {
-      // ignore
-    }
+    } catch (e) {}
     throw err;
   }
 }
 
-// Show migration status without applying
 async function status() {
   console.log('DATABASE_URL=', DATABASE_URL.replace(/:(?:[^:@]+)@/, ':*****@'));
   const client = new Client({ connectionString: DATABASE_URL });
@@ -147,7 +141,6 @@ async function status() {
       console.log(`  ${isApplied ? '✓' : '○'} ${file}${appliedAt ? ` (applied: ${appliedAt})` : ''}`);
     }
 
-    // Check for orphaned migrations (applied but file missing)
     for (const row of appliedRes.rows) {
       if (!files.includes(row.name)) {
         console.log(`  ⚠ ${row.name} (applied but file missing!)`);
@@ -181,5 +174,4 @@ if (require.main === module) {
   }
 }
 
-// Export runner so other tools (jest global setup) can invoke migrations
 module.exports = { run, status };

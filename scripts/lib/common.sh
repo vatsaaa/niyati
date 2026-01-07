@@ -82,14 +82,14 @@ find_project_root() {
             echo "$dir"
             return 0
         fi
-        # Legacy structure: be/ and ui/ directories with docker-compose.yml
+        # Legacy structure (older layout): `be/` and `ui/` directories with docker-compose.yml
         if [[ -f "$dir/docker-compose.yml" && -d "$dir/be" && -d "$dir/ui" ]]; then
             echo "$dir"
             return 0
         fi
         dir="$(dirname "$dir")"
     done
-    log_error "Could not find project root (no apps/packages structure or legacy be/ui structure)"
+    log_error "Could not find project root (expected apps/ and packages/ with infra/docker-compose.yml)"
     return 1
 }
 

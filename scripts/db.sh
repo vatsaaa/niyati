@@ -159,14 +159,32 @@ db_seed() {
     if docker exec "$bff_container" test -f /app/scripts/seed_test_data.js 2>/dev/null; then
         docker exec -it "$bff_container" node /app/scripts/seed_test_data.js
         log_success "Seeding completed"
-    elif [[ -f "$PROJECT_ROOT/be/seed_ci.sql" ]]; then
-        log_step "Applying be/seed_ci.sql..."
-        local dbname="${POSTGRES_DB:-niyati_dev}"
-        local dbuser="${POSTGRES_USER:-niyati}"
-        docker exec -i "$CONTAINER_NAME" psql -U "$dbuser" -d "$dbname" < "$PROJECT_ROOT/be/seed_ci.sql"
-        log_success "Seeding completed"
     else
-        log_warn "No seed script found. You can seed data manually."
+        # Fallback: look for SQL seed migrations under packages/migrations
+        local migrations_dir="$PROJECT_ROOT/packages/migrations"
+        local found_seed=false
+        if [[ -d "$migrations_dir" ]]; then
+            for seedfile in "$migrations_dir"/*seed*.up.sql; do
+                if [[ -f "$seedfile" ]]; then
+                    found_seed=true
+                    log_step "Applying seed migration: $(basename "$seedfile")"
+                    local dbname="${POSTGRES_DB:-niyati_dev}"
+                    local dbuser="${POSTGRES_USER:-niyati}"
+                    docker exec -i "$CONTAINER_NAME" psql -U "$dbuser" -d "$dbname" < "$seedfile"
+                fi
+            done
+        fi
+
+        if [[ "$found_seed" == true ]]; then
+            log_success "Seeding completed via migrations"
+        elif [[ -f "$PROJECT_ROOT/scripts/seed_test_data.js" ]]; then
+            # As a last resort run local seeder (requires node available locally)
+            log_step "Running local seed script: scripts/seed_test_data.js"
+            node "$PROJECT_ROOT/scripts/seed_test_data.js"
+            log_success "Seeding completed via local script"
+        else
+            log_warn "No seed script found. You can seed data manually."
+        fi
     fi
 }
 

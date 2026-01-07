@@ -30,18 +30,17 @@ fi
 # Run full test suite
 echo -e "${YELLOW}Running full test suite...${NC}"
 
-# BFF tests
-if [ -d "be/bff" ]; then
-    cd be/bff
-    if npm run | grep -q "test"; then
-        echo "  → Running BFF tests..."
-        npm test || {
-            echo -e "${RED}❌ BFF tests failed${NC}"
-            exit 1
-        }
+# BFF tests: run tests for platform and auth apps if present
+for bff_app in apps/bff-platform apps/bff-auth; do
+    if [ -d "$bff_app" ]; then
+        cd "$bff_app"
+        if npm run | grep -q "test"; then
+            echo "  → Running tests for $bff_app..."
+            npm test || { echo -e "${RED}❌ Tests failed for $bff_app${NC}"; exit 1; }
+        fi
+        cd - >/dev/null
     fi
-    cd ../..
-fi
+done
 
 # UI tests
 if [ -d "ui" ]; then

@@ -25,49 +25,34 @@ has_changes() {
     echo "$STAGED_FILES" | grep -q "^$1/"
 }
 
-# BFF checks
-if has_changes "be/bff"; then
-    echo -e "${YELLOW}📦 Checking BFF...${NC}"
-    
-    cd be/bff
-    
-    # Check if node_modules exists
-    if [ ! -d "node_modules" ]; then
-        echo -e "${YELLOW}Installing BFF dependencies...${NC}"
-        npm install
+# BFF checks (apps/bff-platform and apps/bff-auth)
+for bff_app in apps/bff-platform apps/bff-auth; do
+    if has_changes "$bff_app"; then
+        echo -e "${YELLOW}📦 Checking $bff_app...${NC}"
+        if [ -d "$bff_app" ]; then
+            cd "$bff_app"
+            # Install deps if needed
+            if [ ! -d "node_modules" ]; then
+                echo -e "${YELLOW}Installing dependencies for $bff_app...${NC}"
+                npm install
+            fi
+            if npm run | grep -q "lint"; then
+                echo "  → Running ESLint..."
+                npm run lint || { echo -e "${RED}❌ Lint failed for $bff_app${NC}"; exit 1; }
+            fi
+            if npm run | grep -q "format:check"; then
+                echo "  → Checking code formatting..."
+                npm run format:check || { echo -e "${RED}❌ Format check failed for $bff_app${NC}"; exit 1; }
+            fi
+            if npm run | grep -q "test"; then
+                echo "  → Running tests..."
+                npm test || { echo -e "${RED}❌ Tests failed for $bff_app${NC}"; exit 1; }
+            fi
+            cd - >/dev/null
+            echo -e "${GREEN}✓ $bff_app checks passed${NC}"
+        fi
     fi
-    
-    # Run linter if available
-    if npm run | grep -q "lint"; then
-        echo "  → Running ESLint..."
-        npm run lint || {
-            echo -e "${RED}❌ BFF linting failed${NC}"
-            exit 1
-        }
-    fi
-    
-    # Run formatter check if available
-    if npm run | grep -q "format:check"; then
-        echo "  → Checking code formatting..."
-        npm run format:check || {
-            echo -e "${RED}❌ BFF formatting check failed${NC}"
-            echo -e "${YELLOW}Run 'npm run format' to fix${NC}"
-            exit 1
-        }
-    fi
-    
-    # Run tests if available
-    if npm run | grep -q "test"; then
-        echo "  → Running tests..."
-        npm test || {
-            echo -e "${RED}❌ BFF tests failed${NC}"
-            exit 1
-        }
-    fi
-    
-    cd ../..
-    echo -e "${GREEN}✓ BFF checks passed${NC}"
-fi
+done
 
 # UI checks
 if has_changes "ui"; then

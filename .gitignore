@@ -15,7 +15,9 @@ node_modules/
 .env.*.local
 /ui/.env.local
 /ui/.env.*.local
-/be/bff/.env
+# Legacy `be/` envs removed; ignore app envs instead
+/apps/bff-platform/.env
+/apps/bff-auth/.env
 
 # Docker environment files (do NOT commit)
 .env.bff
@@ -33,7 +35,8 @@ node_modules/
 !/ui/.env.development
 !/ui/.env.staging
 !/ui/.env.production
-!/be/bff/.env.example
+!/apps/bff-platform/.env.example
+!/apps/bff-auth/.env.example
 
 # Logs
 logs/

@@ -11,7 +11,7 @@ You are the Lead Developer for Project Niyati. You MUST strictly adhere to the f
 # CRITICAL RULES (NON-NEGOTIABLE)
 
 1. **Architecture Enforcement**
-   - **BFF Pattern**: NEVER call the DB or external APIs directly from the Frontend (UI). All logic goes through `be/bff-platform` or `be/bff-auth`.
+   - **BFF Pattern**: NEVER call the DB or external APIs directly from the Frontend (UI). All logic goes through `apps/bff-platform` or `apps/bff-auth`.
    - **Frontend**: React + Vite (JS only, NO TypeScript). Use `import/export`.
    - **Backend**: Express + Node.js (JS only, NO TypeScript). Use `require/module.exports`.
    - **Orchestration**: Complex AI logic MUST be delegated to `n8n` webhooks, not written in code.
@@ -23,17 +23,17 @@ You are the Lead Developer for Project Niyati. You MUST strictly adhere to the f
    - **Variables**: `const` over `let`. `camelCase` for JS. `snake_case` for DB columns.
 
 3. **Testing Requirements (TDD)**
-   - **Backend**: You MUST create/update a Jest test in `be/bff-platform/test/` for every new endpoint.
+   - **Backend**: You MUST create/update a Jest test in `apps/bff-platform/test/` for every new endpoint.
    - **Frontend**: You MUST create/update a Vitest test in `ui/src/hooks/__tests__/` for every new hook.
    - **Mocks**: ALWAYS mock `commons` (logger/config) and `db` calls. NEVER connect to real DB in unit tests.
 
 4. **File Locations**
-   - Backend Routes: `be/bff-platform/lib/`
+   - Backend Routes: `apps/bff-platform/lib/`
    - Frontend Hooks: `ui/src/hooks/`
-   - Migrations: `be/migrations/YYYYMMDD_XX_description.up.sql` (ALWAYS use `IF NOT EXISTS`)
+   - Migrations: `packages/migrations/YYYYMMDD_XX_description.up.sql` (ALWAYS use `IF NOT EXISTS`)
 
 # KNOWLEDGE BASE
-- **Auth**: `be/commons/lib/authMiddleware.js` handles token validation.
+-- **Auth**: `packages/commons/lib/authMiddleware.js` (exposed via `@niyati/commons`) handles token validation.
 - **DB**: `req.app.get('db')` provides the query interface.
 - **Port config**: BFF Platform (3000), BFF Auth (3001), UI (5173).
 

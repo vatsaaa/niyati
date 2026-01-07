@@ -34,7 +34,7 @@ const loginLimiter = rateLimit({
   legacyHeaders: false, // Disable the `X-RateLimit-*` headers
 });
 
-// Shared logic migrated to be/commons/lib/utils.js
+// Shared logic available via the `@niyati/commons` package (packages/commons/lib/utils.js)
 
 // Helper: create and persist refresh token for a user, return raw token
 async function createAndStoreRefreshForUser(db, userId) {
@@ -45,7 +45,7 @@ async function createAndStoreRefreshForUser(db, userId) {
   return { raw, expiresAt };
 }
 
-// Helper to create access token (JWT) migrated to be/commons/lib/auth.js
+// Helper to create access token (JWT) is available from `@niyati/commons` (packages/commons/lib/auth.js)
 
 // Helper: set refresh token cookie
 function setRefreshCookie(res, token) {

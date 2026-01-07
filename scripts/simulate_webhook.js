@@ -28,7 +28,6 @@ function buildDefaultBody(args) {
   if (evt === 'dev.event') {
     return { event: 'dev.event', ts: new Date().toISOString(), note: args.note || 'ping' };
   }
-  // Generic fallback for any event name
   return { event: evt, meta: args, ts: new Date().toISOString() };
 }
 
@@ -41,7 +40,6 @@ async function main() {
 
   let bodyObj = null;
   if (args.body) {
-    // explicit JSON body file
     try {
       const raw = fs.readFileSync(args.body, 'utf8');
       bodyObj = JSON.parse(raw);
@@ -68,10 +66,8 @@ async function main() {
     }
   };
 
-  // Add x-request-id if provided
   if (args.reqId) options.headers['x-request-id'] = args.reqId;
 
-  // Compute HMAC signature if secret provided (add a generic provider signature header)
   if (args.secret) {
     const h = crypto.createHmac('sha256', args.secret);
     h.update(rawBody, 'utf8');

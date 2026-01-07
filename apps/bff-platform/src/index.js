@@ -11,7 +11,7 @@ if (process.env.NODE_ENV !== 'test') {
   dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 }
 
-// Use shared commons from be/commons
+// Use shared commons from the `@niyati/commons` package
 const commons = require('@niyati/commons');
 const { logger, attachResponseHelpers, createTelemetryRouter } = commons;
 

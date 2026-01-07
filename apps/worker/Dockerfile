@@ -2,11 +2,12 @@ FROM node:20-alpine AS builder
 WORKDIR /usr/src/app
 
 # Install only production dependencies in builder stage
-COPY be/worker/package.json be/worker/package-lock.json ./
+# Use context-local paths (apps/worker) instead of legacy be/ layout
+COPY package.json package-lock.json ./
 RUN npm ci --only=production
 
 # Copy runtime files
-COPY be/worker/worker.js ./
+COPY worker.js ./
 
 FROM node:20-alpine AS production
 WORKDIR /usr/src/app
@@ -19,7 +20,7 @@ ENV NODE_ENV=production
 RUN apk add --no-cache dumb-init netcat-openbsd
 
 # Copy shared helper scripts
-COPY be/scripts/wait-for-db.sh be/scripts/entrypoint.sh /usr/local/bin/
+COPY scripts/wait-for-db.sh scripts/entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/wait-for-db.sh /usr/local/bin/entrypoint.sh
 
 # Non-root user for better security

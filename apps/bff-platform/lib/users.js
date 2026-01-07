@@ -87,7 +87,7 @@ router.post('/sync', async (req, res) => {
     // Ensure last_login_location is sent as a string (or null) to avoid numeric coercion
     const normalizedLastLoginLocation = (profile.last_login_location === undefined || profile.last_login_location === null) ? null : String(profile.last_login_location);
 
-    // compute is_adult from provided date_of_birth (migrated to be/commons/lib/dateUtils.js)
+    // compute is_adult from provided date_of_birth (use packages/commons dateUtils)
     const { computeIsAdult } = require('@niyati/commons').dateUtils;
 
     const params = [

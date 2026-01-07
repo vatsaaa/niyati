@@ -1,8 +1,8 @@
-// be/commons/index.js
+// packages/commons/index.js
 // Re-export shared utilities to be used by both BFF services
 
 /**
- * @module be/commons
+ * @module packages/commons
  *
  * Exports central utilities used across services:
  * - `logger`: structured logger

@@ -194,10 +194,9 @@ for f in $(ls -1 packages/migrations/*.up.sql 2>/dev/null | sort); do
     cat "$f" | $COMPOSE_CMD -p "$PROJECT_NAME" exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null
 done
 
-if [[ -f be/seed_ci.sql ]]; then
-    log_step "📦 Applying CI seed data..."
-    cat be/seed_ci.sql | $COMPOSE_CMD -p "$PROJECT_NAME" exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null
-fi
+# Any seed data should live as idempotent migrations under packages/migrations
+# (e.g. packages/migrations/*seed*.up.sql). The migrations loop above already
+# applied all .up.sql files, so no legacy be/seed_ci.sql handling is required.
 
 # =============================================================================
 # STEP 4: BACKEND TESTS

@@ -10,7 +10,7 @@ describe('auth routes', () => {
     process.env.ACCESS_TOKEN_SECRET = 'testsecret';
     process.env.BCRYPT_ROUNDS = '1';
 
-    // Use real response helpers from be/commons; mock logger only
+    // Use real response helpers from @niyati/commons; mock logger only
     jest.mock('@niyati/commons/lib/logger', () => ({ logger: { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn(), fatal: jest.fn(), trace: jest.fn(),  error: jest.fn(), info: jest.fn() } }));
 
     // Mock refreshTokens to avoid DB writes for refresh tokens

@@ -32,7 +32,7 @@ jobs:
         node-version: '20'
     
     - name: Audit BFF dependencies
-      working-directory: ./be/bff-platform
+      working-directory: ./apps/bff-platform
       run: |
         echo "=== BFF Audit Report ===" >> $GITHUB_STEP_SUMMARY
         npm audit --json > audit-bff.json || true
@@ -50,7 +50,7 @@ jobs:
       with:
         name: npm-audit-results
         path: |
-          be/bff-platform/audit-bff.json
+          apps/bff-platform/audit-bff.json
           ui/audit-ui.json
         retention-days: 30
 
