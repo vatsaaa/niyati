@@ -2,9 +2,17 @@ name: CI Integration Tests
 
 on:
   pull_request:
-    branches: [ master ]
+    branches: [ master, main ]
+    paths:
+      - 'apps/bff-*/**'
+      - 'packages/**'
+      - '.github/workflows/ci-integration.yml'
   push:
-    branches: [ master ]
+    branches: [ master, main ]
+    paths:
+      - 'apps/bff-*/**'
+      - 'packages/**'
+      - '.github/workflows/ci-integration.yml'
 
 jobs:
   integration:
@@ -37,15 +45,15 @@ jobs:
           sudo apt-get install -y postgresql-client
 
       - name: Install commons deps
-        working-directory: be/commons
+        working-directory: packages/commons
         run: npm ci
 
       - name: Install bff-platform deps
-        working-directory: be/bff-platform
+        working-directory: apps/bff-platform
         run: npm ci
 
       - name: Install bff-auth deps
-        working-directory: be/bff-auth
+        working-directory: apps/bff-auth
         run: npm ci
 
       - name: Wait for Postgres
@@ -59,27 +67,27 @@ jobs:
       - name: Apply migrations
         run: |
           export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/niyati_test"
-          for f in $(ls -1 be/migrations/*.up.sql | sort); do
+          for f in $(ls -1 packages/migrations/*.up.sql | sort); do
             echo "Applying $f"
             psql "$DATABASE_URL" -f "$f"
           done
 
       - name: Run bff-platform tests
-        working-directory: be/bff-platform
+        working-directory: apps/bff-platform
         run: |
           export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/niyati_test"
           export NODE_ENV=test
           npm test --silent || echo "bff-platform tests completed with exit code $?"
 
       - name: Run bff-auth tests
-        working-directory: be/bff-auth
+        working-directory: apps/bff-auth
         run: |
           export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/niyati_test"
           export NODE_ENV=test
           npm test --silent || echo "bff-auth tests completed with exit code $?"
 
       - name: Run commons tests
-        working-directory: be/commons
+        working-directory: packages/commons
         run: |
           export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/niyati_test"
           export NODE_ENV=test

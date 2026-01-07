@@ -7,12 +7,8 @@ const REAL = process.env.REAL === '1';
 
 test('ui identify -> chat -> credits deducted', async ({ page, baseURL }) => {
   const base = process.env.BASE_URL || baseURL || 'http://127.0.0.1';
-  await page.goto(base + '/');
 
-  // Wait for the login form button
-  await page.waitForSelector('text=Begin Your Journey');
-
-  // If REAL=1, run against the real stack (no stubbing) and capture network/console for diagnosis.
+  // Set up route intercepts BEFORE navigating to the page
   let creditsValue = 10;
   const networkRequests = [];
   const networkResponses = [];
@@ -41,7 +37,17 @@ test('ui identify -> chat -> credits deducted', async ({ page, baseURL }) => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(reply) });
     });
   } else {
+    // Stub geocode current-location to avoid network delay
+    await page.route('**/api/v1/geocode/current-location', route => {
+      route.fulfill({ 
+        status: 200, 
+        contentType: 'application/json',
+        body: JSON.stringify({ status: 'ok', data: { location: { city: 'Mumbai', country: 'IN' } } })
+      });
+    });
+
     // Deterministic stubbing: provide a full returning profile so UI considers the user 'complete'
+    // Use full path pattern to match /api/v1/users/identify
     await page.route('**/api/v1/users/identify', route => {
       const identified = {
         id: '1',
@@ -52,9 +58,10 @@ test('ui identify -> chat -> credits deducted', async ({ page, baseURL }) => {
         place_of_birth: 'Mumbai, India',
         consent_given: true,
         credits: creditsValue,
-        total_paid_amount: 0
+        total_paid_amount: 0,
+        last_login_location: 'Mumbai'
       };
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', data: { returning: true, user: identified } }) });
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', data: { returning: true, user: identified, config: { credits_monthly_free: 10, credits_low_threshold: 4 } } }) });
     });
 
     await page.route('**/api/v1/users/profile', route => {
@@ -78,6 +85,10 @@ test('ui identify -> chat -> credits deducted', async ({ page, baseURL }) => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(reply) });
     });
   }
+
+  // Navigate to page AFTER route intercepts are set up
+  await page.goto(base + '/');
+  await page.waitForSelector('text=Begin Your Journey');
 
   // Fill phone number and consent, then begin
   const phoneInput = page.locator('input[type="tel"]');

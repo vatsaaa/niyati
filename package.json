@@ -1,0 +1,16 @@
+{
+    "name": "niyati",
+    "version": "1.0.0",
+    "private": true,
+    "description": "Niyati monorepo - Service-First Architecture",
+    "workspaces": [
+        "apps/*",
+        "packages/*"
+    ],
+    "scripts": {
+        "test": "./scripts/ci-run-tests.sh",
+        "dev": "docker compose -f infra/docker-compose.yml -f infra/docker-compose.override.yml up",
+        "build": "docker compose -f infra/docker-compose.yml build"
+    },
+    "devDependencies": {}
+}

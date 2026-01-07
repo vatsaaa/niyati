@@ -30,7 +30,7 @@ for i in $(seq 1 60); do
 done
 
 echo "Applying migrations..."
-for f in be/migrations/*.up.sql; do
+for f in packages/migrations/*.up.sql; do
   echo "  -> applying $f"
   cat "$f" | $COMPOSE_CMD exec -T postgres psql -U "${POSTGRES_USER:-niyati}" -d "${POSTGRES_DB:-niyati_ci}"
 done

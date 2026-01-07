@@ -4,9 +4,15 @@ AI-powered astrology platform. BFF architecture, JavaScript only.
 
 > **Pattern Reference**: This project serves as a reference implementation for BFF-based JavaScript projects with comprehensive CI/CD, testing, and deployment patterns.
 
+## ⚠️ Core Development Principles
+
+> **TDD/BDD is MANDATORY** — No code without tests first. No exceptions.
+> **Database is IMMUTABLE** — No `UPDATE`, no `ALTER`. Always idempotent, from scratch.
+> **Infrastructure is ISOLATED** — Dev, CI, and Prod use non-overlapping ports, networks, volumes.
+> **Tests are INDEPENDENT** — Run via CI scripts, deploy scripts, or standalone. Always reproducible.
+
 ## Architecture & Data Flow
 
-```
 Browser (React) → Caddy (proxy) → bff-platform/bff-auth → PostgreSQL
                                          ↓
                                     n8n (AI agent) ← Ollama (LLM)
@@ -48,13 +54,13 @@ UI is a **thin rendering layer** — no heavy processing, NLP, or business logic
 
 | Purpose | Location |
 |---------|----------|
-| BFF routes | [be/bff-platform/lib/](be/bff-platform/lib/), [be/bff-auth/lib/](be/bff-auth/lib/) |
-| Shared utilities | [be/commons/](be/commons/) — logger, sanitize, ErrorCodes, responses |
-| Test helpers | [be/commons/test/helpers.js](be/commons/test/helpers.js) — `createTestApp`, `createMockDb` |
-| Frontend hooks | [ui/src/hooks/](ui/src/hooks/), services in [ui/src/services/api.js](ui/src/services/api.js) |
-| Migrations | [be/migrations/](be/migrations/) (format: `YYYYMMDD_XX_desc.up.sql`) |
+| BFF routes | [apps/bff-platform/lib/](apps/bff-platform/lib/), [apps/bff-auth/lib/](apps/bff-auth/lib/) |
+| Shared utilities | [packages/commons/](packages/commons/) — logger, sanitize, ErrorCodes, responses |
+| Test helpers | [packages/commons/test/helpers.js](packages/commons/test/helpers.js) — `createTestApp`, `createMockDb` |
+| Frontend hooks | [apps/ui/src/hooks/](apps/ui/src/hooks/), services in [apps/ui/src/services/api.js](apps/ui/src/services/api.js) |
+| Migrations | [packages/migrations/](packages/migrations/) (format: `YYYYMMDD_XX_desc.up.sql`) |
 | E2E tests | [e2e/tests/](e2e/tests/) — Playwright browser tests |
-| **CI/CD Scripts** | [scripts/](scripts/) — **all** automation lives here |
+| **Automation Scripts** | [scripts/](scripts/) — **all** automation lives here |
 | GitHub Workflows | [.github/workflows/](.github/workflows/) — thin wrappers calling scripts |
 
 ## Project Structure Overview
@@ -67,14 +73,15 @@ niyati/
 │   │   ├── ui-deploy.yml   # UI deployment to S3/CloudFront
 │   │   └── security.yml    # Security scanning
 │   └── copilot-instructions.md
-├── be/
+├── apps/
 │   ├── bff-platform/       # Main BFF service
-│   ├── bff-auth/           # Auth BFF service
-│   ├── commons/            # Shared Node.js utilities
-│   ├── migrations/         # SQL migrations (YYYYMMDD_XX_desc.up.sql)
-│   ├── worker/             # Background job processor
-│   └── n8n/                # n8n workflow definitions
-├── ui/                     # React + Vite frontend
+│   ├── bff-auth/           # Auth service
+│   ├── ui/                 # React frontend
+│   └── worker/             # Background jobs
+├── packages/
+│   ├── commons/            # Shared utilities
+│   └── migrations/         # SQL migrations
+├── infra/               # Infrastructure & config
 ├── e2e/                    # Playwright E2E tests
 ├── scripts/                # All automation scripts
 │   ├── lib/common.sh       # Shared bash library
@@ -88,16 +95,61 @@ niyati/
 └── Caddyfile               # Caddy reverse proxy config
 ```
 
+## Database Philosophy: Immutable, Idempotent, From Scratch
+
+> **Golden Rule**: The database schema and seed data should be reproducible from scratch at any time.
+
+### Why No UPDATE/ALTER?
+
+| ❌ Problematic | ✅ Correct Approach |
+|----------------|---------------------|
+| `ALTER TABLE users ADD COLUMN x` | Create new migration with full table definition |
+| `UPDATE users SET x = 'value'` | `INSERT ... ON CONFLICT DO UPDATE` (upsert) |
+| `ALTER TABLE DROP COLUMN` | New migration file, rebuild schema |
+| Manual data fixes | Idempotent seed scripts |
+
+### Migration Strategy
+
+```sql
+-- ✅ CORRECT: Idempotent table creation
+CREATE TABLE IF NOT EXISTS users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  phone_number VARCHAR(20) UNIQUE NOT NULL,
+  credits INTEGER DEFAULT 10
+);
+
+-- ✅ CORRECT: Idempotent index
+CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone_number);
+
+-- ✅ CORRECT: Idempotent seed data
+INSERT INTO app_config (key, value)
+VALUES ('credits_monthly_free', '10')
+ON CONFLICT (key) DO NOTHING;
+
+-- ❌ FORBIDDEN: These will be rejected in code review
+ALTER TABLE users ADD COLUMN new_field VARCHAR(100);
+UPDATE users SET credits = 0 WHERE expired = true;
+```
+
+### Database Rebuild Flow
+
+```bash
+# CI always starts fresh
+docker compose down -v        # Remove volumes
+docker compose up -d postgres # Start clean
+./scripts/db.sh migrate       # Apply all migrations from scratch
+./scripts/db.sh seed          # Apply idempotent seed data
+```
+
 ## Integration Points
 
 ### n8n Workflow (AI Orchestration)
-- Runs on **local machine port 5678** — not in Docker
 - Receives chat messages via webhook, executes AI agent with Ollama LLM, returns `{output}`
-- Workflow definition: [be/n8n/NiyatiWorkflow.json](be/n8n/NiyatiWorkflow.json)
+- Workflow definition: [apps/bff-platform/n8n/NiyatiWorkflow.json](apps/bff-platform/n8n/NiyatiWorkflow.json)
 - **CI uses mock**: [scripts/mock-n8n.js](scripts/mock-n8n.js) — simple HTTP server returning canned responses
 
 ### Worker Service (Background Jobs)
-- Location: [be/worker/worker.js](be/worker/worker.js)
+- Location: [apps/worker/worker.js](apps/worker/worker.js)
 - Polls Redis queue for jobs (`email`, webhooks)
 - Authenticates via `WORKER_TOKEN` from secrets
 - Uses `getSecret()` pattern for Docker secrets (`_FILE` env vars)
@@ -123,7 +175,7 @@ const WORKER_TOKEN = getSecret('WORKER_TOKEN', 'WORKER_TOKEN_FILE');
 
 ### Credits System
 
-**Schema** ([be/migrations/20251217_01_baseline.up.sql](be/migrations/20251217_01_baseline.up.sql)):
+**Schema** ([packages/migrations/20251217_01_baseline.up.sql](packages/migrations/20251217_01_baseline.up.sql)):
 - `credits`: Current balance (default: 10)
 - `credits_last_reset`: Monthly reset timestamp
 - `total_paid_amount`: Lifetime INR paid
@@ -137,14 +189,14 @@ const WORKER_TOKEN = getSecret('WORKER_TOKEN', 'WORKER_TOKEN_FILE');
 | `credits_low_threshold` | 4 | Show payment prompt when below |
 | `payment_amount_inr` | 500 | Payment amount (INR) |
 
-**Billing Flow** (see [ui/src/hooks/useChat.js](ui/src/hooks/useChat.js), [be/bff-platform/lib/queryClassifier.js](be/bff-platform/lib/queryClassifier.js)):
+**Billing Flow** (see [apps/ui/src/hooks/useChat.js](apps/ui/src/hooks/useChat.js), [apps/bff-platform/lib/queryClassifier.js](apps/bff-platform/lib/queryClassifier.js)):
 1. UI sends message directly to n8n webhook, receives AI response
 2. UI calls `POST /api/v1/chat/classify` with `{message}` → BFF returns `{queryType, creditCost, isBillable}`
 3. If `isBillable`, UI calls `POST /api/v1/users/deduct-credits` with `{phoneNumber, amount: creditCost}`
 4. **BFF** deducts credits from DB, returns updated balance
 5. UI displays server-confirmed balance
 
-**Query Classification** (server-side in [be/bff-platform/lib/queryClassifier.js](be/bff-platform/lib/queryClassifier.js)):
+**Query Classification** (server-side in [apps/bff-platform/lib/queryClassifier.js](apps/bff-platform/lib/queryClassifier.js)):
 - `isHoroscopeQuery()`: horoscope, zodiac, rashifal → `credits_horoscope_cost` (2)
 - `isPremiumAstrologyQuery()`: birth chart, predictions, remedies → `credits_premium_cost` (4)
 - `isCasualConversation()`: greetings, profile info → no charge
@@ -157,10 +209,10 @@ const WORKER_TOKEN = getSecret('WORKER_TOKEN', 'WORKER_TOKEN_FILE');
 
 ## Backend Route Pattern
 
-All BFF routes follow this structure ([be/bff-platform/lib/users.js](be/bff-platform/lib/users.js)):
+All BFF routes follow this structure ([apps/bff-platform/lib/users.js](apps/bff-platform/lib/users.js)):
 
 ```javascript
-const { logger, sanitize, ErrorCodes } = require('../../commons');
+const { logger, sanitize, ErrorCodes } = require('@niyati/commons');
 
 router.post('/action', async (req, res) => {
   try {
@@ -182,7 +234,7 @@ router.post('/action', async (req, res) => {
 
 ## Frontend Hook Pattern
 
-All hooks use `bffFetchWithRetry` ([ui/src/hooks/useChat.js](ui/src/hooks/useChat.js)):
+All hooks use `bffFetchWithRetry` ([apps/ui/src/hooks/useChat.js](apps/ui/src/hooks/useChat.js)):
 
 ```javascript
 import { bffFetchWithRetry } from '../services/api';
@@ -202,9 +254,9 @@ export function useMyFeature() {
 
 ### Backend Unit Tests (Jest)
 
-Location: `be/bff-platform/test/`, `be/bff-auth/test/`
+Location: `apps/bff-platform/test/`, `apps/bff-auth/test/`
 
-Use `createTestApp` and `createMockDb` from [be/commons/test/helpers.js](be/commons/test/helpers.js). These wire up `res.sendSuccess`/`res.sendError` automatically via `attachResponseHelpers` middleware.
+Use `createTestApp` and `createMockDb` from [packages/commons/test/helpers.js](packages/commons/test/helpers.js). These wire up `res.sendSuccess`/`res.sendError` automatically via `attachResponseHelpers` middleware.
 
 ```javascript
 const request = require('supertest');
@@ -216,7 +268,7 @@ describe('My Feature', () => {
   beforeEach(() => {
     jest.resetModules();
     // Mock commons to isolate from real logger/config
-    jest.mock('../commons', () => createMockCommons());
+    jest.mock('@niyati/commons', () => createMockCommons());
     
     const router = require('../lib/my-feature');
     // createTestApp mounts router with attachResponseHelpers middleware
@@ -320,14 +372,14 @@ When implementing features or fixing bugs, AI agents MUST:
 
 ```bash
 # Run specific test file in watch mode while developing
-cd be/bff-platform && npm test -- --watch queryClassifier.test.js
+cd apps/bff-platform && npm test -- --watch queryClassifier.test.js
 
 # Run all backend tests
-cd be/bff-platform && npm test
-cd be/bff-auth && npm test
+cd apps/bff-platform && npm test
+cd apps/bff-auth && npm test
 
 # Check coverage (should maintain or improve)
-cd be/bff-platform && npm test -- --coverage
+cd apps/bff-platform && npm test -- --coverage
 ```
 
 **Test file naming**: `<module>.test.js` in `test/` directory.
@@ -368,7 +420,7 @@ cd e2e && npx playwright test --headed --debug
 
 | Change Type | Step 1: Write Test | Step 2: Implement | Step 3: Verify |
 |-------------|-------------------|-------------------|----------------|
-| **New BFF endpoint** | Add test in `be/bff-*/test/` using `createTestApp`/`createMockDb` | Implement route in `lib/` | Run `npm test` |
+| **New BFF endpoint** | Add test in `apps/bff-*/test/` using `createTestApp`/`createMockDb` | Implement route in `lib/` | Run `npm test` |
 | **New UI hook** | Add unit test or E2E spec | Implement hook | Run E2E tests |
 | **Query classification** | Add test case in `queryClassifier.test.js` | Update classifier | Run `npm test` |
 | **Bug fix** | Write failing test that reproduces bug | Fix the code | Verify test passes |
@@ -377,13 +429,13 @@ cd e2e && npx playwright test --headed --debug
 **Workflow for Bug Fixes:**
 ```bash
 # 1. Write test that reproduces the bug (should FAIL)
-cd be/bff-platform && npm test -- queryClassifier.test.js
+cd apps/bff-platform && npm test -- queryClassifier.test.js
 
 # 2. Implement fix
 # ... edit code ...
 
 # 3. Verify test now passes
-cd be/bff-platform && npm test -- queryClassifier.test.js
+cd apps/bff-platform && npm test -- queryClassifier.test.js
 
 # 4. Run full CI before committing
 ./scripts/ci-run-tests.sh
@@ -450,19 +502,39 @@ cd "$PROJECT_ROOT"
 
 **What it does** (in order):
 1. Sources `.env.ci` for CI-specific ports
-2. Tears down any existing CI stack (`docker compose down -v`)
+2. Tears down any existing CI stack (`docker compose down -v`) — **clean slate**
 3. Builds and starts CI stack with mock n8n
 4. Waits for all services to be healthy
-5. Applies database migrations and seed data
-6. Runs backend Jest tests (`bff-platform`, `bff-auth`)
-7. Runs E2E Playwright tests
-8. Cleans up on exit (success or failure) via trap
+5. Applies database migrations from scratch (idempotent)
+6. Applies seed data (idempotent `ON CONFLICT DO NOTHING`)
+7. Runs backend Jest tests (`bff-platform`, `bff-auth`)
+8. Runs E2E Playwright tests
+9. Cleans up on exit (success or failure) via trap
 
 **Key Features**:
 - **Idempotent**: Safe to run multiple times, always starts fresh
+- **Clean database**: Volumes destroyed, schema rebuilt from migrations
 - **Cleanup trap**: Always cleans up, even on Ctrl+C or failure
 - **Separate ports**: CI uses different ports to avoid conflicts with dev
 - **Mock n8n**: Uses [scripts/mock-n8n.js](scripts/mock-n8n.js) for deterministic AI responses
+- **No shared state**: Each run is completely independent
+
+### Test Independence Principles
+
+Tests can be executed through multiple paths:
+
+| Execution Path | Command | Use Case |
+|----------------|---------|----------|
+| **CI Script** | `./scripts/ci-run-tests.sh` | Full integration, GitHub Actions |
+| **Deploy Script** | `./scripts/deploy_niyati.sh --env=dev --action=test` | Pre-deploy validation |
+| **Standalone Backend** | `cd apps/bff-platform && npm test` | Development iteration |
+| **Standalone E2E** | `cd e2e && npx playwright test` | UI testing against running stack |
+
+**All paths must produce the same results** because:
+- Tests don't depend on execution order
+- Each test suite manages its own setup/teardown
+- Database is always rebuilt from scratch in CI
+- External services are mocked consistently
 
 ### Deployment Script ([scripts/deploy_niyati.sh](scripts/deploy_niyati.sh))
 
@@ -550,6 +622,23 @@ docker compose --env-file .env.ci -f docker-compose.yml -f docker-compose.ci.yml
 | `docker-compose.ci.yml` | CI (different ports, mock n8n service) |
 | `.env.ci` | CI environment variables |
 
+### Infrastructure Isolation
+
+**Design Principle**: Dev, CI, and Prod environments are completely isolated — they can run simultaneously without conflicts.
+
+| Resource Type | Dev | CI | Prod |
+|---------------|-----|-----|------|
+| **Project Name** | `niyati` | `niyati-ci` | `niyati-prod` |
+| **Network** | `niyati_default` | `niyati-ci_default` | `niyati-prod_default` |
+| **Volumes** | `niyati_postgres-data` | `niyati-ci_postgres-data` | `niyati-prod_postgres-data-prod` |
+| **Containers** | `niyati-*-1` | `niyati-ci-*-1` | `niyati-*-prod` |
+
+**Why Isolation Matters**:
+- Run CI tests while dev stack is running
+- Deploy to prod without affecting CI
+- Debug issues in isolation
+- No port conflicts or volume corruption
+
 ### Port Configuration
 
 CI uses separate ports to allow running alongside dev:
@@ -628,11 +717,11 @@ log_step "Starting..."
 
 | Task | Command |
 |------|---------|
-| Backend tests (platform) | `cd be/bff-platform && npm test` |
-| Backend tests (auth) | `cd be/bff-auth && npm test` |
-| Single test file | `cd be/bff-platform && npm test -- queryClassifier.test.js` |
-| Watch mode | `cd be/bff-platform && npm test -- --watch` |
-| Coverage | `cd be/bff-platform && npm test -- --coverage` |
+| Backend tests (platform) | `cd apps/bff-platform && npm test` |
+| Backend tests (auth) | `cd apps/bff-auth && npm test` |
+| Single test file | `cd apps/bff-platform && npm test -- queryClassifier.test.js` |
+| Watch mode | `cd apps/bff-platform && npm test -- --watch` |
+| Coverage | `cd apps/bff-platform && npm test -- --coverage` |
 | E2E tests | `cd e2e && npx playwright test` |
 | E2E specific | `cd e2e && npx playwright test credits_threshold.spec.js` |
 | E2E debug | `cd e2e && npx playwright test --headed --debug` |
@@ -649,13 +738,39 @@ log_step "Starting..."
 
 ## Critical Rules
 
-1. **SQL**: Always parameterized (`$1`, `$2`). Never concatenate strings.
-2. **Async**: All async code wrapped in try/catch with proper error responses.
-3. **Migrations**: Use `CREATE TABLE IF NOT EXISTS`. Name: `YYYYMMDD_XX_desc.up.sql`.
-4. **CI/CD**: Logic lives in [scripts/](scripts/), NOT in GitHub workflow YAML.
-5. **Billing**: Server-side only. UI displays but never performs authoritative charges.
-6. **TDD Required**: All code changes MUST have tests written FIRST. No exceptions.
-7. **Scripts**: All bash scripts MUST source `scripts/lib/common.sh` for consistency.
+### 1. TDD/BDD is Mandatory (Non-Negotiable)
+- **Write test FIRST** — Before any implementation code
+- **Red-Green-Refactor** — Test fails → implement → test passes → refactor
+- **No shortcuts** — Even "quick fixes" require a failing test first
+- **Run CI before commit** — `./scripts/ci-run-tests.sh` must pass
+
+### 2. Database: Idempotent, From Scratch, No Mutations
+- **Always parameterized** — Use `$1`, `$2`. NEVER concatenate strings.
+- **Idempotent DDL** — `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`
+- **Idempotent DML** — `INSERT ... ON CONFLICT DO NOTHING`
+- **STRICTLY FORBIDDEN** — `UPDATE` and `ALTER` statements
+- **Schema changes** — Create new migration file, rebuild from scratch
+- **Data fixes** — Use `INSERT ... ON CONFLICT` or create new table
+- **Why**: Ensures reproducibility, simplifies rollbacks, eliminates state drift
+
+### 3. Infrastructure: Isolated Environments
+- **Non-overlapping resources** — Dev, CI, and Prod use different ports, networks, volumes
+- **Idempotent scripts** — Safe to run multiple times, always produce same result
+- **Clean starts** — `docker compose down -v` before `up` in CI/deploy
+- **Named resources** — Use project prefixes (`niyati-dev-`, `niyati-ci-`, `niyati-prod-`)
+
+### 4. Tests: Independent and Reproducible
+- **Multiple execution paths** — Tests run via CI scripts, deploy scripts, or standalone
+- **No shared state** — Each test file/suite is self-contained
+- **Deterministic** — Same input → same output, always
+- **Mock external services** — n8n, external APIs stubbed in tests
+
+### 5. Code Standards
+- **Async/await** — All async code wrapped in try/catch with proper error responses
+- **Migrations** — Name: `YYYYMMDD_XX_desc.up.sql`. Path: `packages/migrations/`
+- **CI/CD logic** — Lives in [scripts/](scripts/), NOT in GitHub workflow YAML
+- **Billing** — Server-side only. UI displays but never performs authoritative charges
+- **Scripts** — All bash scripts MUST source `scripts/lib/common.sh` for consistency
 
 ## Environment Configs
 

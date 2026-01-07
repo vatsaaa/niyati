@@ -22,6 +22,15 @@ CONTAINER_NAME="postgres"
 COMPOSE_MODE="dev"
 PROD_MODE=false
 
+# Parse arguments for mode early to set CONTAINER_NAME correctly
+for arg in "$@"; do
+    if [[ "$arg" == "--prod" ]]; then
+        PROD_MODE=true
+        COMPOSE_MODE="prod"
+        CONTAINER_NAME="niyati-postgres-prod"
+    fi
+done
+
 # =============================================================================
 # USAGE
 # =============================================================================
@@ -111,7 +120,7 @@ db_migrate() {
     
     local dbname="${POSTGRES_DB:-niyati_dev}"
     local dbuser="${POSTGRES_USER:-niyati}"
-    local migrations_dir="$PROJECT_ROOT/be/migrations"
+    local migrations_dir="$PROJECT_ROOT/packages/migrations"
     
     if [[ ! -d "$migrations_dir" ]]; then
         log_error "Migrations directory not found: $migrations_dir"

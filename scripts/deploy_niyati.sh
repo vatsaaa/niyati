@@ -220,9 +220,9 @@ fi
 
 # Build compose command with explicit files and project name
 if [[ "$ENV" == "prod" ]]; then
-    COMPOSE_FILES="-f docker-compose.yml -f docker-compose.prod.yml"
+    COMPOSE_FILES="-f infra/docker-compose.yml -f infra/docker-compose.prod.yml"
 else
-    COMPOSE_FILES="-f docker-compose.yml -f docker-compose.override.yml"
+    COMPOSE_FILES="-f infra/docker-compose.yml -f infra/docker-compose.override.yml"
 fi
 
 COMPOSE_CMD="docker compose -p $PROJECT $COMPOSE_FILES"
@@ -346,8 +346,9 @@ trap cleanup EXIT
 
 # Validate required environment files exist
 validate_env_files() {
-    log_info "Validating environment files..."
+    log_info "Validating environment files in infra/..."
     local missing=0
+    local infra_dir="infra"
     
     local required_files=(".env")
     if [[ "$ENV" == "prod" ]]; then
@@ -355,16 +356,16 @@ validate_env_files() {
     fi
     
     for f in "${required_files[@]}"; do
-        if [[ ! -f "$PROJECT_ROOT/$f" ]]; then
-            log_error "Missing required file: $f"
+        if [[ ! -f "$PROJECT_ROOT/$infra_dir/$f" ]]; then
+            log_error "Missing required file: $infra_dir/$f"
             missing=1
         else
-            log_debug "Found: $f"
+            log_debug "Found: $infra_dir/$f"
         fi
     done
     
     if [[ $missing -eq 1 ]]; then
-        log_error "Please create missing environment files before deploying."
+        log_error "Please ensure environment files exist in the $infra_dir/ directory."
         return 1
     fi
     
@@ -378,28 +379,52 @@ validate_secrets() {
         return 0
     fi
     
-    log_info "Validating secrets..."
+    log_info "Validating secrets in infra/secrets/..."
     local missing=0
+    local secret_dir="infra/secrets"
     
     local required_secrets=(
-        "secrets/postgres_password.txt"
-        "secrets/jwt_secret.txt"
+        "postgres_password.txt"
+        "jwt_secret.txt"
     )
     
+    # If infra/secrets doesn't exist, we might be using env vars, but let's check for the files first
+    # as docker-compose.prod.yml specifically references them.
     for secret in "${required_secrets[@]}"; do
-        if [[ ! -f "$PROJECT_ROOT/$secret" ]]; then
-            log_error "Missing required secret: $secret"
+        if [[ ! -f "$PROJECT_ROOT/$secret_dir/$secret" ]]; then
+            # Check if they are maybe at root still? No, user said avoid creating newer files.
+            # If they are missing, we'll report it.
+            log_error "Missing required secret file: $secret_dir/$secret"
             missing=1
-        elif [[ ! -s "$PROJECT_ROOT/$secret" ]]; then
-            log_error "Secret file is empty: $secret"
+        elif [[ ! -s "$PROJECT_ROOT/$secret_dir/$secret" ]]; then
+            log_error "Secret file is empty: $secret_dir/$secret"
             missing=1
         else
-            log_debug "Found secret: $secret"
+            log_debug "Found secret: $secret_dir/$secret"
         fi
     done
     
     if [[ $missing -eq 1 ]]; then
-        log_error "Please create missing secrets before production deployment."
+        log_warn "Secret files missing in $secret_dir/. Checking environment variables..."
+        
+        # Check for PostgreSQL password
+        local pg_pass=""
+        if [[ -n "${POSTGRES_PASSWORD:-}" ]]; then pg_pass="$POSTGRES_PASSWORD"; fi
+        if [[ -z "$pg_pass" && -n "${POSTGRES_PASSWORD_DEV:-}" ]]; then pg_pass="$POSTGRES_PASSWORD_DEV"; fi
+        
+        # Check for JWT secret
+        local jwt_sec=""
+        if [[ -n "${JWT_SECRET:-}" ]]; then jwt_sec="$JWT_SECRET"; fi
+        if [[ -z "$jwt_sec" && -n "${ACCESS_TOKEN_SECRET:-}" ]]; then jwt_sec="$ACCESS_TOKEN_SECRET"; fi
+        
+        if [[ -n "$pg_pass" && -n "$jwt_sec" ]]; then
+             log_info "Essential secrets found in environment variables. Proceeding..."
+             # Export standard names if not set
+             [[ -z "${POSTGRES_PASSWORD:-}" ]] && export POSTGRES_PASSWORD="$pg_pass"
+             [[ -z "${JWT_SECRET:-}" ]] && export JWT_SECRET="$jwt_sec"
+             return 0
+        fi
+        log_error "Please provide secrets via $secret_dir/ files or environment variables (POSTGRES_PASSWORD, JWT_SECRET)."
         return 1
     fi
     
@@ -516,6 +541,10 @@ run_validations() {
     fi
     
     log_info "Running pre-deploy validations..."
+    
+    # Load environment first so subsequent validations can check env vars
+    load_project_env "$PROJECT_ROOT" 2>/dev/null || true
+    
     validate_docker || exit 1
     validate_env_files || exit 1
     validate_secrets || exit 1
@@ -596,7 +625,13 @@ run_health_checks() {
     
     local platform_port="${BFF_PLATFORM_PORT:-3000}"
     local auth_port="${BFF_AUTH_PORT:-3001}"
-    local ui_port="${UI_DEV_PORT:-5173}"
+    # UI port depends on environment: prod uses Caddy on 80, dev uses CADDY_HTTP_PORT
+    local ui_port
+    if [[ "$ENV" == "prod" ]]; then
+        ui_port="80"
+    else
+        ui_port="${CADDY_HTTP_PORT:-${UI_DEV_PORT:-5173}}"
+    fi
     local failed=0
     
     # Container status
@@ -639,8 +674,9 @@ run_health_checks() {
     fi
     
     # UI is proxied through Caddy which is exposed to host
+    # Note: Caddy host matching requires 'localhost', not '127.0.0.1'
     echo -n "  UI (via Caddy): "
-    if verify_service_health "ui" "http://127.0.0.1:${ui_port}/" 5; then
+    if verify_service_health "ui" "http://localhost:${ui_port}/" 5; then
         echo -e "${GREEN}healthy${NC}"
     else
         echo -e "${RED}unhealthy${NC}"
@@ -702,7 +738,7 @@ run_migrations() {
         
         run_cmd "docker run --rm \
             --network $network \
-            -v \"$PROJECT_ROOT/be/migrations:/migrations:ro\" \
+            -v \"$PROJECT_ROOT/packages/migrations:/migrations:ro\" \
             -v \"$PROJECT_ROOT/be/scripts/run_migrations.sh:/scripts/run_migrations.sh:ro\" \
             -e DATABASE_URL=\"$db_url\" \
             niyati/bff-platform:local \
@@ -1039,9 +1075,26 @@ show_access_info() {
 # MAIN EXECUTION
 # =============================================================================
 
+# Ensure environment variables from shell do not conflict with our .env
+# We prioritize what's in infra/.env for production stability.
+unset_conflicting_env() {
+    log_debug "Clearing potentially conflicting shell environment variables..."
+    unset PORT
+    unset BFF_PLATFORM_PORT
+    unset BFF_AUTH_PORT
+    unset BFF_PTHRU_PORT
+    unset UI_DEV_PORT
+    unset UI_PROD_PORT
+    unset POSTGRES_USER
+    unset POSTGRES_DB
+    unset POSTGRES_PASSWORD
+}
+
 # Print configuration
 echo ""
 log_info "Configuration:"
+unset_conflicting_env
+load_project_env "$PROJECT_ROOT" 2>/dev/null || true
 echo "  Environment:    $ENV"
 echo "  Action:         $ACTION"
 echo "  Project:        $PROJECT"

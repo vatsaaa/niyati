@@ -1,0 +1,320 @@
+{
+  "name": "Niyati",
+  "nodes": [
+    {
+      "parameters": {
+        "model": "llama3.1:latest",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [
+        1120,
+        432
+      ],
+      "id": "b7807db0-6ac6-4238-85fa-8ebcbdba2e33",
+      "name": "Ollama Chat Model",
+      "credentials": {
+        "ollamaApi": {
+          "id": "PTgMqGnlZoNly08g",
+          "name": "Ollama account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Universal Input').item.json.sessionId }}",
+        "contextWindowLength": 10
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        1216,
+        560
+      ],
+      "id": "986b02b2-7aff-4cb7-a2b1-20187c66d462",
+      "name": "WhatsApp Memory"
+    },
+    {
+      "parameters": {
+        "updates": [
+          "messages"
+        ],
+        "options": {}
+      },
+      "type": "n8n-nodes-base.whatsAppTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "be253860-cb3b-485b-bed7-0e435eff96e4",
+      "name": "WhatsApp Trigger",
+      "webhookId": "69d8a54a-d96c-43aa-a6e8-6532e9d01fd7",
+      "credentials": {
+        "whatsAppTriggerApi": {
+          "id": "2vzkeLUZkUHKCMuK",
+          "name": "WhatsApp OAuth account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.message }}",
+        "options": {
+          "systemMessage": "You are Niyati, a warm, curious, confident, and gently flirtatious astrologer who makes people feel special and understood. Stay fully in character: a young, elegant astrologer based in Mumbai who speaks kindly, playfully, and with assured expertise.\n\nImportant: Ignore legacy free‑text blocks. Always read user context from the incoming metadata object (provided by bff-platform). Follow the “metadata-first” rule: the structured fields under metadata.user, metadata.session, metadata.source are authoritative.\n\nExpected incoming shape (examples only — do not print this to users): { \"input\": \"<user text>\", \"metadata\": { \"user\": { \"id\": \"<id|null>\", \"name\": \"<display name|null>\", \"phoneNumber\": \"<E.164|null>\", \"birthDate\": \"<YYYY-MM-DD|null>\", \"age\": <int|null>, \"isAdult\": <bool|null>, \"gender\": \"<male|female|other|null>\", \"locale\": \"<bcp47|null>\", \"timezone\": \"<IANA|null>\", \"location\": {\"city\":\"...\",\"country\":\"...\"}|null, \"preferences\": { /* optional */ } }, \"session\": { \"id\":\"<uuid>\", \"startedAt\":\"<ISO timestamp>\" }, \"source\": \"bff-platform\" } }\n\nPrimary behavior rules\n\nPersonalize using metadata.user fields. If a field is missing, only mention its absence when it meaningfully affects the answer — never invent private data.\nAge handling: prefer metadata.user.age and metadata.user.isAdult. If those are missing and metadata.user.birthDate exists, compute age deterministically from the birthDate and note that you computed it. If none are present, treat age as unknown and be conservative: do not give age‑restricted guidance unless isAdult === true.\nTreat isAdult === true as confirmed adult; isAdult === false as minor; null/undefined as unknown.\nPrivacy: do not emit raw PII (phone numbers, IDs) in top-level outputs; refer to “your profile” or similar phrasing unless a non-sensitive field is needed for the reply.\nConversation flow & tone (match original tune)\n\nIntroduce yourself on first contact with warmth and a gentle, slightly teasing charm. Keep language engaging, a little playful, and culturally local when locale suggests it.\nCore loop: wait for a user question; do not offer unsolicited prophecies.\nInvite a question after a brief warm intro (address by name from metadata.user.name when present).\nGatekeeper rule (mandatory birth/place)\n\nYou MUST NOT answer a request for a personal prophecy until you have Date of Birth and Place of Birth (or other required birth details for the astrological method requested).\nWhen missing, request them playfully and enticingly — charming not pushy. Use at most one short clarifying prompt at a time. Examples:\n“Lovely — I can feel your chart tugging at me, but I need your date and place of birth to read it properly. Will you tell me?”\n“The stars are shy without a map. Whisper your birth date and city so I can open your chart.”\nNever be explicit, vulgar, or coercive. If the user resists, politely remind them the reading needs those details and offer a small, friendly alternative (e.g., a general, non-personal explanation).\nSafety & refusal rules\n\nIf the user is a minor (isAdult === false) or age is unknown and the request is age-restricted, refuse to proceed and add a brief help message to consult a guardian.\nRefuse requests for illegal/harmful content, medical/ legal/ financial professional advice (offer to suggest qualified professionals), or instructions for misuse.\nRefuse to teach how to make prophecies or reveal methods that would enable misuse; keep role as an interpreter/reader, not an instructor.\nOutput requirements for the workflow\n\nWhen returning structured data into the workflow, attach an object under response.ai containing:\nsummary: short user-facing reply (string)\nexplanation: expanded text (string, optional)\nactions: array of suggested follow-ups (strings, optional)\nmetadataNotes: concise notes listing which metadata.user facts you used (e.g., \"used age 32 computed from birthDate\")\nsensitiveWarning: boolean — set true if content is potentially age-restricted and isAdult !== true\nDo NOT return the full metadata object back to the caller.\nContradictions and clarifications\n\nIf metadata contains contradictory fields (e.g., age: 12 but birthDate yields 30), include both facts in metadataNotes and ask a single clarifying question before giving any age-sensitive or high‑confidence guidance.\nStylistic constraints\n\nKeep replies concise and empathetic. When offering options, provide no more than three.\nPrefer local phrasing according to metadata.user.locale when present.\nKeep personality consistent with Niyati: warm, playful, confident, and respectful.\nExamples (developer-facing guidance; do not present to users)\n\nIf you compute age from birthDate, set metadataNotes to \"age computed from birthDate\".\nIf isAdult !== true and user asks for an adult remedy, return sensitiveWarning:true and a short refusal with safe alternatives."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3,
+      "position": [
+        1120,
+        208
+      ],
+      "id": "659fd4bc-7a1b-4867-86e9-42725518a92e",
+      "name": "AI Agent (WhatsApp)",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "881364228384817",
+        "recipientPhoneNumber": "={{ $('Universal Input').item.json.sessionId }}",
+        "textBody": "={{ $json.output }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        1904,
+        0
+      ],
+      "id": "822a75c6-af28-4a91-8294-2b3bacab48fc",
+      "name": "Send message",
+      "webhookId": "4c09ab02-6c6d-49df-9f8f-23cc8b5f5078",
+      "credentials": {
+        "whatsAppApi": {
+          "id": "ufQNzgf6fG4ecEXR",
+          "name": "WhatsApp account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "chat",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        16,
+        432
+      ],
+      "id": "bb14dc50-209b-408f-9722-f3a0747a91a9",
+      "name": "App Webhook",
+      "webhookId": "8b98a9fb-84e8-40bd-ae4f-8478b0e382b2"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Universal Input — standardizes input from WhatsApp or App Webhook\n// Outputs: { message, sessionId, source, metadata } with structured metadata.user\n\nlet message = \"\";\nlet sessionId = \"\";\nlet metadata = {};\nconst item = items[0].json;\n\n// 1. Source: WhatsApp (has contacts array)\nif (item.contacts && item.contacts[0] && item.messages) {\n  message = item.messages[0].text.body;\n  sessionId = item.contacts[0].wa_id;\n  metadata = item.metadata || {};\n}\n// 2. Source: App Webhook (data inside 'body')\nelse if (item.body && item.body.message && item.body.sessionId) {\n  message = item.body.message;\n  sessionId = item.body.sessionId;\n  metadata = item.body.metadata || {};\n}\n// 3. Source: App Webhook (fallback - data at top level)\nelse if (item.message && item.sessionId) {\n  message = item.message;\n  sessionId = item.sessionId;\n  metadata = item.metadata || {};\n}\n\n// Fallback sessionId to prevent crash\nif (!sessionId) {\n  sessionId = \"unknown_user\";\n}\n\n// Normalize metadata.user with readable field names\n// Accept both new (metadata.user.*) and legacy flat fields for transition\nconst mdUser = (metadata.user && typeof metadata.user === 'object') ? metadata.user : {};\nconst user = {\n  name: mdUser.name || metadata.userName || null,\n  birthDate: mdUser.birthDate || metadata.dob || metadata.dateOfBirth || null,\n  timeOfBirth: mdUser.timeOfBirth || metadata.tob || metadata.timeOfBirth || null,\n  placeOfBirth: mdUser.placeOfBirth || metadata.pob || metadata.placeOfBirth || null,\n  currentLocation: mdUser.currentLocation || metadata.currentLocation || null,\n  age: mdUser.age ?? metadata.age ?? null,\n  isAdult: (typeof mdUser.isAdult === 'boolean') ? mdUser.isAdult : ((typeof metadata.ageConfirmed === 'boolean') ? metadata.ageConfirmed : null),\n  gender: mdUser.gender || null,\n  locale: mdUser.locale || null,\n  timezone: mdUser.timezone || null,\n  location: mdUser.location || null,\n  preferences: mdUser.preferences || null,\n  id: mdUser.id || null,\n  phoneNumber: mdUser.phoneNumber || null\n};\n\n// Build final metadata with structured user object\nconst finalMetadata = {\n  user: user,\n  session: metadata.session || { id: sessionId, startedAt: new Date().toISOString() },\n  reqId: metadata.reqId || null,\n  isSystemContext: !!metadata.isSystemContext,\n  credits: metadata.credits ?? null,\n  isPaid: !!metadata.isPaid,\n  source: metadata.source || (item.contacts ? 'whatsapp' : 'app')\n};\n\n// Return message unchanged (no [USER INFO:...] prepending) with structured metadata\nreturn [{ json: { message: message, sessionId: sessionId, source: (item.contacts ? \"WHATSAPP\" : \"APP\"), metadata: finalMetadata } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        464,
+        208
+      ],
+      "id": "eed3be29-543c-429d-a422-3273423b251f",
+      "name": "Universal Input"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a5349577-15c0-4276-9299-a20edd765bf7",
+              "leftValue": "={{ $('Universal Input').item.json.source }}",
+              "rightValue": "WHATSAPP",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1520,
+        208
+      ],
+      "id": "ce0f6e77-a6ab-44d7-a3da-bd3b4faa094b",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ output: $json.output }) }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "*"
+              }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1904,
+        416
+      ],
+      "id": "8ec987c1-76ab-4774-9970-aa759a022d4c",
+      "name": "Respond to Webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Compute Age — Function node code (replace existing functionCode)\nconst now = new Date();\nconst metadata = (items[0] && items[0].json && items[0].json.metadata) ? items[0].json.metadata : {};\nmetadata.user = metadata.user || {};\n\nconst birthRaw = metadata.user.birthDate || metadata.user.dob || null;\n\nfunction safeParseDate(s) {\n  if (!s) return null;\n  const d = new Date(s);\n  return isNaN(d.getTime()) ? null : d;\n}\n\nconst birthDate = safeParseDate(birthRaw);\n\nif (birthDate) {\n  let age = now.getFullYear() - birthDate.getFullYear();\n  const monthDiff = now.getMonth() - birthDate.getMonth();\n  if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < birthDate.getDate())) {\n    age--;\n  }\n  const isAdult = age >= 18;\n\n  metadata.user.age = age;\n  metadata.user.isAdult = isAdult;\n  metadata.user.ageComputedAt = now.toISOString();\n  metadata.user.ageSource = birthRaw ? 'birthDate' : 'unknown';\n} else {\n  metadata.user.age = metadata.user.age != null ? metadata.user.age : null;\n  metadata.user.isAdult = metadata.user.isAdult != null ? metadata.user.isAdult : null;\n  metadata.user.ageComputedAt = now.toISOString();\n  metadata.user.ageSource = 'no-birthDate';\n}\n\nitems[0].json.metadata = metadata;\nreturn items;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        752,
+        208
+      ],
+      "id": "144cdf61-0d3d-4e47-a8ff-3c6bfc59949a",
+      "name": "Compute Age"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "WhatsApp Trigger": {
+      "main": [
+        [
+          {
+            "node": "Universal Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "App Webhook": {
+      "main": [
+        [
+          {
+            "node": "Universal Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent (WhatsApp)": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ollama Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent (WhatsApp)",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent (WhatsApp)",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Universal Input": {
+      "main": [
+        [
+          {
+            "node": "Compute Age",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Send message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute Age": {
+      "main": [
+        [
+          {
+            "node": "AI Agent (WhatsApp)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "43d8f180-f2bd-4c41-8b1d-5b0ffbdffcfe",
+  "meta": {
+    "instanceId": "5b534f6299480227679015e69e8c2988996da0e2d74cf4f73e534e6de2fac8e3"
+  },
+  "id": "5cuagunh9iqvg6U9",
+  "tags": []
+}

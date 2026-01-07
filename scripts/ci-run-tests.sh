@@ -57,7 +57,7 @@ done
 # CI ENVIRONMENT
 # =============================================================================
 
-ENV_FILE=".env.ci"
+ENV_FILE="infra/.env.ci"
 [[ -f "$ENV_FILE" ]] || { log_error "$ENV_FILE not found"; exit 1; }
 
 set -a
@@ -72,11 +72,13 @@ export POSTGRES_PORT="${POSTGRES_PORT:-56432}"
 export POSTGRES_USER="${POSTGRES_USER:-niyati}"
 export POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-niyati_ci_pass}"
 export POSTGRES_DB="${POSTGRES_DB:-niyati_ci}"
-export BASE_URL="http://127.0.0.1:${CADDY_HTTP_PORT}"
+export REDIS_PORT="${REDIS_PORT:-7379}"
+export N8N_PORT="${N8N_PORT:-6678}"
+export BASE_URL="http://localhost:${CADDY_HTTP_PORT}"
 export DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:${POSTGRES_PORT}/${POSTGRES_DB}"
 
 # Compose command
-COMPOSE_CMD="docker compose --env-file $ENV_FILE -f docker-compose.yml -f docker-compose.ci.yml"
+COMPOSE_CMD="docker compose --env-file $ENV_FILE -f infra/docker-compose.yml -f infra/docker-compose.ci.yml"
 PROJECT_NAME="niyati-ci"
 
 log_info "CI Environment: BASE_URL=${BASE_URL}, DB=${DATABASE_URL%%@*}@..."
@@ -97,6 +99,46 @@ cleanup() {
     exit $exit_code
 }
 trap cleanup EXIT
+
+# =============================================================================
+# HELPER: PORT CHECK & FREEDOM
+# =============================================================================
+
+check_and_liberate_port() {
+    local port=$1
+    local label=$2
+    
+    if lsof -n -i :$port -t >/dev/null 2>&1; then
+        log_warn "Port $port ($label) is currently in use."
+        
+        # Check if it's a Docker container
+        local container_id=$(docker ps -q --filter publish=$port)
+        
+        if [[ -n "$container_id" ]]; then
+             log_info "Found conflicting Docker container ($container_id). Stopping it to ensure fresh environment..."
+             docker stop $container_id >/dev/null || true
+             docker rm $container_id >/dev/null || true
+        else
+             log_error "Port $port is in use by a non-Docker process. Please free it up manually to proceed."
+             lsof -n -i :$port
+             exit 1
+        fi
+    else
+        log_info "Port $port ($label) is free."
+    fi
+}
+
+# =============================================================================
+# STEP 0: PRE-FLIGHT CHECKS
+# =============================================================================
+
+log_step "🔍 Checking for port conflicts..."
+check_and_liberate_port "$BFF_PLATFORM_PORT" "BFF Platform"
+check_and_liberate_port "$BFF_AUTH_PORT" "BFF Auth"
+check_and_liberate_port "$CADDY_HTTP_PORT" "UI"
+check_and_liberate_port "$POSTGRES_PORT" "Postgres"
+check_and_liberate_port "$REDIS_PORT" "Redis"
+check_and_liberate_port "$N8N_PORT" "Mock N8N"
 
 # =============================================================================
 # STEP 1: FRESH START
@@ -120,12 +162,19 @@ done
 
 log_step "⏳ Waiting for BFF services..."
 for svc in bff-platform bff-auth; do
+    # Convert bff-platform to BFF_PLATFORM_PORT
+    svc_upper=$(echo "$svc" | tr '[:lower:]-' '[:upper:]_')
+    port_var="${svc_upper}_PORT"
+    port="${!port_var}"
+    
+    log_info "Waiting for $svc on port $port..."
     for i in $(seq 1 60); do
-        if $COMPOSE_CMD -p "$PROJECT_NAME" exec -T "$svc" wget -q --spider http://localhost:${!svc//-/_}_PORT/api/v1/telemetry/health 2>/dev/null; then
+        if $COMPOSE_CMD -p "$PROJECT_NAME" exec -T "$svc" wget -q --spider "http://localhost:$port/api/v1/telemetry/health" 2>/dev/null; then
             log_success "$svc is healthy"
             break
         fi
         sleep 1
+        [[ $i -eq 60 ]] && { log_error "$svc failed to become healthy"; exit 1; }
     done
 done
 
@@ -141,7 +190,7 @@ done
 # =============================================================================
 
 log_step "📦 Applying migrations..."
-for f in $(ls -1 be/migrations/*.up.sql 2>/dev/null | sort); do
+for f in $(ls -1 packages/migrations/*.up.sql 2>/dev/null | sort); do
     cat "$f" | $COMPOSE_CMD -p "$PROJECT_NAME" exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null
 done
 
@@ -159,20 +208,20 @@ if [[ "$SKIP_BACKEND" -eq 0 ]]; then
     log_step "🧪 Running backend tests..."
     
     # Install commons
-    npm ci --prefix be/commons --silent
+    npm ci --prefix packages/commons --prefer-offline --no-audit --silent
     
     # bff-platform tests
     log_info "Testing bff-platform..."
-    cd be/bff-platform
-    npm ci --include=dev --silent
+    cd apps/bff-platform
+    npm ci --include=dev --prefer-offline --no-audit --silent
     NODE_ENV=test npx jest --config jest.config.cjs --runInBand --forceExit || BACKEND_EXIT=1
     cd "$PROJECT_ROOT"
     
     if [[ "$BACKEND_EXIT" -eq 0 ]]; then
         # bff-auth tests
         log_info "Testing bff-auth..."
-        cd be/bff-auth
-        npm ci --include=dev --silent
+        cd apps/bff-auth
+        npm ci --include=dev --prefer-offline --no-audit --silent
         NODE_ENV=test npx jest --config jest.config.cjs --runInBand --forceExit || BACKEND_EXIT=1
         cd "$PROJECT_ROOT"
     fi

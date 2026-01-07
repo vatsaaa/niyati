@@ -13,13 +13,30 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Log that we got a hit
+  // Collect body and validate structured metadata.user
   let body = '';
   req.on('data', chunk => { body += chunk.toString(); });
   req.on('end', () => {
     console.log(`[Mock-n8n] Received ${req.method} request to ${req.url}`);
+    let parsed = null;
+    try {
+      parsed = JSON.parse(body || '{}');
+    } catch (e) {
+      res.writeHead(400);
+      return res.end(JSON.stringify({ error: 'invalid_json' }));
+    }
+
+    const metadata = parsed && parsed.metadata ? parsed.metadata : null;
+    const user = metadata && metadata.user ? metadata.user : null;
+
+    if (!user) {
+      res.writeHead(400);
+      return res.end(JSON.stringify({ error: 'metadata.user required' }));
+    }
+
     const response = {
-      output: "Hello! I am the CI Mock Astrologer. The stars say your tests will pass."
+      output: "Hello! I am the CI Mock Astrologer. The stars say your tests will pass.",
+      receivedMetadata: metadata
     };
 
     res.writeHead(200);

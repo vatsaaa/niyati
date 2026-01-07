@@ -27,10 +27,10 @@ load_project_env "$PROJECT_ROOT" 2>/dev/null || true
 
 # List of endpoints to verify
 endpoints=(
-    "http://127.0.0.1:${BFF_PLATFORM_PORT:-3000}/api/v1/telemetry/health"
-    "http://127.0.0.1:${BFF_AUTH_PORT:-3001}/api/v1/telemetry/health"
-    "http://127.0.0.1:${UI_DEV_PORT:-5173}/"
-    "http://127.0.0.1:${BFF_PLATFORM_PORT:-3000}/api/v1/identify"
+    "http://localhost:${BFF_PLATFORM_PORT:-3000}/api/v1/telemetry/health"
+    "http://localhost:${BFF_AUTH_PORT:-3001}/api/v1/telemetry/health"
+    "http://localhost:${UI_DEV_PORT:-5173}/"
+    "http://localhost:${BFF_PLATFORM_PORT:-3000}/api/v1/identify"
 )
 
 failed=0
