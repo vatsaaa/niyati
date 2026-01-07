@@ -625,7 +625,13 @@ run_health_checks() {
     
     local platform_port="${BFF_PLATFORM_PORT:-3000}"
     local auth_port="${BFF_AUTH_PORT:-3001}"
-    local ui_port="${UI_DEV_PORT:-5173}"
+    # UI port depends on environment: prod uses Caddy on 80, dev uses CADDY_HTTP_PORT
+    local ui_port
+    if [[ "$ENV" == "prod" ]]; then
+        ui_port="80"
+    else
+        ui_port="${CADDY_HTTP_PORT:-${UI_DEV_PORT:-5173}}"
+    fi
     local failed=0
     
     # Container status
@@ -668,8 +674,9 @@ run_health_checks() {
     fi
     
     # UI is proxied through Caddy which is exposed to host
+    # Note: Caddy host matching requires 'localhost', not '127.0.0.1'
     echo -n "  UI (via Caddy): "
-    if verify_service_health "ui" "http://127.0.0.1:${ui_port}/" 5; then
+    if verify_service_health "ui" "http://localhost:${ui_port}/" 5; then
         echo -e "${GREEN}healthy${NC}"
     else
         echo -e "${RED}unhealthy${NC}"

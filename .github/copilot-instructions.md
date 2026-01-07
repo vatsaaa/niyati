@@ -4,6 +4,13 @@ AI-powered astrology platform. BFF architecture, JavaScript only.
 
 > **Pattern Reference**: This project serves as a reference implementation for BFF-based JavaScript projects with comprehensive CI/CD, testing, and deployment patterns.
 
+## ⚠️ Core Development Principles
+
+> **TDD/BDD is MANDATORY** — No code without tests first. No exceptions.
+> **Database is IMMUTABLE** — No `UPDATE`, no `ALTER`. Always idempotent, from scratch.
+> **Infrastructure is ISOLATED** — Dev, CI, and Prod use non-overlapping ports, networks, volumes.
+> **Tests are INDEPENDENT** — Run via CI scripts, deploy scripts, or standalone. Always reproducible.
+
 ## Architecture & Data Flow
 
 Browser (React) → Caddy (proxy) → bff-platform/bff-auth → PostgreSQL
@@ -86,6 +93,52 @@ niyati/
 ├── docker-compose.prod.yml # Production overlay
 ├── .env.ci                 # CI environment variables
 └── Caddyfile               # Caddy reverse proxy config
+```
+
+## Database Philosophy: Immutable, Idempotent, From Scratch
+
+> **Golden Rule**: The database schema and seed data should be reproducible from scratch at any time.
+
+### Why No UPDATE/ALTER?
+
+| ❌ Problematic | ✅ Correct Approach |
+|----------------|---------------------|
+| `ALTER TABLE users ADD COLUMN x` | Create new migration with full table definition |
+| `UPDATE users SET x = 'value'` | `INSERT ... ON CONFLICT DO UPDATE` (upsert) |
+| `ALTER TABLE DROP COLUMN` | New migration file, rebuild schema |
+| Manual data fixes | Idempotent seed scripts |
+
+### Migration Strategy
+
+```sql
+-- ✅ CORRECT: Idempotent table creation
+CREATE TABLE IF NOT EXISTS users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  phone_number VARCHAR(20) UNIQUE NOT NULL,
+  credits INTEGER DEFAULT 10
+);
+
+-- ✅ CORRECT: Idempotent index
+CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone_number);
+
+-- ✅ CORRECT: Idempotent seed data
+INSERT INTO app_config (key, value)
+VALUES ('credits_monthly_free', '10')
+ON CONFLICT (key) DO NOTHING;
+
+-- ❌ FORBIDDEN: These will be rejected in code review
+ALTER TABLE users ADD COLUMN new_field VARCHAR(100);
+UPDATE users SET credits = 0 WHERE expired = true;
+```
+
+### Database Rebuild Flow
+
+```bash
+# CI always starts fresh
+docker compose down -v        # Remove volumes
+docker compose up -d postgres # Start clean
+./scripts/db.sh migrate       # Apply all migrations from scratch
+./scripts/db.sh seed          # Apply idempotent seed data
 ```
 
 ## Integration Points
@@ -449,19 +502,39 @@ cd "$PROJECT_ROOT"
 
 **What it does** (in order):
 1. Sources `.env.ci` for CI-specific ports
-2. Tears down any existing CI stack (`docker compose down -v`)
+2. Tears down any existing CI stack (`docker compose down -v`) — **clean slate**
 3. Builds and starts CI stack with mock n8n
 4. Waits for all services to be healthy
-5. Applies database migrations and seed data
-6. Runs backend Jest tests (`bff-platform`, `bff-auth`)
-7. Runs E2E Playwright tests
-8. Cleans up on exit (success or failure) via trap
+5. Applies database migrations from scratch (idempotent)
+6. Applies seed data (idempotent `ON CONFLICT DO NOTHING`)
+7. Runs backend Jest tests (`bff-platform`, `bff-auth`)
+8. Runs E2E Playwright tests
+9. Cleans up on exit (success or failure) via trap
 
 **Key Features**:
 - **Idempotent**: Safe to run multiple times, always starts fresh
+- **Clean database**: Volumes destroyed, schema rebuilt from migrations
 - **Cleanup trap**: Always cleans up, even on Ctrl+C or failure
 - **Separate ports**: CI uses different ports to avoid conflicts with dev
 - **Mock n8n**: Uses [scripts/mock-n8n.js](scripts/mock-n8n.js) for deterministic AI responses
+- **No shared state**: Each run is completely independent
+
+### Test Independence Principles
+
+Tests can be executed through multiple paths:
+
+| Execution Path | Command | Use Case |
+|----------------|---------|----------|
+| **CI Script** | `./scripts/ci-run-tests.sh` | Full integration, GitHub Actions |
+| **Deploy Script** | `./scripts/deploy_niyati.sh --env=dev --action=test` | Pre-deploy validation |
+| **Standalone Backend** | `cd apps/bff-platform && npm test` | Development iteration |
+| **Standalone E2E** | `cd e2e && npx playwright test` | UI testing against running stack |
+
+**All paths must produce the same results** because:
+- Tests don't depend on execution order
+- Each test suite manages its own setup/teardown
+- Database is always rebuilt from scratch in CI
+- External services are mocked consistently
 
 ### Deployment Script ([scripts/deploy_niyati.sh](scripts/deploy_niyati.sh))
 
@@ -548,6 +621,23 @@ docker compose --env-file .env.ci -f docker-compose.yml -f docker-compose.ci.yml
 | `docker-compose.prod.yml` | Production (fixed container names, health checks) |
 | `docker-compose.ci.yml` | CI (different ports, mock n8n service) |
 | `.env.ci` | CI environment variables |
+
+### Infrastructure Isolation
+
+**Design Principle**: Dev, CI, and Prod environments are completely isolated — they can run simultaneously without conflicts.
+
+| Resource Type | Dev | CI | Prod |
+|---------------|-----|-----|------|
+| **Project Name** | `niyati` | `niyati-ci` | `niyati-prod` |
+| **Network** | `niyati_default` | `niyati-ci_default` | `niyati-prod_default` |
+| **Volumes** | `niyati_postgres-data` | `niyati-ci_postgres-data` | `niyati-prod_postgres-data-prod` |
+| **Containers** | `niyati-*-1` | `niyati-ci-*-1` | `niyati-*-prod` |
+
+**Why Isolation Matters**:
+- Run CI tests while dev stack is running
+- Deploy to prod without affecting CI
+- Debug issues in isolation
+- No port conflicts or volume corruption
 
 ### Port Configuration
 
@@ -648,14 +738,39 @@ log_step "Starting..."
 
 ## Critical Rules
 
-1. **SQL**: Always parameterized (`$1`, `$2`). Never concatenate strings.
-2. **Idempotency**: All DDL/DML must be idempotent. Use `CREATE TABLE IF NOT EXISTS` and `INSERT ... ON CONFLICT DO NOTHING`. **STRICTLY AVOID** `UPDATE` and `ALTER` statements.
-3. **Async**: All async code wrapped in try/catch with proper error responses.
-4. **Migrations**: Name: `YYYYMMDD_XX_desc.up.sql`. Path: `packages/migrations/`.
-5. **CI/CD**: Logic lives in [scripts/](scripts/), NOT in GitHub workflow YAML.
-6. **Billing**: Server-side only. UI displays but never performs authoritative charges.
-7. **TDD Required**: All code changes MUST have tests written FIRST. No exceptions.
-8. **Scripts**: All bash scripts MUST source `scripts/lib/common.sh` for consistency.
+### 1. TDD/BDD is Mandatory (Non-Negotiable)
+- **Write test FIRST** — Before any implementation code
+- **Red-Green-Refactor** — Test fails → implement → test passes → refactor
+- **No shortcuts** — Even "quick fixes" require a failing test first
+- **Run CI before commit** — `./scripts/ci-run-tests.sh` must pass
+
+### 2. Database: Idempotent, From Scratch, No Mutations
+- **Always parameterized** — Use `$1`, `$2`. NEVER concatenate strings.
+- **Idempotent DDL** — `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`
+- **Idempotent DML** — `INSERT ... ON CONFLICT DO NOTHING`
+- **STRICTLY FORBIDDEN** — `UPDATE` and `ALTER` statements
+- **Schema changes** — Create new migration file, rebuild from scratch
+- **Data fixes** — Use `INSERT ... ON CONFLICT` or create new table
+- **Why**: Ensures reproducibility, simplifies rollbacks, eliminates state drift
+
+### 3. Infrastructure: Isolated Environments
+- **Non-overlapping resources** — Dev, CI, and Prod use different ports, networks, volumes
+- **Idempotent scripts** — Safe to run multiple times, always produce same result
+- **Clean starts** — `docker compose down -v` before `up` in CI/deploy
+- **Named resources** — Use project prefixes (`niyati-dev-`, `niyati-ci-`, `niyati-prod-`)
+
+### 4. Tests: Independent and Reproducible
+- **Multiple execution paths** — Tests run via CI scripts, deploy scripts, or standalone
+- **No shared state** — Each test file/suite is self-contained
+- **Deterministic** — Same input → same output, always
+- **Mock external services** — n8n, external APIs stubbed in tests
+
+### 5. Code Standards
+- **Async/await** — All async code wrapped in try/catch with proper error responses
+- **Migrations** — Name: `YYYYMMDD_XX_desc.up.sql`. Path: `packages/migrations/`
+- **CI/CD logic** — Lives in [scripts/](scripts/), NOT in GitHub workflow YAML
+- **Billing** — Server-side only. UI displays but never performs authoritative charges
+- **Scripts** — All bash scripts MUST source `scripts/lib/common.sh` for consistency
 
 ## Environment Configs
 

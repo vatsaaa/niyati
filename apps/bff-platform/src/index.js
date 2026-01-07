@@ -161,13 +161,16 @@ apiRouter.post('/chat', chatAuthMiddleware, async (req, res) => {
     if (!message) return res.sendError(ErrorCodes.MISSING_REQUIRED_FIELD, 'missing_message');
     if (!sessionId) return res.sendError(ErrorCodes.MISSING_REQUIRED_FIELD, 'missing_sessionId');
 
-    // Normalize dateOfBirth to ISO YYYY-MM-DD if present
+    // Structured user metadata is expected under metadata.user
+    const mdUser = (metadata.user && typeof metadata.user === 'object') ? metadata.user : {};
+
+    // Normalize birthDate to ISO YYYY-MM-DD if present
     let normalizedDob = null;
-    if (metadata.dateOfBirth) {
+    if (mdUser.birthDate) {
       try {
-        let d = new Date(metadata.dateOfBirth);
+        let d = new Date(mdUser.birthDate);
         if (isNaN(d.getTime()) && chrono && typeof chrono.parseDate === 'function') {
-          d = chrono.parseDate(metadata.dateOfBirth);
+          d = chrono.parseDate(mdUser.birthDate);
         }
         if (d && !isNaN(d.getTime())) normalizedDob = d.toISOString().slice(0, 10);
       } catch (e) {
@@ -175,15 +178,14 @@ apiRouter.post('/chat', chatAuthMiddleware, async (req, res) => {
       }
     }
 
-    // Normalize timeOfBirth to hh:mm (leave as-is if not parseable)
-    let normalizedTob = metadata.timeOfBirth || null;
+    // Normalize timeOfBirth to hh:mm (from metadata.user.timeOfBirth)
+    let normalizedTob = mdUser.timeOfBirth || null;
     if (normalizedTob && typeof normalizedTob === 'string') {
-      // crude normalization: keep first 5 chars if like HH:MM
       const m = normalizedTob.match(/(\d{1,2}:\d{2})/);
       if (m) normalizedTob = m[1];
     }
 
-    const userName = metadata.userName || metadata.name || null;
+    const userName = mdUser.name || mdUser.userName || null;
 
     // Compute age (years) if dob known
     let age = null;
@@ -202,14 +204,13 @@ apiRouter.post('/chat', chatAuthMiddleware, async (req, res) => {
         message: message,
         sessionId: sessionId,
         metadata: {
+          user: {
+            name: userName,
+            birthDate: normalizedDob || null,
+            age: age
+          },
           reqId: metadata.reqId || null,
-          userName: userName,
-          dateOfBirth: normalizedDob,
-          timeOfBirth: normalizedTob,
-          placeOfBirth: metadata.placeOfBirth || null,
-          currentLocation: metadata.currentLocation || null,
-          age: age,
-          ageConfirmed: false,
+          source: 'bff-platform',
           isSystemContext: false,
           credits: metadata.credits || null,
           isPaid: !!metadata.isPaid
@@ -225,8 +226,8 @@ apiRouter.post('/chat', chatAuthMiddleware, async (req, res) => {
 
     // Decide ageConfirmed: hint from client but validate server-side
     let ageConfirmed = false;
-    if (typeof metadata.ageConfirmed !== 'undefined') {
-      ageConfirmed = !!metadata.ageConfirmed; // treat as hint
+    if (typeof mdUser.ageConfirmed !== 'undefined') {
+      ageConfirmed = !!mdUser.ageConfirmed; // treat as hint
     }
     // auto-confirm if timeOfBirth provided (higher confidence) - controlled by feature flag
     const autoConfirmAgeFlag = commons && commons.config && typeof commons.config.get === 'function'
@@ -235,8 +236,7 @@ apiRouter.post('/chat', chatAuthMiddleware, async (req, res) => {
     if (!ageConfirmed && normalizedTob && autoConfirmAgeFlag) ageConfirmed = true;
 
     // Decide isSystemContext server-side (treat client-provided as hint)
-    let isSystemContext = !!metadata.isSystemContext;
-    // If message is short and contains 'SYSTEM' marker, honor; otherwise default false
+    let isSystemContext = !!metadata.isSystemContext || !!mdUser.isSystemContext;
     if (!isSystemContext && typeof message === 'string' && message.startsWith('[SYSTEM')) isSystemContext = true;
 
     // Persist minimal authoritative state to users table if DB available
@@ -255,7 +255,7 @@ apiRouter.post('/chat', chatAuthMiddleware, async (req, res) => {
             updated_at = now()
           RETURNING id, phone_number, name, date_of_birth, time_of_birth, place_of_birth, credits, total_paid_amount
         `;
-        const params = [sessionId, userName || null, normalizedDob, normalizedTob, metadata.placeOfBirth || null, metadata.currentLocation || null];
+        const params = [sessionId, userName || null, normalizedDob, normalizedTob, mdUser.placeOfBirth || null, mdUser.location || null];
         await db.query(upsertSql, params);
         logger.info({ msg: 'user_sync_from_chat', phone: sessionId, dob: normalizedDob, age, ageConfirmed });
       } catch (e) {
@@ -263,19 +263,30 @@ apiRouter.post('/chat', chatAuthMiddleware, async (req, res) => {
       }
     }
 
-    // Build canonical payload for n8n
+    // Build canonical payload for n8n using structured metadata.user
     const canonical = {
       message: message,
       sessionId: sessionId,
       metadata: {
+        user: {
+          id: mdUser.id || null,
+          name: userName,
+          phoneNumber: mdUser.phoneNumber || null,
+          birthDate: normalizedDob || null,
+          age: age,
+          isAdult: (age !== null) ? (age >= 18) : null,
+          gender: mdUser.gender || null,
+          locale: mdUser.locale || null,
+          timezone: mdUser.timezone || null,
+          location: mdUser.location || null,
+          preferences: mdUser.preferences || null
+        },
+        session: {
+          id: sessionId,
+          startedAt: new Date().toISOString()
+        },
         reqId: metadata.reqId || null,
-        userName: userName,
-        dateOfBirth: normalizedDob || null,
-        timeOfBirth: normalizedTob || null,
-        placeOfBirth: metadata.placeOfBirth || null,
-        currentLocation: metadata.currentLocation || null,
-        age: age,
-        ageConfirmed: ageConfirmed,
+        source: 'bff-platform',
         isSystemContext: isSystemContext,
         credits: metadata.credits || null,
         isPaid: !!metadata.isPaid
@@ -283,7 +294,7 @@ apiRouter.post('/chat', chatAuthMiddleware, async (req, res) => {
     };
 
     // Log parsed DOB/age and isSystemContext for observability/audit
-    try { logger.info({ msg: 'chat_normalized', phone: sessionId, dob: canonical.metadata.dateOfBirth, age: canonical.metadata.age, ageConfirmed: canonical.metadata.ageConfirmed, isSystemContext: canonical.metadata.isSystemContext, autoConfirmFlag: !!autoConfirmAgeFlag }); } catch (e) { }
+    try { logger.info({ msg: 'chat_normalized', phone: sessionId, dob: canonical.metadata.user.birthDate, age: canonical.metadata.user.age, ageConfirmed: ageConfirmed, isSystemContext: canonical.metadata.isSystemContext, autoConfirmFlag: !!autoConfirmAgeFlag }); } catch (e) { }
 
     // Forward canonical payload to n8n (if configured)
     const n8nUrl = commons && commons.config && commons.config.n8n && commons.config.n8n.webhookUrl ? commons.config.n8n.webhookUrl : '';

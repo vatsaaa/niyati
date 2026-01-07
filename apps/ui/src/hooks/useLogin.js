@@ -197,11 +197,13 @@ Instructions: Welcome this returning user warmly. Keep it brief and friendly - t
                   isSystemContext: true,
                   credits: userCredits,
                   isPaid: isPaidUser,
-                  userName: firstName,
-                  dob,
-                  tob,
-                  pob,
-                  currentLocation: currentLoc,
+                  user: {
+                    name: firstName,
+                    birthDate: dob,
+                    timeOfBirth: tob,
+                    placeOfBirth: pob,
+                    currentLocation: currentLoc
+                  },
                   lastLoginLocation: lastLoc,
                   locationChanged
                 } 
@@ -260,7 +262,7 @@ Instructions: Welcome this returning user warmly. Keep it brief and friendly - t
                 'x-request-id': synthReqId,
                 'ngrok-skip-browser-warning': 'true'
               },
-              body: JSON.stringify({ message: synthesized, sessionId: fullPhone, metadata: { reqId: synthReqId, returning: true, isProfileSynthesis: true } })
+              body: JSON.stringify({ message: synthesized, sessionId: fullPhone, metadata: { reqId: synthReqId, returning: true, isProfileSynthesis: true, user: { name: updatedProfile.user_name || null, birthDate: updatedProfile.user_dob || null, timeOfBirth: updatedProfile.user_timeOfBirth || null, placeOfBirth: updatedProfile.user_placeOfBirth || null, currentLocation: updatedProfile.user_currentLocation || null } } })
             }).catch(err => console.warn('Failed to send synthesized profile to n8n:', err));
           } catch (e) {
             // swallow errors from synthesis to avoid affecting UI

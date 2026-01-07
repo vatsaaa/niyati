@@ -74,7 +74,7 @@ export POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-niyati_ci_pass}"
 export POSTGRES_DB="${POSTGRES_DB:-niyati_ci}"
 export REDIS_PORT="${REDIS_PORT:-7379}"
 export N8N_PORT="${N8N_PORT:-6678}"
-export BASE_URL="http://127.0.0.1:${CADDY_HTTP_PORT}"
+export BASE_URL="http://localhost:${CADDY_HTTP_PORT}"
 export DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:${POSTGRES_PORT}/${POSTGRES_DB}"
 
 # Compose command

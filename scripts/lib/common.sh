@@ -354,7 +354,7 @@ run_health_checks() {
     
     # BFF Platform
     echo -n "BFF Platform (port $platform_port): "
-    if curl -s "http://127.0.0.1:${platform_port}/api/v1/telemetry/health" | jq -r '.status' 2>/dev/null; then
+    if curl -s "http://localhost:${platform_port}/api/v1/telemetry/health" | jq -r '.status' 2>/dev/null; then
         :
     else
         echo -e "${RED}unhealthy${NC}"
@@ -363,16 +363,16 @@ run_health_checks() {
     
     # BFF Auth
     echo -n "BFF Auth (port $auth_port): "
-    if curl -s "http://127.0.0.1:${auth_port}/api/v1/telemetry/health" | jq -r '.status' 2>/dev/null; then
+    if curl -s "http://localhost:${auth_port}/api/v1/telemetry/health" | jq -r '.status' 2>/dev/null; then
         :
     else
         echo -e "${RED}unhealthy${NC}"
         failed=1
     fi
     
-    # UI
+    # UI (via Caddy - requires 'localhost' for host matching)
     echo -n "UI (port $ui_port): "
-    if curl -s "http://127.0.0.1:${ui_port}/" >/dev/null 2>&1; then
+    if curl -s "http://localhost:${ui_port}/" >/dev/null 2>&1; then
         echo -e "${GREEN}healthy${NC}"
     else
         echo -e "${RED}unhealthy${NC}"

@@ -37,7 +37,7 @@ describe('Chat BFF minor protection', () => {
     const payload = {
       message: 'Hi Niyati',
       sessionId: 'user-123',
-      metadata: { dateOfBirth: '2010-01-01', reqId: 'r-1' }
+      metadata: { user: { birthDate: '2010-01-01' }, reqId: 'r-1' }
     };
 
     // Mock DB that would throw if called (we expect no upsert)

@@ -333,17 +333,27 @@ export function useChat(profile, updateProfile, addMessage, auth) {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 60000);
 
-        // Build metadata with user profile details for n8n
+        // Build metadata with structured user object for n8n (metadata-first)
         const metadata = {
           reqId: reqId || 'unknown',
-          // Always include user profile so n8n has birth details
-          userName: userProfile?.user_name || null,
-          dateOfBirth: userProfile?.user_dob || null,
-          timeOfBirth: userProfile?.user_timeOfBirth || null,
-          placeOfBirth: userProfile?.user_placeOfBirth || null,
-          currentLocation: userProfile?.user_currentLocation || null,
-          credits: userProfile?.user_credits ?? null,
-          isPaid: (userProfile?.user_totalPaidAmount ?? 0) > 0
+          user: {
+            id: userProfile?.user_id || null,
+            name: userProfile?.user_name || null,
+            phoneNumber: userProfile?.user_phoneNumber || null,
+            birthDate: userProfile?.user_dob || null,
+            timeOfBirth: userProfile?.user_timeOfBirth || null,
+            placeOfBirth: userProfile?.user_placeOfBirth || null,
+            currentLocation: userProfile?.user_currentLocation || null,
+            age: userProfile?.user_age ?? null,
+            isAdult: typeof userProfile?.user_isAdult === 'boolean' ? userProfile.user_isAdult : null,
+            credits: userProfile?.user_credits ?? null,
+            isPaid: (userProfile?.user_totalPaidAmount ?? 0) > 0,
+            preferences: userProfile?.user_preferences || null,
+            locale: userProfile?.user_locale || null,
+            timezone: userProfile?.user_timezone || null,
+            location: userProfile?.user_location || null
+          },
+          source: 'ui'
         };
 
         try {

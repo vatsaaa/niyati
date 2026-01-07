@@ -2,6 +2,12 @@
 
 AI-powered conversational astrology platform delivering personalized horoscopes, birth-chart insights, and guidance through chat-based interactions.
 
+> **⚠️ Development Standards**
+> - **TDD/BDD is MANDATORY** — No code without tests first
+> - **Database is IMMUTABLE** — No `UPDATE`, no `ALTER`. Always idempotent.
+> - **Infrastructure is ISOLATED** — Dev, CI, Prod use non-overlapping ports/networks/volumes
+> - **Tests are INDEPENDENT** — Run via CI scripts, deploy scripts, or standalone
+
 ## Table of Contents
 
 - [Architecture](#architecture)
@@ -261,7 +267,35 @@ Migration files are in `packages/migrations/` with naming convention: `YYYYMMDD_
 > **Idempotent Migration Strategy**: All DDL and DML must be idempotent.
 > - Use `CREATE TABLE IF NOT EXISTS`.
 > - Use `INSERT INTO ... ON CONFLICT DO NOTHING`.
-> - **STRICTLY AVOID** `UPDATE` and `ALTER` statements to simplify state management and ensure reproducibility.
+> - **STRICTLY FORBIDDEN**: `UPDATE` and `ALTER` statements.
+> - Schema changes require new migration files — rebuild from scratch.
+> - Data fixes use `INSERT ... ON CONFLICT` patterns, never `UPDATE`.
+>
+> **Why?** The database should be reproducible from scratch at any time. This ensures:
+> - Consistent environments across dev, CI, prod
+> - Easy rollbacks (just rebuild)
+> - No state drift between environments
+> - Simpler debugging and testing
+
+**Correct Migration Patterns:**
+```sql
+-- ✅ CORRECT: Idempotent table creation
+CREATE TABLE IF NOT EXISTS users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  phone_number VARCHAR(20) UNIQUE NOT NULL
+);
+
+-- ✅ CORRECT: Idempotent index
+CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone_number);
+
+-- ✅ CORRECT: Idempotent seed data
+INSERT INTO app_config (key, value) VALUES ('credits_monthly_free', '10')
+ON CONFLICT (key) DO NOTHING;
+
+-- ❌ FORBIDDEN: Will be rejected in code review
+ALTER TABLE users ADD COLUMN new_field VARCHAR(100);
+UPDATE users SET credits = 0;
+```
 
 ```bash
 # Apply migrations manually
@@ -810,6 +844,28 @@ Example:
 
 ## Testing
 
+### Testing Philosophy: TDD/BDD is Mandatory
+
+> **⚠️ Every code change MUST follow Test-Driven Development. No exceptions.**
+
+**The TDD Cycle:**
+1. **Write test first** — Define expected behavior BEFORE implementation
+2. **Run test (RED)** — Verify test fails for the right reason
+3. **Implement code (GREEN)** — Minimal code to pass the test
+4. **Refactor** — Clean up while keeping tests green
+5. **Run full CI** — `./scripts/ci-run-tests.sh` before considering done
+
+### Test Independence
+
+Tests can be executed through multiple paths and **must produce identical results**:
+
+| Execution Path | Command | Use Case |
+|----------------|---------|----------|
+| **CI Script** | `./scripts/ci-run-tests.sh` | Full integration, GitHub Actions |
+| **Deploy Script** | `./scripts/deploy_niyati.sh --action=test` | Pre-deploy validation |
+| **Standalone Backend** | `cd apps/bff-platform && npm test` | Development iteration |
+| **Standalone E2E** | `cd e2e && npx playwright test` | UI testing |
+
 ### Backend Tests
 
 ```bash
@@ -843,6 +899,48 @@ cd e2e && npm test
 ```bash
 # Run full integration suite
 ./scripts/ci-run-tests.sh
+```
+
+---
+
+## Infrastructure Isolation
+
+**Design Principle**: Dev, CI, and Prod environments are completely isolated and can run simultaneously.
+
+### Resource Separation
+
+| Resource | Dev | CI | Prod |
+|----------|-----|-----|------|
+| **Project Name** | `niyati` | `niyati-ci` | `niyati-prod` |
+| **Network** | `niyati_default` | `niyati-ci_default` | `niyati-prod_default` |
+| **Volumes** | `niyati_postgres-data` | `niyati-ci_postgres-data` | `niyati-prod_*` |
+| **Caddy Port** | 5173 | 6173 | 80/443 |
+| **BFF Platform Port** | 3000 | 4000 | 3000 (internal) |
+| **BFF Auth Port** | 3001 | 4001 | 3001 (internal) |
+| **Postgres Port** | 5432 | 56432 | 5432 |
+| **Redis Port** | 6379 | 7379 | 6379 (internal) |
+
+### Why Isolation Matters
+
+- Run CI tests while dev stack is running
+- Deploy to prod without affecting CI
+- Debug issues in complete isolation
+- No port conflicts or volume corruption
+- Tests are reproducible regardless of what else is running
+
+### Script Idempotency
+
+All infrastructure scripts (`ci-run-tests.sh`, `deploy_niyati.sh`, `db.sh`) are idempotent:
+
+```bash
+# Safe to run multiple times - always produces same result
+./scripts/ci-run-tests.sh
+./scripts/ci-run-tests.sh  # Same outcome
+
+# Clean slate pattern used internally
+docker compose down -v         # Remove everything
+docker compose up -d --build   # Rebuild fresh
+./scripts/db.sh migrate        # Apply migrations from scratch
 ```
 
 ---
