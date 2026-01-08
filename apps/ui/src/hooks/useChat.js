@@ -334,24 +334,34 @@ export function useChat(profile, updateProfile, addMessage, auth) {
         const timeoutId = setTimeout(() => controller.abort(), 60000);
 
         // Build metadata with structured user object for n8n (metadata-first)
+        // Prefer the passed `userProfile`, but fall back to persisted profile in localStorage
+        let persistedProfile = null;
+        try {
+          const stored = localStorage.getItem('niyati_user_profile');
+          if (stored) persistedProfile = JSON.parse(stored);
+        } catch (e) {
+          // ignore parse errors
+        }
+        const up = userProfile || persistedProfile || {};
+
         const metadata = {
           reqId: reqId || 'unknown',
           user: {
-            id: userProfile?.user_id || null,
-            name: userProfile?.user_name || null,
-            phoneNumber: userProfile?.user_phoneNumber || null,
-            birthDate: userProfile?.user_dob || null,
-            timeOfBirth: userProfile?.user_timeOfBirth || null,
-            placeOfBirth: userProfile?.user_placeOfBirth || null,
-            currentLocation: userProfile?.user_currentLocation || null,
-            age: userProfile?.user_age ?? null,
-            isAdult: typeof userProfile?.user_isAdult === 'boolean' ? userProfile.user_isAdult : null,
-            credits: userProfile?.user_credits ?? null,
-            isPaid: (userProfile?.user_totalPaidAmount ?? 0) > 0,
-            preferences: userProfile?.user_preferences || null,
-            locale: userProfile?.user_locale || null,
-            timezone: userProfile?.user_timezone || null,
-            location: userProfile?.user_location || null
+            id: up.user_id || up.userId || null,
+            name: up.user_name || up.name || null,
+            phoneNumber: up.user_phoneNumber || up.phoneNumber || auth?.phoneNumber || null,
+            birthDate: up.user_dob || up.dateOfBirth || null,
+            timeOfBirth: up.user_timeOfBirth || up.timeOfBirth || null,
+            placeOfBirth: up.user_placeOfBirth || up.placeOfBirth || null,
+            currentLocation: up.user_currentLocation || up.currentLocation || null,
+            age: up.user_age ?? up.age ?? null,
+            isAdult: typeof up.user_isAdult === 'boolean' ? up.user_isAdult : (typeof up.isAdult === 'boolean' ? up.isAdult : null),
+            credits: up.user_credits ?? up.credits ?? null,
+            isPaid: (up.user_totalPaidAmount ?? up.totalPaidAmount ?? 0) > 0,
+            preferences: up.user_preferences || up.preferences || null,
+            locale: up.user_locale || up.locale || null,
+            timezone: up.user_timezone || up.timezone || null,
+            location: up.user_location || up.location || null
           },
           source: 'ui'
         };
