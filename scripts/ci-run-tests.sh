@@ -147,6 +147,13 @@ check_and_liberate_port "$N8N_PORT" "Mock N8N"
 log_step "🗑️  Tearing down any existing CI stack..."
 $COMPOSE_CMD -p "$PROJECT_NAME" down -v --remove-orphans 2>/dev/null || true
 
+# Ensure UI lockfile exists so Docker `npm ci` does not fail
+if [[ ! -f "apps/ui/package-lock.json" ]]; then
+    log_step "⚙️  Generating apps/ui/package-lock.json for CI (non-committed)"
+    # Generate package-lock only for the UI workspace so `npm ci` in the Docker build will succeed
+    npm --prefix apps/ui install --package-lock-only --silent || true
+fi
+
 log_step "🚀 Starting CI stack (with mock n8n)..."
 $COMPOSE_CMD -p "$PROJECT_NAME" up -d --build
 
