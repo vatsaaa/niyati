@@ -9,28 +9,28 @@ const DEFAULT_COUNTRIES = [
 // Helper: load user profile from storage
 function loadUserProfileFromStorage() {
   try {
-    const savedNew = localStorage.getItem('niyati_user_profile');
+    const savedNew = localStorage.getItem('niyati_profile');
     if (savedNew) return JSON.parse(savedNew);
     
-    // Default canonical shape
+    // Default canonical shape (new unified keys)
     return { 
-      user_name: '', 
-      user_dob: '', 
-      user_placeOfBirth: '', 
-      user_timeOfBirth: '', 
-      user_currentLocation: '', 
+      name: '', 
+      birthDate: '', 
+      placeOfBirth: '', 
+      timeOfBirth: '', 
+      currentLocation: '', 
       user_verified: {}, 
-      user_consentGiven: false,
-      user_isPaid: false
+      consentGiven: false,
+      isPaid: false
     };
   } catch (e) {
     return { 
-      user_name: '', 
-      user_dob: '', 
-      user_placeOfBirth: '', 
-      user_currentLocation: '', 
+      name: '', 
+      birthDate: '', 
+      placeOfBirth: '', 
+      currentLocation: '', 
       user_verified: {}, 
-      user_consentGiven: false 
+      consentGiven: false 
     };
   }
 }
@@ -41,24 +41,24 @@ export const useProfile = () => {
   const updateProfile = (updates) => {
     setProfile(prev => {
       const updated = { ...prev, ...updates };
-      localStorage.setItem('niyati_user_profile', JSON.stringify(updated));
+      localStorage.setItem('niyati_profile', JSON.stringify(updated));
       return updated;
     });
   };
 
   const resetProfile = () => {
     const emptyProfile = { 
-      user_name: '', 
-      user_dob: '', 
-      user_placeOfBirth: '', 
-      user_timeOfBirth: '',
-      user_currentLocation: '', 
+      name: '', 
+      birthDate: '', 
+      placeOfBirth: '', 
+      timeOfBirth: '',
+      currentLocation: '', 
       user_verified: {}, 
-      user_consentGiven: false,
-      user_isPaid: false
+      consentGiven: false,
+      isPaid: false
     };
     setProfile(emptyProfile);
-    localStorage.setItem('niyati_user_profile', JSON.stringify(emptyProfile));
+    localStorage.setItem('niyati_profile', JSON.stringify(emptyProfile));
   };
 
   return { profile, updateProfile, resetProfile };
@@ -66,11 +66,11 @@ export const useProfile = () => {
 
 export const useAuth = () => {
   const [phoneNumber, setPhoneNumber] = useState(() => {
-    return localStorage.getItem('niyati_user_phone_number') || '';
+    return localStorage.getItem('niyati_phone_number') || '';
   });
   
   const [isLoggedIn, setIsLoggedIn] = useState(() => {
-    return !!localStorage.getItem('niyati_user_phone_number');
+    return !!localStorage.getItem('niyati_phone_number');
   });
 
   const [countries, setCountries] = useState(() => {
@@ -84,7 +84,7 @@ export const useAuth = () => {
 
   const [selectedCountry, setSelectedCountry] = useState(() => {
     try {
-      const savedCode = localStorage.getItem('niyati_user_country_code');
+      const savedCode = localStorage.getItem('niyati_country_code');
       if (savedCode) {
         const found = (JSON.parse(localStorage.getItem('niyati_countries')) || DEFAULT_COUNTRIES).find(c => c.code === savedCode);
         if (found) return found;
@@ -107,7 +107,7 @@ export const useAuth = () => {
         setCountries(mapped);
         try { localStorage.setItem('niyati_countries', JSON.stringify(mapped)); } catch (e) {}
         // If user has previously selected a country code, update the selectedCountry reference
-        const savedCode = localStorage.getItem('niyati_user_country_code');
+        const savedCode = localStorage.getItem('niyati_country_code');
         if (savedCode) {
           const found = mapped.find(m => m.code === savedCode);
           if (found) setSelectedCountry(found);
@@ -124,15 +124,15 @@ export const useAuth = () => {
     const formattedPhone = `${country.dialCode}-${phone}`;
     setPhoneNumber(formattedPhone);
     setIsLoggedIn(true);
-    localStorage.setItem('niyati_user_phone_number', formattedPhone);
-    localStorage.setItem('niyati_user_country_code', country.code);
+    localStorage.setItem('niyati_phone_number', formattedPhone);
+    localStorage.setItem('niyati_country_code', country.code);
   };
 
   const logout = () => {
     setPhoneNumber('');
     setIsLoggedIn(false);
-    localStorage.removeItem('niyati_user_phone_number');
-    localStorage.removeItem('niyati_user_country_code');
+    localStorage.removeItem('niyati_phone_number');
+    localStorage.removeItem('niyati_country_code');
   };
 
   const getUserCountry = () => {
@@ -164,7 +164,7 @@ export const useMessages = () => {
       }
     }
     // If user is returning (has phone stored), don't show the generic greeting.
-    const isReturning = !!localStorage.getItem('niyati_user_phone_number') || !!localStorage.getItem('niyati_user_profile');
+    const isReturning = !!localStorage.getItem('niyati_phone_number') || !!localStorage.getItem('niyati_profile');
     if (isReturning) return [];
 
     // Default welcome message for first-time visitors
@@ -212,7 +212,7 @@ export const useMessages = () => {
   };
 
   const clearMessages = () => {
-    const isReturning = !!localStorage.getItem('niyati_user_phone_number') || !!localStorage.getItem('niyati_user_profile');
+    const isReturning = !!localStorage.getItem('niyati_phone_number') || !!localStorage.getItem('niyati_profile');
     const welcomeMsg = isReturning ? [] : [{
       id: 1,
       text: "Hello! I am Niyati. What is on your mind today?",

@@ -70,7 +70,7 @@ export function determineGeocodingEndpoint(location, userCountryName = null) {
 export async function resolveLocationAndTimezone(placeOfBirth, countries = []) {
   let userCountryName = null;
   try {
-    const savedCountryCode = localStorage.getItem('niyati_user_country_code');
+    const savedCountryCode = localStorage.getItem('niyati_country_code');
     if (savedCountryCode && countries) {
       const userCountry = countries.find(c => c.code === savedCountryCode);
       if (userCountry) userCountryName = userCountry.name;

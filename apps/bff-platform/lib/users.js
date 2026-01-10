@@ -412,7 +412,14 @@ router.post('/deduct-credits', async (req, res) => {
     const phone = (req.body.phoneNumber || '').trim();
     const amount = parseInt(req.body.amount, 10) || 2;
     // Prefer explicit idempotency key header, fallback to x-request-id or body.requestId
-    const incomingReqId = (req.headers['x-idempotency-key'] || req.headers['x-request-id'] || req.body.requestId || '').trim();
+    const incomingReqId = ((req.headers && (req.headers['x-idempotency-key'] || req.headers['x-request-id'])) || req.body.requestId || '').toString().trim();
+    // Protect against accidental deductions when the assistant asked for clarification
+    const headerNeedsClar = req.headers && (String(req.headers['x-needs-clarification']).toLowerCase() === '1' || String(req.headers['x-needs-clarification']).toLowerCase() === 'true');
+    const isClarification = (req.body && (req.body.isClarification === true || req.body.isClarifying === true)) || headerNeedsClar;
+    if (isClarification) {
+      logger.warn({ msg: 'deduct_credits_blocked_clarification', phone, reqId: incomingReqId });
+      return res.sendError(ErrorCodes.BAD_REQUEST, 'clarification_no_deduct');
+    }
 
     if (!phone) {
       return res.sendError(ErrorCodes.MISSING_REQUIRED_FIELD, 'missing_phone_number');

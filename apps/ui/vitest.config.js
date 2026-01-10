@@ -1,6 +1,4 @@
-import { defineConfig } from 'vitest/config'
-
-export default defineConfig({
+export default {
   define: {
     'process.env.NODE_ENV': '"development"'
   },
@@ -8,4 +6,4 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: './test/setupTests.js',
   },
-})
+}

@@ -43,10 +43,10 @@ const NiyatiChat = () => {
   const { handleSend, isLoading: chatIsLoading } = useChat(profile, updateProfile, addMessage, auth);
   const [consentChecked, setConsentChecked] = useState(() => {
     try {
-      const savedProfile = localStorage.getItem('niyati_user_profile');
+      const savedProfile = localStorage.getItem('niyati_profile');
       if (savedProfile) {
         const parsed = JSON.parse(savedProfile);
-        return !!parsed.user_consentGiven;
+        return !!parsed.consentGiven;
       }
     } catch (e) { }
     return false;

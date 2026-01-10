@@ -25,26 +25,30 @@ describe('useChat classify failure handling', () => {
   });
 
   it('does NOT call deduct-credits when classify endpoint returns 401', async () => {
+    const { bffFetchWithRetry } = await import('../../services/api');
     const profile = {
-      user_name: 'Ankur',
-      user_dob: '1979-05-19',
-      user_placeOfBirth: 'New Delhi',
-      user_timeOfBirth: '07:31',
+      name: 'Ankur',
+      birthDate: '1979-05-19',
+      placeOfBirth: 'New Delhi',
+      timeOfBirth: '07:31',
       user_verified: { id: '1', phoneNumber: '+91-9992223333' },
-      user_consentGiven: true,
-      user_credits: 10
+      consentGiven: true,
+      credits: 10
     };
 
     const updateProfile = vi.fn();
     const addMessage = vi.fn();
     const auth = { countries: [{ code: 'IN', name: 'India', dialCode: '+91' }], phoneNumber: '+91-9992223333' };
 
+    // Mock bffFetchWithRetry to return 401 for classify endpoint
+    vi.mocked(bffFetchWithRetry).mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: async () => ({ status: 'error', error: 'unauthorized' })
+    });
+
     const fetchMock = vi.spyOn(global, 'fetch').mockImplementation(async (url, opts) => {
       const s = String(url);
-      if (s.includes('/api/v1/chat/classify')) {
-        // Simulate 401 unauthorized from BFF classify endpoint
-        return { ok: false, status: 401, json: async () => ({ status: 'error', error: 'unauthorized' }) };
-      }
       if (s.includes('/webhook/')) {
         // n8n webhook returns a valid reply
         return { ok: true, text: async () => JSON.stringify({ output: 'stubbed n8n response' }) };
@@ -64,9 +68,9 @@ describe('useChat classify failure handling', () => {
       await ref.current.handleSend("Hi Niyati, give me today's horoscope", () => {});
     });
 
-    // Assert classify was called and deduct-credits was NOT called
+    // Assert classify was called (via bffFetchWithRetry) and deduct-credits was NOT called
+    expect(bffFetchWithRetry).toHaveBeenCalled();
     const calls = fetchMock.mock.calls.map(c => String(c[0]));
-    expect(calls.some(u => u.includes('/api/v1/chat/classify'))).toBe(true);
     expect(calls.some(u => u.includes('/api/v1/users/deduct-credits'))).toBe(false);
 
     fetchMock.mockRestore();

@@ -66,6 +66,12 @@ const PROFILE_PATTERNS = [
   /\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}/i,
   /\b\d{1,2}\s+(january|february|march|april|may|june|july|august|september|october|november|december)/i,
   /\b(19|20)\d{2}\b/i
+  // Date-only formats like 01/05/1990 or 1-5-90
+  ,/^[\s\d]{1,20}[\/\-\.][\s\d]{1,20}[\/\-\.][\s\d]{2,4}\s*$/i
+  // Time-only formats like 09:30 or 9.30 pm
+  ,/^[\s]*\d{1,2}[:\.]\d{2}\s*(am|pm)?\s*$/i
+  // Month-name date formats like 'May 5' or 'May 5, 1990'
+  ,/^[\s]*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}(?:,\s*\d{4})?\s*$/i
 ];
 
 // Casual conversation patterns - NOT billable

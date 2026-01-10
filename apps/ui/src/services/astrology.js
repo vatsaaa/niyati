@@ -16,10 +16,10 @@ import { formatCurrentLocationForDisplay } from '../utils/formatters';
  */
 export async function calculateAstrology(profile, locationData, timezone) {
   const profileKey = JSON.stringify({
-    name: profile.user_name,
-    dob: profile.user_dob,
-    place: profile.user_placeOfBirth,
-    tob: profile.user_timeOfBirth,
+    name: profile.name,
+    dob: profile.birthDate,
+    place: profile.placeOfBirth,
+    tob: profile.timeOfBirth,
   });
   const astroCacheKey = `astrology:${simpleHash(profileKey)}`;
 
@@ -37,8 +37,8 @@ export async function calculateAstrology(profile, locationData, timezone) {
     // ignore cache errors
   }
 
-  const [year, month, date] = profile.user_dob.split('-').map((n) => parseInt(n, 10));
-  const timeParts = (profile.user_timeOfBirth || '00:00:00').split(':').map((n) => parseInt(n, 10));
+  const [year, month, date] = profile.birthDate.split('-').map((n) => parseInt(n, 10));
+  const timeParts = (profile.timeOfBirth || '00:00:00').split(':').map((n) => parseInt(n, 10));
   const [hours, minutes, seconds] = [timeParts[0] || 0, timeParts[1] || 0, timeParts[2] || 0];
 
   const astrologyPayload = {
@@ -108,20 +108,20 @@ export async function calculateAstrology(profile, locationData, timezone) {
  * @throws {Error} If the profile processing fails.
  */
 export async function processCompleteProfile(profile, countries, phoneNumber) {
-  const { location, timezone } = await resolveLocationAndTimezone(profile.user_placeOfBirth, countries);
+  const { location, timezone } = await resolveLocationAndTimezone(profile.placeOfBirth, countries);
 
   const persistPayload = {
     phoneNumber,
-    dateOfBirth: profile.user_dob,
-    timeOfBirth: profile.user_timeOfBirth,
-    placeOfBirth: profile.user_placeOfBirth,
+    dateOfBirth: profile.birthDate,
+    timeOfBirth: profile.timeOfBirth,
+    placeOfBirth: profile.placeOfBirth,
     lat: location && (location.lat || location.latitude),
     lon: location && (location.lon || location.longitude),
     timezone: timezone,
-    consentGiven: profile.user_consentGiven,
-    isPaid: !!profile.user_isPaid,
+    consentGiven: profile.consentGiven,
+    isPaid: !!profile.isPaid,
     // Use current location, not birth place location
-    last_login_location: profile.user_currentLocation || '',
+    last_login_location: profile.currentLocation || '',
   };
 
   if (persistPayload.phoneNumber) {

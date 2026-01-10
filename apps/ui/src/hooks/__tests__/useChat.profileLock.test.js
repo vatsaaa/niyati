@@ -45,11 +45,11 @@ describe('useChat profile locking', () => {
     localStorage.setItem('niyati_profile_sent', 'true');
     
     const profile = {
-      user_name: 'Ankur',
-      user_dob: '1990-05-19',
-      user_placeOfBirth: 'Mumbai',
-      user_timeOfBirth: '08:30',
-      user_consentGiven: true,
+      name: 'Ankur',
+      birthDate: '1990-05-19',
+      placeOfBirth: 'Mumbai',
+      timeOfBirth: '08:30',
+      consentGiven: true,
       user_verified: { id: 'test-id' }
     };
     const updateProfile = vi.fn();
@@ -81,7 +81,7 @@ describe('useChat profile locking', () => {
     const { extractProfileFields } = await import('../../utils/profileExtractor');
     extractProfileFields.mockResolvedValueOnce({ name: 'Rahul' });
     
-    const profile = { user_consentGiven: true };
+    const profile = { consentGiven: true };
     const updateProfile = vi.fn();
     const addMessage = vi.fn();
     const auth = { 
@@ -99,18 +99,18 @@ describe('useChat profile locking', () => {
     // Should call updateProfile to update the name
     expect(updateProfile).toHaveBeenCalled();
     const lastUpdateCall = updateProfile.mock.calls[updateProfile.mock.calls.length - 1][0];
-    expect(lastUpdateCall.user_name).toBe('Rahul');
+    expect(lastUpdateCall.name).toBe('Rahul');
   });
 
   it('detects various profile update attempt patterns', async () => {
     localStorage.setItem('niyati_profile_sent', 'true');
     
     const profile = {
-      user_name: 'Ankur',
-      user_dob: '1990-05-19',
-      user_placeOfBirth: 'Mumbai',
-      user_timeOfBirth: '08:30',
-      user_consentGiven: true,
+      name: 'Ankur',
+      birthDate: '1990-05-19',
+      placeOfBirth: 'Mumbai',
+      timeOfBirth: '08:30',
+      consentGiven: true,
       user_verified: { id: 'test-id' }
     };
     const updateProfile = vi.fn();
@@ -169,12 +169,12 @@ describe('useChat credit checks', () => {
     }));
     
     const profile = {
-      user_name: 'Ankur',
-      user_dob: '1990-05-19',
-      user_placeOfBirth: 'Mumbai',
-      user_timeOfBirth: '08:30',
-      user_consentGiven: true,
-      user_credits: 0, // No credits
+      name: 'Ankur',
+      birthDate: '1990-05-19',
+      placeOfBirth: 'Mumbai',
+      timeOfBirth: '08:30',
+      consentGiven: true,
+      credits: 0, // No credits
       user_verified: { id: 'test-id' }
     };
     const updateProfile = vi.fn();

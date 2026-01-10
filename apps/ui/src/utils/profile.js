@@ -4,7 +4,7 @@
  * @returns {boolean} True if the profile is complete, false otherwise.
  */
 export function hasAllRequiredFields(p) {
-  return !!(p.user_name && p.user_dob && p.user_placeOfBirth && p.user_timeOfBirth);
+  return !!(p.name && p.birthDate && p.placeOfBirth && p.timeOfBirth);
 }
 
 /**
@@ -14,9 +14,9 @@ export function hasAllRequiredFields(p) {
  */
 export function missingProfileFields(p) {
   const missing = [];
-  if (!p.user_name) missing.push('name');
-  if (!p.user_dob) missing.push('date of birth');
-  if (!p.user_placeOfBirth) missing.push('place of birth');
-  if (!p.user_timeOfBirth) missing.push('time of birth');
+  if (!p.name) missing.push('name');
+  if (!p.birthDate) missing.push('date of birth');
+  if (!p.placeOfBirth) missing.push('place of birth');
+  if (!p.timeOfBirth) missing.push('time of birth');
   return missing;
 }

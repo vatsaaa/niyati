@@ -25,9 +25,9 @@ describe('formatters', () => {
     expect(formatPlaceFromLocation(loc)).toBe('Pune, MH, India');
   });
 
-  it('getDisplayPlace prefers user_placeOfBirth', () => {
+  it('getDisplayPlace prefers placeOfBirth', () => {
     expect(getDisplayPlace(null)).toBe('—');
-    expect(getDisplayPlace({ user_placeOfBirth: 'Bengaluru' })).toBe('Bengaluru');
+    expect(getDisplayPlace({ placeOfBirth: 'Bengaluru' })).toBe('Bengaluru');
     expect(getDisplayPlace({ placeOfBirth_raw: 'Some Place, भारत' })).toBe('Some Place');
   });
 });

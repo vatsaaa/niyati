@@ -68,8 +68,8 @@ export function formatCurrentLocationForDisplay(currentLocation) {
  */
 export function getDisplayPlace(profileObj) {
   if (!profileObj) return '—';
-  if (profileObj.user_placeOfBirth) return profileObj.user_placeOfBirth;
-  const raw = profileObj.placeOfBirth_raw || profileObj.user_placeOfBirth || '';
+  if (profileObj.placeOfBirth) return profileObj.placeOfBirth;
+  const raw = profileObj.placeOfBirth_raw || profileObj.placeOfBirth || '';
   if (!raw) return '—';
   // If raw contains ASCII fragment separated by commas, prefer that
   const parts = raw.split(',').map(p => p.trim()).filter(Boolean);

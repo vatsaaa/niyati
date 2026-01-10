@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../../services/api', () => ({ bffFetch: vi.fn() }));
 vi.mock('../../services/astrology', () => ({ processCompleteProfile: vi.fn() }));
-vi.mock('../../utils/profile', () => ({ hasAllRequiredFields: (p) => !!(p.user_name && p.user_dob && p.user_placeOfBirth && p.user_timeOfBirth) }));
+vi.mock('../../utils/profile', () => ({ hasAllRequiredFields: (p) => !!(p.name && p.birthDate && p.placeOfBirth && p.timeOfBirth) }));
 vi.mock('../../config', () => ({ N8N_WEBHOOK_URL: 'https://n8n.test/webhook' }));
 
 import { useLogin } from '../useLogin';

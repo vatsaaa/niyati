@@ -20,7 +20,7 @@ describe('astrology service', () => {
       .mockResolvedValueOnce({ ok: true, json: async () => ({ planets: ['p'] }) })
       .mockResolvedValueOnce({ ok: true, text: async () => '<svg/>' });
 
-    const profile = { user_name: 'T', user_dob: '1990-01-01', user_timeOfBirth: '00:00:00', user_placeOfBirth: 'X' };
+    const profile = { name: 'T', birthDate: '1990-01-01', timeOfBirth: '00:00:00', placeOfBirth: 'X' };
     const location = { lat: 10, lon: 20 };
     const out = await calculateAstrology(profile, location, 5);
     expect(out).toHaveProperty('planets');
@@ -39,7 +39,7 @@ describe('astrology service', () => {
       // third call: horoscope svg
       .mockResolvedValueOnce({ ok: true, text: async () => '<svg/>' });
 
-    const profile = { user_name: 'T', user_dob: '1990-01-01', user_timeOfBirth: '00:00:00', user_placeOfBirth: 'X', user_consentGiven: true };
+    const profile = { name: 'T', birthDate: '1990-01-01', timeOfBirth: '00:00:00', placeOfBirth: 'X', consentGiven: true };
     const res = await processCompleteProfile(profile, [], '+91-99999');
     expect(res).toHaveProperty('planets');
   });

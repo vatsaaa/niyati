@@ -23,8 +23,9 @@ test.describe('Dashboard Features', () => {
         if (await chatInput.isVisible()) {
             await chatInput.fill('What does my future hold?');
             await page.keyboard.press('Enter');
-            // Wait for bot response to appear
-            await expect(page.locator('.bot-message')).toBeVisible({ timeout: 15000 });
+            // Wait for bot response to appear - target the latest bot message
+            const botReply = page.locator('.bot-message').last();
+            await expect(botReply).toBeVisible({ timeout: 15000 });
         }
     });
 });

@@ -132,7 +132,7 @@ test.describe('Profile Locking', () => {
       try {
         return {
           niyati_profile_sent: localStorage.getItem('niyati_profile_sent'),
-          niyati_user_profile: localStorage.getItem('niyati_user_profile'),
+          niyati_user_profile: localStorage.getItem('niyati_profile'),
           keys: Object.keys(localStorage)
         };
       } catch (e) {

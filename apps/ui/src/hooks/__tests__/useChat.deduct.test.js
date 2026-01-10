@@ -26,13 +26,13 @@ describe('useChat deduction flow', () => {
 
   it('calls deduct-credits after successful webhook when profile complete', async () => {
     const profile = {
-      user_name: 'Ankur',
-      user_dob: '1990-05-19',
-      user_placeOfBirth: 'Mumbai',
-      user_timeOfBirth: '09:30',
+      name: 'Ankur',
+      birthDate: '1990-05-19',
+      placeOfBirth: 'Mumbai',
+      timeOfBirth: '09:30',
       user_verified: { id: '1', phoneNumber: '+91-9992223333' },
-      user_consentGiven: true,
-      user_credits: 10
+      consentGiven: true,
+      credits: 10
     };
 
     const updateProfile = vi.fn();
@@ -41,16 +41,22 @@ describe('useChat deduction flow', () => {
 
     // Mock fetch: first call is BFF chat endpoint, second call is deduct-credits
     const fetchMock = vi.spyOn(global, 'fetch').mockImplementation(async (url, opts) => {
-      if (String(url).includes('/api/v1/chat')) {
-        // BFF returns n8nResponse nested inside data
-        return { ok: true, text: async () => JSON.stringify({ status: 'ok', data: { forwardedToN8n: true, n8nResponse: { output: 'stubbed response' } } }) };
+      const responseData = {
+        ok: true,
+        json: async () => ({ status: 'ok', data: {} }),
+        text: async () => JSON.stringify({ status: 'ok', data: {} })
+      };
+
+      if (String(url).includes('/webhook')) {
+        // n8n webhook returns output
+        return { ...responseData, text: async () => JSON.stringify({ output: 'stubbed response' }) };
       }
       if (String(url).includes('/deduct-credits')) {
         // return updated credits = 8
-        return { ok: true, json: async () => ({ data: { credits: 8 } }) };
+        return { ...responseData, json: async () => ({ data: { credits: 8 } }) };
       }
       // geocode current-location or profile save
-      return { ok: true, json: async () => ({ status: 'ok', data: {} }) };
+      return responseData;
     });
 
     const ref = React.createRef();
@@ -62,7 +68,7 @@ describe('useChat deduction flow', () => {
 
     // Expect deduct call happened and profile updated with new credits
     expect(fetchMock).toHaveBeenCalled();
-    expect(updateProfile).toHaveBeenCalledWith(expect.objectContaining({ user_credits: 8 }));
+    expect(updateProfile).toHaveBeenCalledWith(expect.objectContaining({ credits: 8 }));
 
     fetchMock.mockRestore();
   });

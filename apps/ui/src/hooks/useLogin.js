@@ -75,16 +75,16 @@ export function useLogin(auth, profile, updateProfile, addMessage, clearMessages
         totalPaidAmount = typeof identifiedUser.total_paid_amount === 'number' ? identifiedUser.total_paid_amount : 0;
         lastLoginLocation = typeof identifiedUser.last_login_location === 'string' ? identifiedUser.last_login_location : '';
         
-        if (!existing.user_name && identifiedUser.name) prefill.user_name = identifiedUser.name;
-        if (!existing.user_dob && identifiedUser.date_of_birth) prefill.user_dob = identifiedUser.date_of_birth;
-        if (!existing.user_timeOfBirth && identifiedUser.time_of_birth) prefill.user_timeOfBirth = identifiedUser.time_of_birth;
-        if (!existing.user_placeOfBirth && identifiedUser.place_of_birth) prefill.user_placeOfBirth = identifiedUser.place_of_birth;
-        if (!existing.user_consentGiven && typeof identifiedUser.consent_given !== 'undefined') {
-          prefill.user_consentGiven = !!identifiedUser.consent_given;
+        if (!existing.name && identifiedUser.name) prefill.name = identifiedUser.name;
+        if (!existing.birthDate && identifiedUser.date_of_birth) prefill.birthDate = identifiedUser.date_of_birth;
+        if (!existing.timeOfBirth && identifiedUser.time_of_birth) prefill.timeOfBirth = identifiedUser.time_of_birth;
+        if (!existing.placeOfBirth && identifiedUser.place_of_birth) prefill.placeOfBirth = identifiedUser.place_of_birth;
+        if (!existing.consentGiven && typeof identifiedUser.consent_given !== 'undefined') {
+          prefill.consentGiven = !!identifiedUser.consent_given;
         }
-        prefill.user_credits = userCredits;
-        prefill.user_totalPaidAmount = totalPaidAmount;
-        prefill.user_lastLoginLocation = lastLoginLocation;
+        prefill.credits = userCredits;
+        prefill.totalPaidAmount = totalPaidAmount;
+        prefill.lastLoginLocation = lastLoginLocation;
         
         const verified = { ...(existing.user_verified || {}) };
         if (identifiedUser.id) verified.id = identifiedUser.id;
@@ -104,10 +104,10 @@ export function useLogin(auth, profile, updateProfile, addMessage, clearMessages
         ...existing,
         ...prefill,
         // Preserve the real consent value from prefill (identifiedUser) or existing profile.
-        user_consentGiven: (typeof prefill.user_consentGiven !== 'undefined')
-          ? prefill.user_consentGiven
-          : (typeof existing.user_consentGiven !== 'undefined' ? existing.user_consentGiven : undefined),
-        user_currentLocation: newLocation || existing.user_currentLocation || '',
+        consentGiven: (typeof prefill.consentGiven !== 'undefined')
+          ? prefill.consentGiven
+          : (typeof existing.consentGiven !== 'undefined' ? existing.consentGiven : undefined),
+        currentLocation: newLocation || existing.currentLocation || '',
         updatedAt: new Date().toISOString(),
       };
 
@@ -123,8 +123,8 @@ export function useLogin(auth, profile, updateProfile, addMessage, clearMessages
             last_login_lat: currentLocationData?.lat || currentLocationData?.latitude || null,
             last_login_lon: currentLocationData?.lon || currentLocationData?.longitude || null
           };
-          if (typeof updatedProfile.user_consentGiven !== 'undefined') {
-            profileUpdateBody.consentGiven = !!updatedProfile.user_consentGiven;
+          if (typeof updatedProfile.consentGiven !== 'undefined') {
+            profileUpdateBody.consentGiven = !!updatedProfile.consentGiven;
           }
 
           const updateResponse = await bffFetch('/users/profile', {
@@ -141,14 +141,14 @@ export function useLogin(auth, profile, updateProfile, addMessage, clearMessages
         }
       }
 
-      if (isReturningUser && hasAllRequiredFields(updatedProfile) && updatedProfile.user_consentGiven) {
+      if (isReturningUser && hasAllRequiredFields(updatedProfile) && updatedProfile.consentGiven) {
         // Format context for n8n to generate personalized greeting
         const payingStatus = isPaidUser ? 'Paid subscriber' : 'Free user';
-        const userName = updatedProfile.user_name || 'User';
+        const userName = updatedProfile.name || 'User';
         const firstName = userName.split(' ')[0] || userName;
-        const dob = updatedProfile.user_dob || 'unknown';
-        const tob = updatedProfile.user_timeOfBirth || 'unknown';
-        const pob = updatedProfile.user_placeOfBirth || 'unknown place';
+        const dob = updatedProfile.birthDate || 'unknown';
+        const tob = updatedProfile.timeOfBirth || 'unknown';
+        const pob = updatedProfile.placeOfBirth || 'unknown place';
         const currentLoc = newLocation || 'unknown location';
         const lastLoc = lastLoginLocation || 'unknown';
 
@@ -197,13 +197,13 @@ Instructions: Welcome this returning user warmly. Keep it brief and friendly - t
                   isSystemContext: true,
                   credits: userCredits,
                   isPaid: isPaidUser,
-                  user: {
-                    name: firstName,
-                    birthDate: dob,
-                    timeOfBirth: tob,
-                    placeOfBirth: pob,
-                    currentLocation: currentLoc
-                  },
+                        user: {
+                          name: firstName,
+                          birthDate: dob,
+                          timeOfBirth: tob,
+                          placeOfBirth: pob,
+                          currentLocation: currentLoc
+                        },
                   lastLoginLocation: lastLoc,
                   locationChanged
                 } 
@@ -243,11 +243,11 @@ Instructions: Welcome this returning user warmly. Keep it brief and friendly - t
           // (so downstream workflows receive a human-readable profile summary).
           try {
             const synthParts = [];
-            if (updatedProfile.user_name) synthParts.push(`My name is ${updatedProfile.user_name}`);
-            if (updatedProfile.user_dob) synthParts.push(`born on ${formatDobForDisplay(updatedProfile.user_dob) || updatedProfile.user_dob}`);
-            if (updatedProfile.user_timeOfBirth) synthParts.push(`at ${formatTimeForDisplay(updatedProfile.user_timeOfBirth) || updatedProfile.user_timeOfBirth}`);
-            if (updatedProfile.user_placeOfBirth) synthParts.push(`in ${updatedProfile.user_placeOfBirth}`);
-            if (updatedProfile.user_currentLocation) synthParts.push(`I currently live in ${updatedProfile.user_currentLocation}`);
+            if (updatedProfile.name) synthParts.push(`My name is ${updatedProfile.name}`);
+            if (updatedProfile.birthDate) synthParts.push(`born on ${formatDobForDisplay(updatedProfile.birthDate) || updatedProfile.birthDate}`);
+            if (updatedProfile.timeOfBirth) synthParts.push(`at ${formatTimeForDisplay(updatedProfile.timeOfBirth) || updatedProfile.timeOfBirth}`);
+            if (updatedProfile.placeOfBirth) synthParts.push(`in ${updatedProfile.placeOfBirth}`);
+            if (updatedProfile.currentLocation) synthParts.push(`I currently live in ${updatedProfile.currentLocation}`);
             const synthesized = synthParts.join('. ') + '.';
 
             const synthReqId = getSessionReqId();
@@ -262,7 +262,7 @@ Instructions: Welcome this returning user warmly. Keep it brief and friendly - t
                 'x-request-id': synthReqId,
                 'ngrok-skip-browser-warning': 'true'
               },
-              body: JSON.stringify({ message: synthesized, sessionId: fullPhone, metadata: { reqId: synthReqId, returning: true, isProfileSynthesis: true, user: { name: updatedProfile.user_name || null, birthDate: updatedProfile.user_dob || null, timeOfBirth: updatedProfile.user_timeOfBirth || null, placeOfBirth: updatedProfile.user_placeOfBirth || null, currentLocation: updatedProfile.user_currentLocation || null } } })
+                body: JSON.stringify({ message: synthesized, sessionId: fullPhone, metadata: { reqId: synthReqId, returning: true, isProfileSynthesis: true, user: { name: updatedProfile.name || null, birthDate: updatedProfile.birthDate || null, timeOfBirth: updatedProfile.timeOfBirth || null, placeOfBirth: updatedProfile.placeOfBirth || null, currentLocation: updatedProfile.currentLocation || null } } })
             }).catch(err => console.warn('Failed to send synthesized profile to n8n:', err));
           } catch (e) {
             // swallow errors from synthesis to avoid affecting UI
@@ -283,7 +283,7 @@ Instructions: Welcome this returning user warmly. Keep it brief and friendly - t
             try { localStorage.setItem('niyati_payment_qr_shown', 'true'); } catch (e) { }
           }
         })();
-      } else if (hasAllRequiredFields(updatedProfile) && updatedProfile.user_consentGiven) {
+      } else if (hasAllRequiredFields(updatedProfile) && updatedProfile.consentGiven) {
         processCompleteProfile(updatedProfile, auth.countries, auth.phoneNumber);
       } else if (!isReturningUser) {
         // Clear any generic initial greeting that may have been added by

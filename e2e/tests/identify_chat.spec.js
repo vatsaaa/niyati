@@ -106,7 +106,7 @@ test('ui identify -> chat -> credits deducted', async ({ page, baseURL }) => {
   // Wait for profile to be fully populated in localStorage (returning user flow)
   await page.waitForFunction(() => {
     try {
-      const stored = localStorage.getItem('niyati_user_profile');
+      const stored = localStorage.getItem('niyati_profile');
       if (!stored) return false;
       const p = JSON.parse(stored);
       return p.user_verified && (p.user_verified.id || p.user_verified.phoneNumber);

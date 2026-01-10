@@ -108,18 +108,18 @@ function extractProfileFields(text) {
     result.dob = `${year}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
   }
 
-  // Time of birth patterns
-  const timeMatchSecAmPm = trimmed.match(/(\d{1,2}:\d{2}:\d{2}\s*(?:am|pm))/i);
-  const timeMatchSec24 = trimmed.match(/(\b\d{1,2}:\d{2}:\d{2}\b)/);
-  const timeMatchMinAmPm = trimmed.match(/(\d{1,2}:\d{2}\s*(?:am|pm))/i);
-  const timeMatchMin24 = trimmed.match(/(\b\d{1,2}:\d{2}\b)/);
-  const timeMatchHourAmPm = trimmed.match(/(\b\d{1,2}\s*(?:am|pm)\b)/i);
-  
-  if (timeMatchSecAmPm) result.timeOfBirth = timeMatchSecAmPm[1].trim();
-  else if (timeMatchSec24) result.timeOfBirth = timeMatchSec24[1].trim();
-  else if (timeMatchMinAmPm) result.timeOfBirth = timeMatchMinAmPm[1].trim();
-  else if (timeMatchMin24) result.timeOfBirth = timeMatchMin24[1].trim();
-  else if (timeMatchHourAmPm) result.timeOfBirth = timeMatchHourAmPm[1].trim();
+  // Time of birth patterns (more permissive: allow optional leading 'at')
+  const timeMatchSecAmPm = trimmed.match(/(?:at\s*)?(\d{1,2}:\d{2}:\d{2}\s*(?:am|pm))/i);
+  const timeMatchSec24 = trimmed.match(/(?:at\s*)?(\b\d{1,2}:\d{2}:\d{2}\b)/);
+  const timeMatchMinAmPm = trimmed.match(/(?:at\s*)?(\d{1,2}:\d{2}\s*(?:am|pm))/i);
+  const timeMatchMin24 = trimmed.match(/(?:at\s*)?(\b\d{1,2}:\d{2}\b)/);
+  const timeMatchHourAmPm = trimmed.match(/(?:at\s*)?(\b\d{1,2}\s*(?:am|pm)\b)/i);
+
+  if (timeMatchSecAmPm && timeMatchSecAmPm[1]) result.timeOfBirth = timeMatchSecAmPm[1].trim();
+  else if (timeMatchSec24 && timeMatchSec24[1]) result.timeOfBirth = timeMatchSec24[1].trim();
+  else if (timeMatchMinAmPm && timeMatchMinAmPm[1]) result.timeOfBirth = timeMatchMinAmPm[1].trim();
+  else if (timeMatchMin24 && timeMatchMin24[1]) result.timeOfBirth = timeMatchMin24[1].trim();
+  else if (timeMatchHourAmPm && timeMatchHourAmPm[1]) result.timeOfBirth = timeMatchHourAmPm[1].trim();
 
   // Place extraction
   // First try "in PLACE" after a time pattern (e.g., "at 11:01 am in Abu Dhabi")

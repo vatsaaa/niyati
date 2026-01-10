@@ -141,6 +141,49 @@ check_and_liberate_port "$REDIS_PORT" "Redis"
 check_and_liberate_port "$N8N_PORT" "Mock N8N"
 
 # =============================================================================
+# STEP 0.5: BOOTSTRAP / LOCKFILE CHECKS
+# - Ensure package-lock.json exists for packages used in CI builds so
+#   Docker `npm ci` does not fail interactively. If missing, generate
+#   a package-lock only (non-committed) to stabilize CI builds.
+# - Ensure per-package dev dependencies are installable by running
+#   a lightweight `npm --package-lock-only` or `npm ci` when appropriate.
+# =============================================================================
+
+log_step "🔧 Ensuring lockfiles and test tool availability..."
+
+# Packages to ensure lockfiles for
+PKGS=("apps/ui" "apps/bff-platform" "apps/bff-auth" "packages/commons" "e2e")
+for p in "${PKGS[@]}"; do
+    if [[ -f "$p/package.json" ]]; then
+        if [[ ! -f "$p/package-lock.json" && ! -f "$p/yarn.lock" ]]; then
+            log_info "Generating package-lock.json for $p (so Docker builds and local CI are stable)"
+            npm --prefix "$p" install --package-lock-only --silent || {
+                log_warn "Failed to generate package-lock for $p; continuing but CI Docker build may fail."
+            }
+        else
+            log_info "Lockfile present for $p"
+        fi
+    fi
+done
+
+# Ensure local test runners can be installed (non-fatal) so later npm ci won't prompt.
+TEST_PKGS=("packages/commons" "apps/bff-platform" "apps/bff-auth" "e2e" "apps/ui")
+for tp in "${TEST_PKGS[@]}"; do
+    if [[ -f "$tp/package.json" ]]; then
+        log_info "Running lightweight npm ci for $tp to ensure dev deps are resolvable"
+        npm ci --prefix "$tp" --prefer-offline --no-audit --silent || {
+            log_warn "npm ci failed for $tp; tests may still pass inside Docker where builds are isolated."
+        }
+    fi
+done
+
+# Verify playwright CLI is available (install browsers later before E2E)
+if ! command -v npx >/dev/null 2>&1; then
+    log_error "npx not found in PATH — Node.js tooling required for CI."
+    exit 1
+fi
+
+# =============================================================================
 # STEP 1: FRESH START
 # =============================================================================
 

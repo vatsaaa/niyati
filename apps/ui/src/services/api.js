@@ -109,14 +109,14 @@ export async function sendClientLog(tag, meta = {}, profile) {
       console.warn('sendClientLog: tag too long, truncating');
       tag = tag.substring(0, 100);
     }
-    if (!profile || !profile.user_consentGiven) return;
+    if (!profile || !profile.consentGiven) return;
 
     const safe = { ...meta };
-    // Remove obvious PII keys if accidentally passed
-    delete safe.user_name;
-    delete safe.user_dob;
-    delete safe.user_placeOfBirth;
-    delete safe.user_timeOfBirth;
+    // Remove obvious PII keys if accidentally passed (canonical keys)
+    delete safe.name;
+    delete safe.birthDate;
+    delete safe.placeOfBirth;
+    delete safe.timeOfBirth;
     delete safe.phoneNumber;
     delete safe.email;
     delete safe.password;

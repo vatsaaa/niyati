@@ -78,7 +78,7 @@ test('classify auth failure causes deduction (regression)', async ({ page, baseU
   // Wait for profile to be stored
   await page.waitForFunction(() => {
     try {
-      const stored = localStorage.getItem('niyati_user_profile');
+      const stored = localStorage.getItem('niyati_profile');
       if (!stored) return false;
       const p = JSON.parse(stored);
       return p.user_verified && (p.user_verified.id || p.user_verified.phoneNumber);
@@ -94,12 +94,11 @@ test('classify auth failure causes deduction (regression)', async ({ page, baseU
   // Wait briefly for UI to perform classify -> webhook -> (maybe) deduct
   await page.waitForTimeout(1200);
 
-  // Assert: because classify returned 401, the UI currently FALLS BACK to default and may deduct.
-  // This regression test asserts that a deduct request was seen (reproducing the bug).
-  // Future fix will invert this expectation to assert no deduction.
-  expect(deductSeen).toBe(true);
+  // Because classify returned 401, the UI should NOT deduct credits anymore.
+  // Ensure no deduct request was made and displayed credits remain unchanged.
+  expect(deductSeen).toBe(false);
 
-  // Also ensure the UI updated the credits display to reflect deduction
-  const expected = Math.max(0, initialCredits - DEDUCT_AMOUNT);
+  // Also ensure the UI credit display was NOT decremented
+  const expected = initialCredits;
   await expect(creditsLocator).toHaveText(String(expected), { timeout: 5000 });
 });

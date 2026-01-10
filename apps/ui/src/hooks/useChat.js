@@ -89,6 +89,16 @@ async function classifyQuery(message) {
         // fallthrough to handle non-JSON
       }
     }
+    // If classify endpoint returns auth error (401), mark as non-billable to prevent charge
+    if (response && response.status === 401) {
+      console.warn('BFF classification unauthorized (401), marking query as non-billable');
+      return {
+        queryType: 'horoscope',
+        creditCost: 0,
+        isBillable: false,
+        config: { credits_horoscope_cost: 2, credits_premium_cost: 4 }
+      };
+    }
   } catch (e) {
     console.warn('Failed to classify query via BFF, using defaults:', e);
   }
@@ -147,7 +157,7 @@ function getLowCreditsWarning(credits) {
 
 // Deduct credits after successful response
 // Supports idempotency by passing a requestId which will be sent as `x-idempotency-key`
-async function deductCredits(phoneNumber, amount, requestId = null) {
+async function deductCredits(phoneNumber, amount, requestId = null, isClarifying = false) {
   try {
     const headers = { 'Content-Type': 'application/json' };
     if (requestId) headers['x-idempotency-key'] = String(requestId);
@@ -155,7 +165,7 @@ async function deductCredits(phoneNumber, amount, requestId = null) {
     const response = await fetch('/api/v1/users/deduct-credits', {
       method: 'POST',
       headers,
-      body: JSON.stringify({ phoneNumber, amount, requestId })
+      body: JSON.stringify({ phoneNumber, amount, requestId, isClarification: !!isClarifying })
     });
     if (response.ok) {
       const data = await response.json();
@@ -192,6 +202,32 @@ function isProfileUpdateAttempt(text) {
   ];
   
   return updatePatterns.some(pattern => pattern.test(t));
+}
+
+// Heuristic to detect when the assistant is asking for missing profile details
+function isClarifyingResponse(text) {
+  if (!text || typeof text !== 'string') return false;
+  const t = text.toLowerCase();
+  const clarifyingPatterns = [
+    /could you tell me/i,
+    /could you share/i,
+    /please tell/i,
+    /please share/i,
+    /please provide/i,
+    /what(?:'|)s your/i,
+    /what is your/i,
+    /which city/i,
+    /which state/i,
+    /time of birth/i,
+    /date of birth/i,
+    /place of birth/i,
+    /were you born/i,
+    /could you confirm/i
+  ];
+  if (clarifyingPatterns.some(p => p.test(t))) return true;
+  // If the response contains a question mark and mentions birth-related keywords
+  if (t.includes('?') && /(birth|dob|date|time|place|born)/i.test(t)) return true;
+  return false;
 }
 
 export function useChat(profile, updateProfile, addMessage, auth) {
@@ -251,14 +287,15 @@ export function useChat(profile, updateProfile, addMessage, auth) {
 
         if (extracted.name || extracted.dob || extracted.placeOfBirth || extracted.timeOfBirth) {
           const updated = {
-            user_name: extracted.name || currentProfile.user_name,
-            user_dob: extracted.dob ? normalizeDateString(extracted.dob) || extracted.dob : currentProfile.user_dob,
-            user_placeOfBirth: extracted.placeOfBirth || currentProfile.user_placeOfBirth,
-            user_timeOfBirth: extracted.timeOfBirth
+            ...currentProfile, // Preserve all existing fields including credits
+            name: extracted.name || currentProfile.name,
+            birthDate: extracted.dob ? normalizeDateString(extracted.dob) || extracted.dob : currentProfile.birthDate,
+            placeOfBirth: extracted.placeOfBirth || currentProfile.placeOfBirth,
+            timeOfBirth: extracted.timeOfBirth
               ? normalizeTimeString(extracted.timeOfBirth) || extracted.timeOfBirth
-              : currentProfile.user_timeOfBirth,
-            user_currentLocation: currentProfile.user_currentLocation,
-            user_consentGiven: currentProfile.user_consentGiven,
+              : currentProfile.timeOfBirth,
+            currentLocation: currentProfile.currentLocation,
+            consentGiven: currentProfile.consentGiven,
             user_verified: {
               ...(currentProfile.user_verified || {}),
               ...(extracted.name ? { name: false } : {}),
@@ -276,7 +313,7 @@ export function useChat(profile, updateProfile, addMessage, auth) {
             if (location) {
               const formatted = formatPlaceFromLocation(location);
               const locationUpdate = {
-                  user_placeOfBirth: formatted || extracted.placeOfBirth,
+                  placeOfBirth: formatted || extracted.placeOfBirth,
                   placeOfBirth_raw: location.display_name || ''
               };
               updateProfile(locationUpdate);
@@ -300,20 +337,20 @@ export function useChat(profile, updateProfile, addMessage, auth) {
     } // Close profileAlreadyLocked check
 
     const getUserCountry = () => {
-        const savedCountryCode = localStorage.getItem('niyati_user_country_code') || 'US';
-        return auth.countries.find(c => c.code === savedCountryCode) || auth.countries[0] || { code: 'US', name: 'United States', dialCode: '+1', flag: '🇺🇸', phoneLength: 10 };
+      const savedCountryCode = localStorage.getItem('niyati_country_code') || 'US';
+      return auth.countries.find(c => c.code === savedCountryCode) || auth.countries[0] || { code: 'US', name: 'United States', dialCode: '+1', flag: '🇺🇸', phoneLength: 10 };
     };
 
     function constructFullMessage(p) {
         const parts = [];
-        if (p.user_name) parts.push(`I am ${p.user_name}`);
-        if (p.user_dob) {
+        if (p.name) parts.push(`I am ${p.name}`);
+        if (p.birthDate) {
           const userCountry = getUserCountry();
-          const formattedDob = formatDobForDisplay(p.user_dob, userCountry.code);
-          parts.push(`born on ${formattedDob || p.user_dob}`);
+          const formattedDob = formatDobForDisplay(p.birthDate, userCountry.code);
+          parts.push(`born on ${formattedDob || p.birthDate}`);
         }
-        if (p.user_timeOfBirth) parts.push(`at ${p.user_timeOfBirth}`);
-        if (p.user_placeOfBirth) parts.push(`in ${p.user_placeOfBirth}`);
+        if (p.timeOfBirth) parts.push(`at ${p.timeOfBirth}`);
+        if (p.placeOfBirth) parts.push(`in ${p.placeOfBirth}`);
         return parts.join(', ');
     }
 
@@ -337,7 +374,7 @@ export function useChat(profile, updateProfile, addMessage, auth) {
         // Prefer the passed `userProfile`, but fall back to persisted profile in localStorage
         let persistedProfile = null;
         try {
-          const stored = localStorage.getItem('niyati_user_profile');
+          const stored = localStorage.getItem('niyati_profile');
           if (stored) persistedProfile = JSON.parse(stored);
         } catch (e) {
           // ignore parse errors
@@ -396,8 +433,8 @@ export function useChat(profile, updateProfile, addMessage, auth) {
 
     try {
       const isReturning = currentProfile.user_verified && (currentProfile.user_verified.id || currentProfile.user_verified.phoneNumber);
-      const userCredits = currentProfile.user_credits ?? 10;
-      const totalPaidAmount = currentProfile.user_totalPaidAmount ?? 0;
+      const userCredits = currentProfile.credits ?? 10;
+      const totalPaidAmount = currentProfile.totalPaidAmount ?? 0;
       const isPaidUser = totalPaidAmount > 0;
       const qrAlreadyShown = hasPaymentQRBeenShown();
       
@@ -515,7 +552,7 @@ export function useChat(profile, updateProfile, addMessage, auth) {
         const missing = missingProfileFields(currentProfile);
 
         if (missing.length > 0) {
-          const userName = currentProfile.user_name ? currentProfile.user_name.split(' ')[0] : '';
+          const userName = currentProfile.name ? currentProfile.name.split(' ')[0] : '';
           const greeting = userName ? `Hi ${userName}, ` : '';
 
           const fieldPhrases = {
@@ -537,21 +574,16 @@ export function useChat(profile, updateProfile, addMessage, auth) {
             question = `Could you tell me ${missingPhrases.join(', ')}, and ${last}?`;
           }
 
-          addMessage({
-            id: Date.now() + Math.random(),
-            text: greeting + question,
-            sender: 'bot',
-            timestamp: new Date()
-          });
+          addMessage({ id: Date.now() + Math.random(), text: greeting + question, sender: 'bot', timestamp: new Date() });
         }
 
         setIsLoading(false);
         return;
       }
 
-      if (!currentProfile.user_consentGiven) {
-        updateProfile({ user_consentGiven: true });
-        currentProfile.user_consentGiven = true;
+      if (!currentProfile.consentGiven) {
+        updateProfile({ consentGiven: true });
+        currentProfile.consentGiven = true;
       }
 
         // Only save profile to database if it hasn't been sent yet
@@ -567,13 +599,13 @@ export function useChat(profile, updateProfile, addMessage, auth) {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 phoneNumber: auth.phoneNumber,
-                name: currentProfile.user_name,
-                dateOfBirth: currentProfile.user_dob,
-                timeOfBirth: currentProfile.user_timeOfBirth,
-                placeOfBirth: currentProfile.user_placeOfBirth,
+                name: currentProfile.name,
+                dateOfBirth: currentProfile.birthDate,
+                timeOfBirth: currentProfile.timeOfBirth,
+                placeOfBirth: currentProfile.placeOfBirth,
                 consentGiven: true,
-                isPaid: !!currentProfile.user_isPaid,
-                last_login_location: currentProfile.user_currentLocation || ''
+                isPaid: !!currentProfile.isPaid,
+                last_login_location: currentProfile.currentLocation || ''
               })
             }, { retries: 2, baseDelayMs: 300 });
             // Mark as sent when the save succeeds (idempotent)
@@ -621,6 +653,8 @@ export function useChat(profile, updateProfile, addMessage, auth) {
       }, profile);
 
       let botResponseText = "The stars are clouded... I could not reach the server.";
+      let n8nData = null;
+      let needsClarificationFlag = false;
 
       if (response.ok) {
         // Handle empty or non-JSON responses gracefully
@@ -629,17 +663,28 @@ export function useChat(profile, updateProfile, addMessage, auth) {
           botResponseText = "I received your message but didn't get a response. Please ensure n8n workflow is properly configured and active.";
         } else {
           try {
-            const data = JSON.parse(responseText);
-            // BFF wraps n8n response in data.n8nResponse; fallback to direct output for backward compat
-            const n8nData = (data && data.data && data.data.n8nResponse) || data;
-            // Log N8N response
-            try { console.log('N8N', n8nData.output || n8nData.text || JSON.stringify(n8nData)); } catch (e) {}
-            botResponseText = n8nData.output || n8nData.text || JSON.stringify(n8nData);
+              const data = JSON.parse(responseText);
+              // BFF wraps n8n response in data.n8nResponse; fallback to direct output for backward compat
+              n8nData = (data && data.data && data.data.n8nResponse) || data;
+              // Log N8N response
+              try { console.log('N8N', n8nData.output || n8nData.text || JSON.stringify(n8nData)); } catch (e) {}
+              botResponseText = n8nData.output || n8nData.text || JSON.stringify(n8nData);
 
-            if (typeof botResponseText === 'string' && botResponseText.startsWith('"') && botResponseText.endsWith('"')) {
-              botResponseText = botResponseText.slice(1, -1);
-            }
-          } catch (parseError) {
+              if (typeof botResponseText === 'string' && botResponseText.startsWith('"') && botResponseText.endsWith('"')) {
+                botResponseText = botResponseText.slice(1, -1);
+              }
+
+              // Respect explicit needsClarification flag coming from n8n (preferred)
+              try {
+                needsClarificationFlag = !!(n8nData && (n8nData.needsClarification || (n8nData.ai && n8nData.ai.needsClarification)));
+              } catch (err) {
+                needsClarificationFlag = false;
+              }
+              // Fallback heuristic: inspect the assistant text for clarifying questions
+              if (!needsClarificationFlag) {
+                needsClarificationFlag = isClarifyingResponse(botResponseText);
+              }
+            } catch (parseError) {
             console.warn('Failed to parse n8n response as JSON:', parseError);
             // Use raw response text if it's not JSON
             botResponseText = responseText;
@@ -661,31 +706,32 @@ export function useChat(profile, updateProfile, addMessage, auth) {
       // Re-read profile from localStorage to get latest state (profile might have been updated during the flow)
       let latestProfile = currentProfile;
       try {
-        const stored = localStorage.getItem('niyati_user_profile');
+        const stored = localStorage.getItem('niyati_profile');
         if (stored) latestProfile = JSON.parse(stored);
       } catch (e) { /* use currentProfile */ }
       
       // Skip credit deduction for casual conversation (greetings, banter, etc.)
+      // Also skip deduction if the assistant asked for clarification about profile details
       // isBillable comes from BFF classification done earlier
-      const skipCreditDeduction = !isBillable;
+      const skipCreditDeduction = !isBillable || !!needsClarificationFlag;
       
       console.log('[useChat] Credit deduction check:', { 
         phoneNumber, 
         hasAllFields: hasAllRequiredFields(latestProfile),
         queryCost,
         isCasual: skipCreditDeduction,
-        profile: { name: latestProfile.user_name, dob: latestProfile.user_dob, place: latestProfile.user_placeOfBirth, time: latestProfile.user_timeOfBirth }
+        profile: { name: latestProfile.name, dob: latestProfile.birthDate, place: latestProfile.placeOfBirth, time: latestProfile.timeOfBirth }
       });
       
       // Allow deduction for returning users even if some profile fields are missing
       // BUT skip deduction for casual conversation
-      const persistedPhone = (() => { try { return localStorage.getItem('niyati_user_phone_number'); } catch (e) { return null; } })();
+      const persistedPhone = (() => { try { return localStorage.getItem('niyati_phone_number'); } catch (e) { return null; } })();
       const isReturningNow = (currentProfile.user_verified && (currentProfile.user_verified.id || currentProfile.user_verified.phoneNumber)) || !!persistedPhone;
       if (phoneNumber && (hasAllRequiredFields(latestProfile) || isReturningNow) && !skipCreditDeduction) {
-        const newCredits = await deductCredits(phoneNumber, queryCost, webhookReqId);
-        console.log('[useChat] Credit deduction result:', { newCredits, previousCredits: latestProfile.user_credits });
+        const newCredits = await deductCredits(phoneNumber, queryCost, webhookReqId, !!needsClarificationFlag);
+        console.log('[useChat] Credit deduction result:', { newCredits, previousCredits: latestProfile.credits });
         if (newCredits !== null) {
-          updateProfile({ user_credits: newCredits });
+          updateProfile({ credits: newCredits });
           // Notify user of credit deduction: show low-credit when strictly below threshold
           if (newCredits < config.credits_low_threshold) {
             addMessage({
@@ -702,7 +748,7 @@ export function useChat(profile, updateProfile, addMessage, auth) {
 
       // For first-time users (not returning) with low credits, show payment QR after n8n response - ONLY ONCE
       const isReturningUser = currentProfile.user_verified && (currentProfile.user_verified.id || currentProfile.user_verified.phoneNumber);
-      const currentCredits = currentProfile.user_credits ?? config.credits_monthly_free;
+      const currentCredits = currentProfile.credits ?? config.credits_monthly_free;
       if (!isReturningUser && currentCredits < config.credits_low_threshold && !hasPaymentQRBeenShown()) {
         // Single consolidated message with QR
         addMessage({
