@@ -244,6 +244,23 @@ for f in $(ls -1 packages/migrations/*.up.sql 2>/dev/null | sort); do
     cat "$f" | $COMPOSE_CMD -p "$PROJECT_NAME" exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null
 done
 
+# =============================================================================
+# STEP 3.5: CI LINT - detect legacy localStorage keys in tests/source
+# Fail fast if any tests reference `niyati_user_` keys. This prevents
+# E2E flakes caused by key renames between code and tests.
+# =============================================================================
+
+log_step "🔎 CI LINT: Searching for legacy localStorage keys..."
+LEGACY_MATCHES=$(grep -R --line-number "niyati_user_" -- ./e2e ./apps 2>/dev/null || true)
+if [[ -n "$LEGACY_MATCHES" ]]; then
+    log_error "Found legacy localStorage keys referencing 'niyati_user_':\n$LEGACY_MATCHES"
+    log_error "Please update tests or source to use 'niyati_' canonical keys."
+    exit 1
+else
+    log_info "No legacy localStorage keys detected."
+fi
+
+
 # Any seed data should live as idempotent migrations under packages/migrations
 # (e.g. packages/migrations/*seed*.up.sql). The migrations loop above already
 # applied all .up.sql files, so no legacy be/seed_ci.sql handling is required.
