@@ -25,6 +25,7 @@
     "audit:fix": "npm audit fix"
   },
   "dependencies": {
+    "@testing-library/dom": "^10.4.1",
     "dompurify": "^3.0.6",
     "lucide-react": "^0.553.0",
     "marked": "^17.0.1",

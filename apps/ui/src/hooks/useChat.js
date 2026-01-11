@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { extractProfileFields } from '../utils/profileExtractor';
 import { normalizeDateString, normalizeTimeString } from '../utils/normalizers';
 import { resolveLocationAndTimezone } from '../services/geo';
@@ -232,6 +232,9 @@ function isClarifyingResponse(text) {
 
 export function useChat(profile, updateProfile, addMessage, auth) {
   const [isLoading, setIsLoading] = useState(false);
+  // Track last classification to support follow-up deduction heuristic
+  // Persist across renders using useRef so follow-ups are detected reliably
+  const lastClassificationRef = useRef(null);
 
   const handleSend = async (inputText, setInputText) => {
     // Enhanced input validation
@@ -439,15 +442,37 @@ export function useChat(profile, updateProfile, addMessage, auth) {
       const qrAlreadyShown = hasPaymentQRBeenShown();
       
       // Get classification from BFF (server-side)
-      const classification = await classifyQuery(inputText);
-      const { queryType, creditCost: queryCost, isBillable } = classification;
+      // Follow-up heuristic: if the user sends a short follow-up like "yes, elaborate" right after
+      // a billable query, treat it as billable and reuse the previous classification.
+      const isFollowupMessage = (text) => {
+        if (!text || typeof text !== 'string') return false;
+        const t = text.trim().toLowerCase();
+        // Don't treat explicit questions as follow-ups (e.g., "tell me what does tomorrow hold")
+        // These are new questions that need fresh classification
+        if (/\b(tomorrow|future|next\s+(week|month|year)|when\s+will)\b/i.test(t)) return false;
+        // Explicit follow-up phrases
+        const followupPatterns = [/^\s*(yes|please|okay|ok|sure)\b.*\belaborate\b/i, /\belaborate\b/i, /tell me more/i, /^\s*(yes|please)\b$/i, /^\s*(more|continue)\b/i];
+        if (followupPatterns.some(p => p.test(t))) return true;
+        // Short confirmatory messages that commonly mean "continue with previous request"
+        if (t.length < 40 && /^(yes|please|okay|ok|sure|go on|do continue)$/i.test(t)) return true;
+        return false;
+      };
+
+      let classification = await classifyQuery(inputText);
+      // If this looks like a follow-up and previous classification was billable, reuse previous
+      if (isFollowupMessage(inputText) && lastClassificationRef.current && lastClassificationRef.current.isBillable) {
+        classification = { ...lastClassificationRef.current };
+      }
+      const { queryType, creditCost: queryCost, isBillable, isFutureQuery } = classification;
+      // store last classification for potential follow-ups
+      lastClassificationRef.current = { queryType, creditCost: queryCost, isBillable, isFutureQuery };
       const config = { ...getCreditsConfig(), ...classification.config };
       const creditsFromPayment = Math.floor(config.payment_amount_inr / 10);
       
       // IMPORTANT: Check if this is casual conversation FIRST
       // Casual messages should pass through to n8n without credit checks
       const isCasualMessage = !isBillable;
-      console.log('[useChat] Message classification (from BFF):', { text: inputText.substring(0, 50), queryType, queryCost, isBillable });
+      console.log('[useChat] Message classification (from BFF):', { text: inputText.substring(0, 50), queryType, queryCost, isBillable, isFutureQuery });
       
       // Check if user has enough credits (ONLY for non-casual messages)
       if (!isCasualMessage && userCredits < queryCost && hasAllRequiredFields(currentProfile)) {
@@ -530,9 +555,23 @@ export function useChat(profile, updateProfile, addMessage, auth) {
         }
       }
       
-      // For free users (no payment history), restrict premium astrology queries only
-      // Casual conversation and horoscope queries are allowed through to n8n
+      // For free users (no payment history), block future queries and premium astrology queries
+      // Only today's horoscope and casual conversation are allowed
       if (!isPaidUser && hasAllRequiredFields(currentProfile)) {
+        // Block future predictions for free users
+        if (isFutureQuery) {
+          addMessage({
+            id: Date.now() + Math.random(),
+            image: '/payment/PayQR.jpeg',
+            text: `I'd love to help you explore what the future holds!\n\nHowever, with free credits you can only ask about today's horoscope. Future predictions require paid credits.\n\nTo unlock future predictions and all premium features, scan the QR code above to pay \u20b9${config.payment_amount_inr} (adds ${creditsFromPayment} credits) and share your UPI ID and 12-digit transaction ID.`,
+            sender: 'bot',
+            timestamp: new Date()
+          });
+          markPaymentQRAsShown();
+          setIsLoading(false);
+          return;
+        }
+        // Block premium queries for free users
         if (queryType === 'premium') {
           addMessage({
             id: Date.now() + Math.random(),
@@ -545,7 +584,7 @@ export function useChat(profile, updateProfile, addMessage, auth) {
           setIsLoading(false);
           return;
         }
-        // Allow horoscope queries and casual conversation to proceed to n8n
+        // Allow today's horoscope queries and casual conversation to proceed to n8n
       }
 
       if (!hasAllRequiredFields(currentProfile) && !isReturning) {

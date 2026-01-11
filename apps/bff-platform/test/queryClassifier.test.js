@@ -58,6 +58,12 @@ describe('queryClassifier', () => {
       expect(isFutureQuestion('Can I go abroad for studies?')).toBe(true);
     });
 
+    test('identifies tomorrow as future', () => {
+      expect(isFutureQuestion('What does tomorrow hold for me?')).toBe(true);
+      expect(isFutureQuestion('Tell me about tomorrow')).toBe(true);
+      expect(isFutureQuestion('What about next week?')).toBe(true);
+    });
+
     test('returns false for today questions', () => {
       expect(isFutureQuestion('How is my day today?')).toBe(false);
       expect(isFutureQuestion("Today's horoscope please")).toBe(false);

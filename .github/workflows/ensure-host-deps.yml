@@ -1,0 +1,43 @@
+name: Ensure Host Dependencies
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  ensure-deps:
+    name: Install workspace dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Generate or sync root package-lock
+        run: |
+          # Ensure the root lockfile is up-to-date for workspaces in CI
+          npm install --package-lock-only --silent || true
+
+      - name: Install root dependencies (ci) using workspaces
+        run: |
+          # Install all workspace packages according to root lockfile
+          npm ci --workspaces --no-audit --no-fund
+
+      - name: Verify per-package lockfiles
+        run: |
+          set -e
+          for p in packages/commons apps/bff-platform apps/bff-auth apps/ui e2e; do
+            if [[ -f "$p/package.json" ]]; then
+              if [[ ! -f "$p/package-lock.json" && ! -f "$p/yarn.lock" ]]; then
+                echo "Generating package-lock.json for $p"
+                npm --prefix "$p" install --package-lock-only --silent || true
+              else
+                echo "Lockfile present for $p"
+              fi
+            fi
+          done

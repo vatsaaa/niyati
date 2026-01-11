@@ -20,6 +20,7 @@ const { logger, attachResponseHelpers, sanitize, createTelemetryRouter } = commo
 // import the auth router from local copy
 const authRouter = require('../lib/auth');
 const usersRouter = require('../lib/users');
+const internalRouter = require('../lib/internal');
 
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
@@ -117,6 +118,7 @@ const telemetryRouter = createTelemetryRouter({
 
 apiRouter.use('/auth', authRouter);
 apiRouter.use('/users', usersRouter);
+apiRouter.use('/internal', internalRouter);
 apiRouter.use('/telemetry', telemetryRouter);
 app.use(`/api/${API_VERSION}`, apiRouter);
 

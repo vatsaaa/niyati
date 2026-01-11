@@ -28,8 +28,11 @@ describe('profile update does not deduct credits', () => {
     const existingCredits = 5;
     const fakeDb = createMockDb(async (sql, params) => {
       // Simulate INSERT ... RETURNING behavior: return existing credits unchanged
-      if (sql.trim().toUpperCase().startsWith('INSERT INTO USERS')) {
-        return { rows: [{ id: 42, phone_number: params[0], credits: existingCredits }], rowCount: 1 };
+      if (sql.trim().toUpperCase().includes('USER_PROFILES')) {
+        return { rows: [{ user_id: 42, phone_number: params[0], name: params[1], last_login_location: null }], rowCount: 1 };
+      }
+      if (sql.trim().toUpperCase().includes('USER_CREDITS')) {
+        return { rows: [{ user_id: 42, credits: existingCredits, total_paid_amount: 0 }], rowCount: 1 };
       }
       return { rows: [], rowCount: 0 };
     });

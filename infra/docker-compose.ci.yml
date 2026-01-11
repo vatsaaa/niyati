@@ -37,12 +37,23 @@ services:
       - "${REDIS_PORT:-7379}:6379"
 
   bff-platform:
+    build:
+      context: ..
+      dockerfile: apps/bff-platform/Dockerfile
+      target: ${BUILD_TARGET:-production}
+    image: niyati/bff-platform:${IMAGE_TAG:-local}
     ports:
       - "${BFF_PLATFORM_PORT:-4000}:${BFF_PLATFORM_PORT:-4000}"
     environment:
       PORT: ${BFF_PLATFORM_PORT:-4000}
       SERVICE_TOKEN: ${SERVICE_TOKEN:-ci-test-token}
       N8N_WEBHOOK_URL: http://n8n:5678/webhook/chat
+      BFF_AUTH_BASE: http://bff-auth:${BFF_AUTH_PORT:-4001}/api/v1
+    # Mount a host folder for coverage artifacts so CI can collect them
+    volumes:
+      - ../../artifacts/coverage/bff-platform:/usr/src/app/coverage:rw
+    # Run under c8 in CI to collect server-side coverage (npx will fetch c8 if needed)
+    command: sh -c "npx c8 --reporter=lcov --reporter=json --reporter=text -- npm start"
 
   bff-auth:
     ports:
@@ -51,6 +62,9 @@ services:
       PORT: ${BFF_AUTH_PORT:-4001}
       SERVICE_TOKEN: ${SERVICE_TOKEN:-ci-test-token}
       BFF_PLATFORM_BASE: http://bff-platform:${BFF_PLATFORM_PORT:-4000}/api/v1
+    volumes:
+      - ../../artifacts/coverage/bff-auth:/usr/src/app/coverage:rw
+    command: sh -c "npx c8 --reporter=lcov --reporter=json --reporter=text -- npm start"
 
   ui-service:
     build:

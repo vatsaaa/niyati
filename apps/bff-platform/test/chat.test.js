@@ -56,6 +56,35 @@ describe('bff-platform chat routes', () => {
             expect(res.body.data).toHaveProperty('queryType');
             expect(res.body.data).toHaveProperty('creditCost');
             expect(res.body.data).toHaveProperty('isBillable');
+            expect(res.body.data).toHaveProperty('isFutureQuery');
+        });
+
+        test('returns isFutureQuery true for future questions', async () => {
+            const mockDb = createMockDb({ rows: [], rowCount: 0 });
+            app.set('db', mockDb);
+
+            const res = await request(app)
+                .post('/api/v1/chat/classify')
+                .send({ message: 'What does tomorrow hold for me?' });
+
+            expect(res.statusCode).toBe(200);
+            expect(res.body.status).toBe('ok');
+            expect(res.body.data.isFutureQuery).toBe(true);
+            expect(res.body.data.isBillable).toBe(true);
+        });
+
+        test('returns isFutureQuery false for today questions', async () => {
+            const mockDb = createMockDb({ rows: [], rowCount: 0 });
+            app.set('db', mockDb);
+
+            const res = await request(app)
+                .post('/api/v1/chat/classify')
+                .send({ message: 'What does today hold for me?' });
+
+            expect(res.statusCode).toBe(200);
+            expect(res.body.status).toBe('ok');
+            expect(res.body.data.isFutureQuery).toBe(false);
+            expect(res.body.data.isBillable).toBe(true);
         });
     });
 });

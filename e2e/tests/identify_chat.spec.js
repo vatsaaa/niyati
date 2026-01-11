@@ -8,6 +8,7 @@ const REAL = process.env.REAL === '1';
 test('ui identify -> chat -> credits deducted', async ({ page, baseURL }) => {
   const base = process.env.BASE_URL || baseURL || 'http://127.0.0.1';
 
+
   // Set up route intercepts BEFORE navigating to the page
   let creditsValue = 10;
   const networkRequests = [];

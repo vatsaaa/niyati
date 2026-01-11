@@ -1,11 +1,15 @@
 const request = require('supertest');
 const { createTestApp, createMockDb } = require('@test-helpers');
+const axios = require('axios');
+jest.mock('axios');
 
 describe('bff-platform users routes', () => {
   let app;
 
   beforeEach(() => {
     jest.resetModules();
+    // ensure service token isn't enforced in unit tests
+    process.env.SERVICE_TOKEN = '';
 
     jest.mock('@niyati/commons', () => {
       const responses = require('@niyati/commons/lib/responses');
@@ -28,6 +32,8 @@ describe('bff-platform users routes', () => {
   describe('POST /identify', () => {
     test('returns returning false when user not found', async () => {
       const fakeDb = { async query(sql, params) { return { rows: [], rowCount: 0 }; } };
+      // mock bff-auth lookup to return no user (avoid network call)
+      require('axios').get = jest.fn().mockResolvedValueOnce({ data: { status: 'ok', data: { user: null } } });
       app.set('db', fakeDb);
       const res = await request(app).post('/api/v1/users/identify').send({ phoneNumber: '+1234' });
       expect(res.statusCode).toBe(200);
@@ -50,6 +56,8 @@ describe('bff-platform users routes', () => {
         is_adult: true
       };
       const fakeDb = createMockDb({ rows: [sampleUser], rowCount: 1 });
+      // mock bff-auth lookup to return the sample user
+      require('axios').get = jest.fn().mockResolvedValueOnce({ data: { status: 'ok', data: { user: sampleUser } } });
       app.set('db', fakeDb);
       const res = await request(app).post('/api/v1/users/identify').send({ phoneNumber: '+91-8888888888' });
       expect(res.statusCode).toBe(200);
@@ -73,8 +81,12 @@ describe('bff-platform users routes', () => {
 
     test('creates a new user with default credits and returns user object', async () => {
       const fakeDb = createMockDb(async (sql, params) => {
-        if (sql.trim().toUpperCase().startsWith('INSERT INTO USERS')) {
-          return { rows: [{ id: 99, phone_number: params[0], credits: 10 }], rowCount: 1 };
+        const s = (sql || '').toLowerCase();
+        if (s.includes('insert into user_profiles') || s.includes('user_profiles')) {
+          return { rows: [{ user_id: 99, id: 99, phone_number: params[0], credits: 10 }], rowCount: 1 };
+        }
+        if (s.includes('insert into user_credits') || s.includes('user_credits')) {
+          return { rows: [{ user_id: 99, credits: 10, total_paid_amount: 0 }], rowCount: 1 };
         }
         return { rows: [], rowCount: 0 };
       });
@@ -90,8 +102,11 @@ describe('bff-platform users routes', () => {
   describe('POST /profile', () => {
     test('computes and returns is_adult=true for adult DOB', async () => {
       const fakeDb = createMockDb(async (sql, params) => {
-        if (sql.trim().toUpperCase().startsWith('INSERT INTO USERS')) {
-          return { rows: [{ id: 'uuid-1', phone_number: params[0], is_adult: true }], rowCount: 1 };
+        if (sql.trim().toUpperCase().includes('USER_PROFILES')) {
+          return { rows: [{ user_id: 'uuid-1', phone_number: params[0], is_adult: true, last_login_location: null }], rowCount: 1 };
+        }
+        if (sql.trim().toUpperCase().includes('USER_CREDITS')) {
+          return { rows: [{ user_id: 'uuid-1', credits: 10, total_paid_amount: 0 }], rowCount: 1 };
         }
         return { rows: [], rowCount: 0 };
       });
@@ -126,8 +141,9 @@ describe('bff-platform users routes', () => {
     test('free user with low credits cannot ask future question', async () => {
       const fakeDb = {
         async query(sql, params) {
-          if (sql && sql.toUpperCase().startsWith('SELECT KEY')) return { rows: [], rowCount: 0 };
-          if (sql && sql.toUpperCase().includes('SELECT CREDITS')) {
+          const s = (sql || '').toLowerCase();
+          if (s.includes('select key')) return { rows: [], rowCount: 0 };
+          if (s.includes('from user_profiles') || s.includes('user_credits') || s.includes('select uc.credits')) {
             return { rows: [{ credits: 8, is_paid: false }], rowCount: 1 };
           }
           return { rows: [], rowCount: 0 };
@@ -144,8 +160,9 @@ describe('bff-platform users routes', () => {
     test('paid user can ask future question if has credits', async () => {
       const fakeDb = {
         async query(sql, params) {
-          if (sql && sql.toUpperCase().startsWith('SELECT KEY')) return { rows: [], rowCount: 0 };
-          if (sql && sql.toUpperCase().includes('SELECT CREDITS')) {
+          const s = (sql || '').toLowerCase();
+          if (s.includes('select key')) return { rows: [], rowCount: 0 };
+          if (s.includes('from user_profiles') || s.includes('user_credits') || s.includes('select uc.credits')) {
             return { rows: [{ credits: 20, is_paid: true }], rowCount: 1 };
           }
           return { rows: [], rowCount: 0 };
@@ -162,8 +179,9 @@ describe('bff-platform users routes', () => {
     test('user with insufficient credits is blocked', async () => {
       const fakeDb = {
         async query(sql, params) {
-          if (sql && sql.toUpperCase().startsWith('SELECT KEY')) return { rows: [], rowCount: 0 };
-          if (sql && sql.toUpperCase().includes('SELECT CREDITS')) {
+          const s = (sql || '').toLowerCase();
+          if (s.includes('select key')) return { rows: [], rowCount: 0 };
+          if (s.includes('from user_profiles') || s.includes('user_credits') || s.includes('select uc.credits')) {
             return { rows: [{ credits: 1, is_paid: false }], rowCount: 1 };
           }
           return { rows: [], rowCount: 0 };
@@ -182,7 +200,7 @@ describe('bff-platform users routes', () => {
     test('POST /deduct-credits reduces credits when sufficient', async () => {
       const fakeDb = {
         async query(sql, params) {
-          if (sql.trim().toUpperCase().startsWith('UPDATE USERS')) {
+          if (sql.includes('UPDATE user_credits') && sql.includes('GREATEST')) {
             const amt = params[1];
             return { rows: [{ id: 1, credits: 5 - amt, total_paid_amount: 0 }], rowCount: 1 };
           }
@@ -199,7 +217,7 @@ describe('bff-platform users routes', () => {
     test('POST /deduct-credits floors at zero when insufficient credits', async () => {
       const fakeDb = {
         async query(sql, params) {
-          if (sql.trim().toUpperCase().startsWith('UPDATE USERS')) {
+          if (sql.includes('UPDATE user_credits') && sql.includes('GREATEST')) {
             return { rows: [{ id: 2, credits: 0, total_paid_amount: 0 }], rowCount: 1 };
           }
           return { rows: [], rowCount: 0 };
@@ -216,10 +234,10 @@ describe('bff-platform users routes', () => {
       const fakeDb = {
         async query(sql, params) {
           if (sql && sql.toUpperCase().startsWith('SELECT KEY')) return { rows: [], rowCount: 0 };
-          if (sql.trim().toUpperCase().startsWith('UPDATE USERS')) {
+          if (sql.includes('UPDATE user_credits') && sql.includes('credits = credits +')) {
             const creditsAdded = params[1];
             const amountINR = params[2];
-            return { rows: [{ id: 3, credits: 7 + creditsAdded, total_paid_amount: amountINR }], rowCount: 1 };
+            return { rows: [{ user_id: 'user-3', credits: 7 + creditsAdded, total_paid_amount: amountINR, is_paid: true, last_payment_amount: amountINR, last_payment_verified: true, upi_id: null, upi_txn_id: null }], rowCount: 1 };
           }
           return { rows: [], rowCount: 0 };
         }

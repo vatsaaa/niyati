@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { logger } = require('@niyati/commons');
-const { getQueryCreditCost, getQueryType, isCasualConversation } = require('./queryClassifier');
+const { getQueryCreditCost, getQueryType, isCasualConversation, isFutureQuestion } = require('./nlpClassifier');
 
 // POST /chat/classify
 // Body: { message }
@@ -33,16 +33,18 @@ router.post('/classify', async (req, res) => {
       }
     }
 
-    const queryType = getQueryType(message);
-    const creditCost = getQueryCreditCost(message, config);
-    const isBillable = !isCasualConversation(message);
+    const queryType = await getQueryType(message);
+    const creditCost = await getQueryCreditCost(message, config);
+    const isBillable = !(await isCasualConversation(message));
+    const isFuture = await isFutureQuestion(message);
 
-    logger.info({ msg: 'chat_classify', queryType, creditCost, isBillable, messageLength: message.length });
+    logger.info({ msg: 'chat_classify', queryType, creditCost, isBillable, isFuture, messageLength: message.length });
 
     return res.sendSuccess({
       queryType,
       creditCost,
       isBillable,
+      isFutureQuery: isFuture,
       config: {
         credits_horoscope_cost: config.credits_horoscope_cost,
         credits_premium_cost: config.credits_premium_cost

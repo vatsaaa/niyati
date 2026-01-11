@@ -18,8 +18,8 @@ describe('bff-platform payments endpoints', () => {
     const fakeDb = {
       async query(sql, params) {
         const s = (sql || '').toLowerCase();
-        if (s.includes('update users')) {
-          return { rows: [{ id: 1, credits: Math.max(0, 5 - params[1]) }], rowCount: 1 };
+        if (s.includes('update user_credits') && s.includes('greatest')) {
+          return { rows: [{ id: 'user-1', credits: Math.max(0, 5 - params[1]), total_paid_amount: 0 }], rowCount: 1 };
         }
         return { rows: [], rowCount: 0 };
       }
@@ -40,8 +40,8 @@ describe('bff-platform payments endpoints', () => {
         if (s.includes('select key')) {
           return { rows: [{ key: 'credits_per_10_inr', value: '1' }], rowCount: 1 };
         }
-        if (s.includes('update users')) {
-          return { rows: [{ id: 2, credits: 20, total_paid_amount: params[2] }], rowCount: 1 };
+        if (s.includes('update user_credits') && s.includes('credits = credits +')) {
+          return { rows: [{ user_id: 'user-2', credits: 20, total_paid_amount: params[2], is_paid: true, last_payment_amount: params[2], last_payment_verified: true, upi_id: null, upi_txn_id: null }], rowCount: 1 };
         }
         return { rows: [], rowCount: 0 };
       }

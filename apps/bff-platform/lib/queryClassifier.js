@@ -229,7 +229,10 @@ const FUTURE_PATTERNS = [
   /my\s+future/i,
   /future\s+(of|prospects|career|marriage|life)/i,
   /going\s+to\s+(happen|be|get)/i,
-  /long[\s-]?term/i
+  /long[\s-]?term/i,
+  /tomorrow/i,
+  /what\s+does\s+(tomorrow|next)/i,
+  /\b(tomorrow|next\s+week|next\s+month|next\s+year)\b/i
 ];
 
 // Patterns that indicate today/immediate questions

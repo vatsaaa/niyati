@@ -30,9 +30,15 @@ describe('bff-platform users last_login_location persistence', () => {
     const providedLastLoc = 'Bengaluru';
 
     const fakeDb = createMockDb(async (sql, params) => {
-      // last_login_location is expected at params[11]
-      expect(params[11]).toBe(providedLastLoc);
-      return { rows: [{ id: 42, phone_number: params[0], last_login_location: params[11] }], rowCount: 1 };
+      if (sql.trim().toUpperCase().includes('USER_PROFILES')) {
+        // last_login_location is at params[9] in user_profiles INSERT
+        expect(params[9]).toBe(providedLastLoc);
+        return { rows: [{ user_id: 42, phone_number: params[0], last_login_location: params[9] }], rowCount: 1 };
+      }
+      if (sql.trim().toUpperCase().includes('USER_CREDITS')) {
+        return { rows: [{ user_id: 42, credits: 10, total_paid_amount: 0 }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
     });
 
     app.set('db', fakeDb);

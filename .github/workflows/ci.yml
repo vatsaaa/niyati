@@ -36,12 +36,18 @@ jobs:
         cache: 'npm'
         cache-dependency-path: '**/package-lock.json'
 
-    - name: Install Host Dependencies
+    - name: Install Host Dependencies (workspaces)
       run: |
-        npm ci --prefix packages/commons
-        npm ci --prefix apps/bff-platform
-        npm ci --prefix apps/bff-auth
-        npm ci --prefix apps/ui
+        # Install all workspace packages from root lockfile to avoid per-package npm ci EUSAGE
+        npm ci --workspaces --no-audit --no-fund
+
+        # Ensure per-package lockfiles exist for Docker builds (non-fatal)
+        for p in packages/commons apps/bff-platform apps/bff-auth apps/ui; do
+          if [ -f "$p/package.json" ] && [ ! -f "$p/package-lock.json" ] && [ ! -f "$p/yarn.lock" ]; then
+            echo "Generating package-lock.json for $p"
+            npm --prefix "$p" install --package-lock-only --silent || true
+          fi
+        done
 
     - name: Run Full Integration Suite (Backend + E2E)
       env:
@@ -57,3 +63,19 @@ jobs:
         name: playwright-traces
         path: e2e/test-results/
         retention-days: 7
+
+    - name: Upload Coverage Artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-artifacts
+        path: artifacts/coverage/**
+        retention-days: 30
+
+    - name: Upload Merged Coverage Report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: merged-coverage
+        path: artifacts/coverage/merged/**
+        retention-days: 30

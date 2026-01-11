@@ -15,19 +15,29 @@ describe('integration: bff-auth -> bff-platform -> n8n stub', () => {
     const fakeDb = {
       async query(sql, params) {
         const s = (sql || '').toLowerCase();
-        if (s.includes('select') && s.includes('from users')) {
+        if (s.includes('select') && (s.includes('from users') || s.includes('from user_profiles'))) {
           // lookup: return no rows to simulate new user
           return { rows: [], rowCount: 0 };
         }
+        if (s.includes('user_profiles')) {
+          // sync/upsert into user_profiles: return created user row with last_login_location at params[9]
+          return { rows: [{ user_id: 99, phone_number: params[0], last_login_location: params[9] || null }], rowCount: 1 };
+        }
+        if (s.includes('user_credits')) {
+          // sync/upsert into user_credits: return credits
+          return { rows: [{ user_id: 99, credits: 10, total_paid_amount: 0 }], rowCount: 1 };
+        }
         if (s.includes('insert into users') || s.includes('on conflict')) {
-          // sync/upsert: return created user row
-          // account for `name` being present in params (shifted indices)
-          return { rows: [{ id: 99, phone_number: params[0], last_login_location: params[11] }], rowCount: 1 };
+          // legacy fallback: return created user row
+          return { rows: [{ id: 99, phone_number: params[0], last_login_location: params[5] || null, credits: 10 }], rowCount: 1 };
         }
         // default
         return { rows: [], rowCount: 0 };
       }
     };
+
+    // Ensure no service token is required during test
+    process.env.SERVICE_TOKEN = '';
 
     // Start bff-platform app (importing src index) and attach fake DB
     process.env.NODE_ENV = 'test';
@@ -54,6 +64,27 @@ describe('integration: bff-auth -> bff-platform -> n8n stub', () => {
     await new Promise((resolve) => { n8nServer = n8nApp.listen(0, resolve); });
     const n8nPort = n8nServer.address().port;
     const n8nUrl = `http://127.0.0.1:${n8nPort}/webhook/chat`;
+
+    // Mock axios so auth's calls to platform are short-circuited to our fakeDb, but allow n8n HTTP calls
+    const axios = require('axios');
+    jest.mock('axios');
+    // intercept lookup and sync calls to platform
+    axios.get = jest.fn(async (url, opts) => {
+      if (url && url.includes('/internal/users/lookup')) {
+        const phone = opts && opts.params && opts.params.phoneNumber;
+        return { data: { status: 'ok', data: { user: null } } };
+      }
+      return { data: { status: 'ok' } };
+    });
+    axios.post = jest.fn(async (url, data, opts) => {
+      if (url && url.includes('/users/sync')) {
+        return { data: { status: 'ok', data: { user: { user_id: 99, phone_number: data.phoneNumber, last_login_location: data.last_login_location || null } } } };
+      }
+      // for n8n webhook, perform a real HTTP POST
+      const fetch = require('node-fetch');
+      const resp = await fetch(url, { method: 'POST', body: JSON.stringify(data), headers: { 'Content-Type': 'application/json' } });
+      return { status: resp.status, data: await resp.json() };
+    });
 
     // Start bff-auth app (mount router) — reuse pattern from unit tests
     const { attachResponseHelpers } = require('@niyati/commons/lib/responses');

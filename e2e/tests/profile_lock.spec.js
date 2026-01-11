@@ -105,8 +105,18 @@ test.describe('Profile Locking', () => {
     await page.waitForSelector('.bot-message', { timeout: 10000 });
     await page.waitForTimeout(1500);
 
-    // Note the profile save count after first message (this may have incremented)
-    const countAfterFirstMessage = profileSaveCount;
+    // Wait (poll) for the profile save count to increase after the first message
+    const waitForProfileSave = async (prev, timeout = 5000) => {
+      const start = Date.now();
+      while (Date.now() - start < timeout) {
+        if (profileSaveCount > prev) return profileSaveCount;
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise(r => setTimeout(r, 100));
+      }
+      return profileSaveCount;
+    };
+
+    const countAfterFirstMessage = await waitForProfileSave(countBeforeFirstMessage, 5000);
 
     // Try to update profile via chat - this should be blocked
     await textarea.fill("Change my name to Rahul");
@@ -116,8 +126,8 @@ test.describe('Profile Locking', () => {
     await page.waitForSelector('.bot-message:nth-child(2)', { timeout: 5000 }).catch(() => { });
     await page.waitForTimeout(2000);
 
-    // The profile save count should NOT increase after the profile update attempt
-    const countAfterUpdateAttempt = profileSaveCount;
+    // Allow a short window for any in-flight profile saves to be observed
+    const countAfterUpdateAttempt = await waitForProfileSave(countAfterFirstMessage, 1500);
 
     // Look for the rejection/guidance message in the chat
     const messages = await page.locator('.message').allTextContents();
@@ -132,7 +142,7 @@ test.describe('Profile Locking', () => {
       try {
         return {
           niyati_profile_sent: localStorage.getItem('niyati_profile_sent'),
-          niyati_user_profile: localStorage.getItem('niyati_profile'),
+          niyati_profile: localStorage.getItem('niyati_profile'),
           keys: Object.keys(localStorage)
         };
       } catch (e) {

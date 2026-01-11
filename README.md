@@ -1208,3 +1208,22 @@ docker inspect --format='{{.State.Health.Status}}' niyati-bff-auth-1
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+NLP.js uses a trainable NLU manager — you must provide intent utterances and train a model (that’s why you saw epoch logs during tests).
+For correctness and performance: train a small intent model (few intents + sample phrases), then persist it with manager.save() and load with manager.load() at startup so you don't retrain on every run.
+Alternatives: keep the current lightweight rule/regex heuristics (fast, no model) or combine rules + a small trained model for best accuracy.
+Would you like me to add model saving/loading (train once, commit the model) into nlpClassifier.js?
