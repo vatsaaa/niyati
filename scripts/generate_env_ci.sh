@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Generate infra/.env.ci from environment variables (safe for CI)
+# Generate infra/.env from environment variables (safe for CI)
 mkdir -p infra
-cat > infra/.env.ci <<'EOF'
-# CI-generated .env.ci (created by workflow)
+cat > infra/.env <<'EOF'
+# CI-generated infra/.env (created by workflow or locally via scripts/generate_env_ci.sh)
 BFF_PLATFORM_PORT=${BFF_PLATFORM_PORT:-4000}
 BFF_AUTH_PORT=${BFF_AUTH_PORT:-4001}
 CADDY_HTTP_PORT=${CADDY_HTTP_PORT:-6173}
@@ -38,4 +38,4 @@ AWS_REGION=${AWS_REGION:-ap-south-1}
 NIYATI_DEPLOYER_RGN=${NIYATI_DEPLOYER_RGN:-ap-south-1}
 EOF
 
-echo "[INFO] infra/.env.ci written"
+echo "[INFO] infra/.env written"
