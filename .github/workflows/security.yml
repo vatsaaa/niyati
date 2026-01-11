@@ -39,7 +39,7 @@ jobs:
         npm audit >> $GITHUB_STEP_SUMMARY || true
         
     - name: Audit UI dependencies
-      working-directory: ./ui
+      working-directory: ./apps/ui
       run: |
         echo "=== UI Audit Report ===" >> $GITHUB_STEP_SUMMARY
         npm audit --json > audit-ui.json || true
@@ -51,7 +51,7 @@ jobs:
         name: npm-audit-results
         path: |
           apps/bff-platform/audit-bff.json
-          ui/audit-ui.json
+          apps/ui/audit-ui.json
         retention-days: 30
 
   snyk-scan:

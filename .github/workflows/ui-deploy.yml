@@ -24,11 +24,11 @@ jobs:
           node-version: '18'
 
       - name: Install dependencies
-        working-directory: ui
+        working-directory: apps/ui
         run: npm ci
 
       - name: Build (production)
-        working-directory: ui
+        working-directory: apps/ui
         run: npm run build --if-present
 
       - name: Configure AWS credentials (OIDC)
@@ -38,7 +38,7 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Precompress and upload to S3
-        working-directory: ui
+        working-directory: apps/ui
         env:
           AWS_REGION: ${{ secrets.AWS_REGION }}
         run: |
