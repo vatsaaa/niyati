@@ -61,8 +61,8 @@ done
 # CI ENVIRONMENT
 # =============================================================================
 
-ENV_FILE="infra/.env.ci"
-[[ -f "$ENV_FILE" ]] || { log_error "$ENV_FILE not found"; exit 1; }
+ENV_FILE="infra/.env"
+[[ -f "$ENV_FILE" ]] || { log_error "$ENV_FILE not found (create with scripts/generate_env_ci.sh or provide infra/.env)"; exit 1; }
 
 set -a
 source "$ENV_FILE"
