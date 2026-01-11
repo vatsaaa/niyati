@@ -54,6 +54,43 @@ jobs:
         SERVICE_TOKEN: ${{ secrets.SERVICE_TOKEN }}
       run: |
         chmod +x scripts/ci-run-tests.sh
+        # Ensure infra/.env.ci exists (create from secrets/defaults if missing)
+        if [ ! -f infra/.env.ci ]; then
+          echo "[INFO] infra/.env.ci not found, creating from workflow secrets"
+          cat > infra/.env.ci <<'EOF'
+# CI-generated .env.ci (created by workflow)
+BFF_PLATFORM_PORT=${{ secrets.BFF_PLATFORM_PORT || '4000' }}
+BFF_AUTH_PORT=${{ secrets.BFF_AUTH_PORT || '4001' }}
+CADDY_HTTP_PORT=${{ secrets.CADDY_HTTP_PORT || '6173' }}
+N8N_PORT=${{ secrets.N8N_PORT || '6678' }}
+BASE_URL=${{ secrets.BASE_URL || 'http://127.0.0.1:6173' }}
+POSTGRES_PORT=${{ secrets.POSTGRES_PORT || '56432' }}
+REDIS_PORT=${{ secrets.REDIS_PORT || '7379' }}
+NODE_ENV=production
+BUILD_TARGET=production
+IMAGE_TAG=ci
+SERVICE_TOKEN=${{ secrets.SERVICE_TOKEN || 'ci-test-token' }}
+POSTGRES_USER=${{ secrets.POSTGRES_USER || 'niyati' }}
+POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD || 'niyati_ci_pass' }}
+POSTGRES_DB=${{ secrets.POSTGRES_DB || 'niyati_ci' }}
+VITE_N8N_WEBHOOK_URL=/webhook/chat
+VITE_BFF_BASE_URL=
+VITE_DEBUG_MODE=true
+CORS_ALLOWED=http://localhost:6173,http://127.0.0.1:6173
+LOG_LEVEL=info
+LOG_PRETTY_PRINT=false
+API_VERSION=v1
+ASTRO_API_URL=${{ secrets.ASTRO_API_URL || 'https://json.freeastrologyapi.com' }}
+ASTRO_API_KEY=${{ secrets.ASTRO_API_KEY || '' }}
+GEOCODE_MAPS_KEY=${{ secrets.GEOCODE_MAPS_KEY || '' }}
+GEOCODE_CACHE_TTL=86400
+EMAIL_FROM=
+SMTP_HOST=
+SMTP_PORT=
+SMTP_SECURE=
+EOF
+        fi
+
         ./scripts/ci-run-tests.sh
 
     - name: Upload Playwright Traces (On Failure)
