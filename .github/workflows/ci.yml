@@ -55,43 +55,59 @@ jobs:
         AWS_REGION: ${{ secrets.AWS_REGION }}
       run: |
         chmod +x scripts/ci-run-tests.sh
+        # Export known secrets to shell variables (they may be empty)
+        export BFF_PLATFORM_PORT="${{ secrets.BFF_PLATFORM_PORT }}"
+        export BFF_AUTH_PORT="${{ secrets.BFF_AUTH_PORT }}"
+        export CADDY_HTTP_PORT="${{ secrets.CADDY_HTTP_PORT }}"
+        export N8N_PORT="${{ secrets.N8N_PORT }}"
+        export BASE_URL="${{ secrets.BASE_URL }}"
+        export POSTGRES_PORT="${{ secrets.POSTGRES_PORT }}"
+        export REDIS_PORT="${{ secrets.REDIS_PORT }}"
+        export POSTGRES_USER="${{ secrets.POSTGRES_USER }}"
+        export POSTGRES_PASSWORD="${{ secrets.POSTGRES_PASSWORD }}"
+        export POSTGRES_DB="${{ secrets.POSTGRES_DB }}"
+        export ASTRO_API_URL="${{ secrets.ASTRO_API_URL }}"
+        export ASTRO_API_KEY="${{ secrets.ASTRO_API_KEY }}"
+        export GEOCODE_MAPS_KEY="${{ secrets.GEOCODE_MAPS_KEY }}"
+        export NIYATI_DEPLOYER_RGN="${{ secrets.NIYATI_DEPLOYER_RGN }}"
+
         # Ensure infra/.env.ci exists (create from workflow env if missing)
         if [ ! -f infra/.env.ci ]; then
           echo "[INFO] infra/.env.ci not found, creating from workflow env vars"
           cat > infra/.env.ci <<EOF
-      # CI-generated .env.ci (created by workflow)
-      BFF_PLATFORM_PORT=${{ secrets.BFF_PLATFORM_PORT || '4000' }}
-      BFF_AUTH_PORT=${{ secrets.BFF_AUTH_PORT || '4001' }}
-      CADDY_HTTP_PORT=${{ secrets.CADDY_HTTP_PORT || '6173' }}
-      N8N_PORT=${{ secrets.N8N_PORT || '6678' }}
-      BASE_URL=${{ secrets.BASE_URL || 'http://127.0.0.1:6173' }}
-      POSTGRES_PORT=${{ secrets.POSTGRES_PORT || '56432' }}
-      REDIS_PORT=${{ secrets.REDIS_PORT || '7379' }}
-      NODE_ENV=production
-      BUILD_TARGET=production
-      IMAGE_TAG=ci
-      SERVICE_TOKEN=${{ secrets.SERVICE_TOKEN || 'ci-test-token' }}
-      POSTGRES_USER=${{ secrets.POSTGRES_USER || 'niyati' }}
-      POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD || 'niyati_ci_pass' }}
-      POSTGRES_DB=${{ secrets.POSTGRES_DB || 'niyati_ci' }}
-      VITE_N8N_WEBHOOK_URL=/webhook/chat
-      VITE_BFF_BASE_URL=
-      VITE_DEBUG_MODE=true
-      CORS_ALLOWED=http://localhost:6173,http://127.0.0.1:6173
-      LOG_LEVEL=info
-      LOG_PRETTY_PRINT=false
-      API_VERSION=v1
-      ASTRO_API_URL=${{ secrets.ASTRO_API_URL || 'https://json.freeastrologyapi.com' }}
-      ASTRO_API_KEY=${{ secrets.ASTRO_API_KEY || '' }}
-      GEOCODE_MAPS_KEY=${{ secrets.GEOCODE_MAPS_KEY || '' }}
-      GEOCODE_CACHE_TTL=86400
-      EMAIL_FROM=
-      SMTP_HOST=
-      SMTP_PORT=
-      SMTP_SECURE=
-      AWS_REGION=${{ secrets.AWS_REGION || 'ap-south-1' }}
-      NIYATI_DEPLOYER_RGN=${{ secrets.NIYATI_DEPLOYER_RGN || 'ap-south-1' }}
-      EOF
+# CI-generated .env.ci (created by workflow)
+BFF_PLATFORM_PORT=${BFF_PLATFORM_PORT:-4000}
+BFF_AUTH_PORT=${BFF_AUTH_PORT:-4001}
+CADDY_HTTP_PORT=${CADDY_HTTP_PORT:-6173}
+N8N_PORT=${N8N_PORT:-6678}
+BASE_URL=${BASE_URL:-http://127.0.0.1:6173}
+POSTGRES_PORT=${POSTGRES_PORT:-56432}
+REDIS_PORT=${REDIS_PORT:-7379}
+NODE_ENV=production
+BUILD_TARGET=production
+IMAGE_TAG=ci
+SERVICE_TOKEN=${SERVICE_TOKEN:-ci-test-token}
+POSTGRES_USER=${POSTGRES_USER:-niyati}
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-niyati_ci_pass}
+POSTGRES_DB=${POSTGRES_DB:-niyati_ci}
+VITE_N8N_WEBHOOK_URL=/webhook/chat
+VITE_BFF_BASE_URL=
+VITE_DEBUG_MODE=true
+CORS_ALLOWED=http://localhost:6173,http://127.0.0.1:6173
+LOG_LEVEL=info
+LOG_PRETTY_PRINT=false
+API_VERSION=v1
+ASTRO_API_URL=${ASTRO_API_URL:-https://json.freeastrologyapi.com}
+ASTRO_API_KEY=${ASTRO_API_KEY:-}
+GEOCODE_MAPS_KEY=${GEOCODE_MAPS_KEY:-}
+GEOCODE_CACHE_TTL=86400
+EMAIL_FROM=
+SMTP_HOST=
+SMTP_PORT=
+SMTP_SECURE=
+AWS_REGION=${AWS_REGION:-ap-south-1}
+NIYATI_DEPLOYER_RGN=${NIYATI_DEPLOYER_RGN:-ap-south-1}
+EOF
         fi
 
         ./scripts/ci-run-tests.sh
