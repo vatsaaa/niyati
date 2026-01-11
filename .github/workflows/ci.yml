@@ -52,10 +52,10 @@ jobs:
     - name: Run Full Integration Suite (Backend + E2E)
       env:
         SERVICE_TOKEN: ${{ secrets.SERVICE_TOKEN }}
-        AWS_REGION: ${{ secrets.AWS_REGION != '' && secrets.AWS_REGION || 'ap-south-1' }}
+        AWS_REGION: ${{ secrets.AWS_REGION }}
         BFF_PLATFORM_PORT: ${{ secrets.BFF_PLATFORM_PORT }}
-        N8N_WEBHOOK_URL: ${{ secrets.N8N_WEBHOOK_URL != '' && secrets.N8N_WEBHOOK_URL || 'http://host.docker.internal:5678/webhook/chat' }}
-        NIYATI_DEPLOYER_RGN: ${{ secrets.NIYATI_DEPLOYER_RGN != '' && secrets.NIYATI_DEPLOYER_RGN || 'ap-south-1' }}
+        N8N_WEBHOOK_URL: ${{ secrets.N8N_WEBHOOK_URL }}
+        NIYATI_DEPLOYER_RGN: ${{ secrets.NIYATI_DEPLOYER_RGN }}
         BFF_AUTH_PORT: ${{ secrets.BFF_AUTH_PORT }}
         CADDY_HTTP_PORT: ${{ secrets.CADDY_HTTP_PORT }}
         N8N_PORT: ${{ secrets.N8N_PORT }}
