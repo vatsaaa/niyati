@@ -35,7 +35,7 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v2
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }} # set this in repo secrets to the niyati-deployer role ARN
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ secrets.AWS_REGION != '' && secrets.AWS_REGION || 'ap-south-1' }}
 
       - name: Precompress and upload to S3
         working-directory: apps/ui
