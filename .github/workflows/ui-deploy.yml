@@ -58,19 +58,21 @@ jobs:
           fi
 
           if [ "${AWS_USE_ROLE}" != "true" ] && [ "${AWS_USE_KEYS}" != "true" ]; then
-            echo "ERROR: Missing AWS credentials. Set either 'AWS_ROLE_ARN' (for OIDC) or 'AWS_ACCESS_KEY_ID' and 'AWS_SECRET_ACCESS_KEY' in repository secrets." >&2
-            exit 1
+            echo "WARNING: Missing AWS credentials. Skipping deploy steps. To enable deploy set either 'AWS_ROLE_ARN' (for OIDC) or 'AWS_ACCESS_KEY_ID' and 'AWS_SECRET_ACCESS_KEY' in repository secrets." >&2
+            echo "AWS_SKIP_DEPLOY=true" >> $GITHUB_ENV
+          else
+            echo "AWS_SKIP_DEPLOY=false" >> $GITHUB_ENV
           fi
 
       - name: Configure AWS credentials (OIDC)
-        if: env.AWS_USE_ROLE == 'true'
+        if: env.AWS_SKIP_DEPLOY != 'true' && env.AWS_USE_ROLE == 'true'
         uses: aws-actions/configure-aws-credentials@v2
         with:
           role-to-assume: ${{ env.AWS_ROLE_ARN }} # set this in repo secrets to the niyati-deployer role ARN
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Configure AWS credentials (access keys)
-        if: env.AWS_USE_KEYS == 'true'
+        if: env.AWS_SKIP_DEPLOY != 'true' && env.AWS_USE_KEYS == 'true'
         uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
@@ -78,9 +80,10 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Precompress and upload to S3
+        if: env.AWS_SKIP_DEPLOY != 'true'
         working-directory: apps/ui
         env:
-          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_REGION: ${{ env.AWS_REGION }}
         run: |
           # Fail early if the required S3 bucket secret is not configured
           if [ -z "${{ secrets.UI_S3_BUCKET }}" ]; then
@@ -92,6 +95,7 @@ jobs:
           ./scripts/precompress-and-upload.sh "${{ secrets.UI_S3_BUCKET }}" dist
 
       - name: Invalidate CloudFront (optional)
+        if: env.AWS_SKIP_DEPLOY != 'true'
         env:
           CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}
         run: |
