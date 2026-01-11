@@ -76,6 +76,12 @@ jobs:
           ./scripts/generate_env_ci.sh
         fi
 
+        # docker-compose expects infra/.env — copy generated .env.ci to .env if missing
+        if [ ! -f infra/.env ]; then
+          cp infra/.env.ci infra/.env || true
+          echo "[INFO] infra/.env created from infra/.env.ci"
+        fi
+
         ./scripts/ci-run-tests.sh
 
     - name: Upload Playwright Traces (On Failure)
