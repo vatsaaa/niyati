@@ -8,15 +8,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
-if [ ! -f .env.ci ]; then
-  echo ".env.ci not found in repo root; aborting"
+if [ ! -f infra/.env ]; then
+  echo "infra/.env not found; run scripts/generate_env_ci.sh or provide infra/.env."
   exit 1
 fi
 
-echo "Exporting .env.ci..."
-export $(grep -v '^#' .env.ci | xargs)
+echo "Exporting infra/.env..."
+export $(grep -v '^#' infra/.env | xargs)
 
-COMPOSE_CMD="docker compose --env-file .env.ci -f docker-compose.yml -f docker-compose.ci.yml -p niyati-ci"
+COMPOSE_CMD="docker compose --env-file infra/.env -f docker-compose.yml -f docker-compose.ci.yml -p niyati-ci"
 
 echo "Tearing down any previous CI stack (safe to ignore errors)..."
 $COMPOSE_CMD down -v --remove-orphans || true

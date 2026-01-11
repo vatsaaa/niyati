@@ -862,7 +862,7 @@ action_clean() {
     run_cmd "docker compose -p niyati -f docker-compose.yml -f docker-compose.override.yml down --remove-orphans --volumes 2>/dev/null || true"
     run_cmd "docker compose -p niyati-prod -f docker-compose.yml -f docker-compose.prod.yml down --remove-orphans --volumes 2>/dev/null || true"
     # Also handle CI project name
-    run_cmd "docker compose -p niyati --env-file .env.ci -f docker-compose.yml -f docker-compose.ci.yml down --remove-orphans --volumes 2>/dev/null || true"
+    run_cmd "docker compose -p niyati --env-file infra/.env -f docker-compose.yml -f docker-compose.ci.yml down --remove-orphans --volumes 2>/dev/null || true"
     
     # Step 2: Force remove any orphaned niyati containers by name
     log_info "Step 2/7: Removing any orphaned niyati containers..."
@@ -942,7 +942,7 @@ action_fresh() {
     log_info "=== Step 1/8: Stop all compose projects ==="
     run_cmd "docker compose -p niyati -f docker-compose.yml -f docker-compose.override.yml down --remove-orphans --volumes 2>/dev/null || true"
     run_cmd "docker compose -p niyati-prod -f docker-compose.yml -f docker-compose.prod.yml down --remove-orphans --volumes 2>/dev/null || true"
-    run_cmd "docker compose -p niyati --env-file .env.ci -f docker-compose.yml -f docker-compose.ci.yml down --remove-orphans --volumes 2>/dev/null || true"
+    run_cmd "docker compose -p niyati --env-file infra/.env -f docker-compose.yml -f docker-compose.ci.yml down --remove-orphans --volumes 2>/dev/null || true"
     run_cmd "docker ps -a --filter 'name=niyati' -q | xargs -r docker rm -f 2>/dev/null || true"
     
     # Step 2: Remove networks
