@@ -49,6 +49,7 @@ pnpm-debug.log*
 # Coverage and test output
 coverage/
 .nyc_output/
+artifacts/
 
 # OS files
 .DS_Store
