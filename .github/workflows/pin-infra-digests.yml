@@ -1,0 +1,47 @@
+name: pin-infra-digests
+
+on:
+  push:
+    branches:
+      - 'infra/image-digests-*'
+
+jobs:
+  pin-digests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show digest file
+        run: |
+          echo "Digest file contents:" && cat infra/IMAGE_DIGESTS.txt || true
+
+      - name: Replace production tags with digests in compose
+        run: |
+          set -euo pipefail
+          DIGEST_FILE=infra/IMAGE_DIGESTS.txt
+          COMPOSE=infra/docker-compose.prod.yml
+          cp "$COMPOSE" "$COMPOSE".bak
+          while IFS=: read -r key rest; do
+            value=$(echo "$rest" | xargs)
+            [ -z "$value" ] && continue
+            repo=$(echo "$value" | cut -d'@' -f1)
+            echo "Replacing ${repo}:production -> ${value}"
+            sed -i "s|${repo}:production|${value}|g" "$COMPOSE"
+          done < "$DIGEST_FILE"
+          echo "Updated compose:" && git --no-pager diff -- "$COMPOSE" || true
+
+      - name: Create PR with pinned digests
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: pin/infra-digests-${{ github.ref_name }}
+          commit-message: "chore(infra): pin infra images to digests for ${{ github.ref_name }}"
+          title: "chore(infra): pin infra images to digests for ${{ github.ref_name }}"
+          body: |
+            This PR pins infra base images in `infra/docker-compose.prod.yml` to the digests recorded in `infra/IMAGE_DIGESTS.txt` for `${{ github.ref_name }}`.
+            Please review and merge to ensure immutable infra images.
+          labels: pinned
