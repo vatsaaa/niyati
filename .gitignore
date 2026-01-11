@@ -49,6 +49,7 @@ pnpm-debug.log*
 # Coverage and test output
 coverage/
 .nyc_output/
+.nyc_output_merge/
 artifacts/
 
 # OS files
