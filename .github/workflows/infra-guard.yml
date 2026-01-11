@@ -1,0 +1,56 @@
+name: Infra Guard
+
+on:
+  pull_request:
+    paths:
+      - 'infra/**'
+      - 'scripts/**'
+    types: [opened, synchronize, reopened]
+
+jobs:
+  verify-checksums:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute current checksums
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/infra-guard
+          # generate checksums for infra and scripts files tracked in repo
+          find infra scripts -type f \( -name '*.sh' -o -name '*.yml' -o -name '*.yaml' -o -name '*.env' -o -name '*.js' -o -name '*.md' \) -print0 \
+            | xargs -0 sha256sum | sort > /tmp/infra-guard/new_checksums.txt || true
+
+      - name: Compare with committed checksums
+        id: compare
+        run: |
+          set -euo pipefail
+          if [ ! -f infra/INFRA_CHECKSUMS.txt ]; then
+            echo "No infra/INFRA_CHECKSUMS.txt found in repo; please add to repo to enable guard.";
+            exit 0
+          fi
+          diff -u infra/INFRA_CHECKSUMS.txt /tmp/infra-guard/new_checksums.txt || echo "DIFFER" > /tmp/infra-guard/diff_flag
+          if [ -f /tmp/infra-guard/diff_flag ]; then
+            echo "checksums_changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "checksums_changed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Ensure version bumped when checksums changed
+        if: steps.compare.outputs.checksums_changed == 'true'
+        run: |
+          set -euo pipefail
+          echo "Checksums changed in PR. Verifying infra/VERSION was updated..."
+          git fetch origin master
+          CHANGED=$(git diff --name-only origin/master...HEAD | grep -E '^infra/VERSION$' || true)
+          if [ -z "$CHANGED" ]; then
+            echo "ERROR: infra checksums changed but infra/VERSION was not updated. Please bump infra/VERSION and commit updated INFRA_CHECKSUMS.txt." >&2
+            exit 1
+          fi
+
+      - name: Success
+        if: steps.compare.outputs.checksums_changed == 'false'
+        run: echo "No infra checksum drift detected."

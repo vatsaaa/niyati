@@ -1,0 +1,5 @@
+# Require reviews from infra owner for infra and scripts changes
+/infra/ @vatsaaa
+/scripts/ @vatsaaa
+/apps/bff-platform/ @vatsaaa
+/apps/bff-auth/ @vatsaaa
