@@ -1,6 +1,6 @@
 # CI Docker Compose Overlay
 # =============================================================================
-# Use with: docker compose --env-file .env.ci -f docker-compose.yml -f docker-compose.ci.yml up -d
+# Use with: docker compose --env-file infra/.env -f docker-compose.yml -f docker-compose.ci.yml up -d
 #
 # This overlay:
 # - Uses different ports to avoid conflicts with dev/production
@@ -62,6 +62,7 @@ services:
       PORT: ${BFF_AUTH_PORT:-4001}
       SERVICE_TOKEN: ${SERVICE_TOKEN:-ci-test-token}
       BFF_PLATFORM_BASE: http://bff-platform:${BFF_PLATFORM_PORT:-4000}/api/v1
+      ACCESS_TOKEN_SECRET: ${ACCESS_TOKEN_SECRET:-ci-test-secret}
     volumes:
       - ../../artifacts/coverage/bff-auth:/usr/src/app/coverage:rw
     command: sh -c "npx c8 --reporter=lcov --reporter=json --reporter=text -- npm start"

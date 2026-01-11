@@ -49,6 +49,56 @@ jobs:
           fi
         done
 
+    - name: Prepare CI Environment (infra/.env)
+      env:
+        ACCESS_TOKEN_SECRET: ${{ secrets.ACCESS_TOKEN_SECRET }}
+        ASTRO_API_KEY: ${{ secrets.ASTRO_API_KEY }}
+      run: |
+        echo "::group::Prepare infra/.env for CI"
+        
+        # Generate base infra/.env if missing
+        if [ ! -f infra/.env ]; then
+          echo "[INFO] infra/.env not found, generating via helper script"
+          chmod +x ./scripts/generate_env_ci.sh
+          ./scripts/generate_env_ci.sh
+        fi
+
+        # Inject ACCESS_TOKEN_SECRET (required for bff-auth)
+        if [ -n "${ACCESS_TOKEN_SECRET:-}" ]; then
+          echo "[INFO] Using ACCESS_TOKEN_SECRET from repository secrets"
+          sed -i.bak '/^ACCESS_TOKEN_SECRET=/d' infra/.env || true
+          echo "ACCESS_TOKEN_SECRET=${ACCESS_TOKEN_SECRET}" >> infra/.env
+        else
+          echo "[WARN] ACCESS_TOKEN_SECRET not in secrets; generating temporary value for CI"
+          if command -v openssl >/dev/null 2>&1; then
+            ACCESS_TOKEN_SECRET_GEN=$(openssl rand -hex 32)
+          else
+            ACCESS_TOKEN_SECRET_GEN=$(head -c32 /dev/urandom | base64 | tr -d '\n')
+          fi
+          sed -i.bak '/^ACCESS_TOKEN_SECRET=/d' infra/.env || true
+          echo "ACCESS_TOKEN_SECRET=${ACCESS_TOKEN_SECRET_GEN}" >> infra/.env
+        fi
+
+        # Inject ASTRO_API_KEY (optional but recommended)
+        if [ -n "${ASTRO_API_KEY:-}" ]; then
+          echo "[INFO] Using ASTRO_API_KEY from repository secrets"
+          sed -i.bak '/^ASTRO_API_KEY=/d' infra/.env || true
+          echo "ASTRO_API_KEY=${ASTRO_API_KEY}" >> infra/.env
+        fi
+
+        # Verify critical secrets are present
+        echo "[INFO] Verifying required secrets in infra/.env..."
+        if grep -q '^ACCESS_TOKEN_SECRET=' infra/.env; then
+          echo "✓ ACCESS_TOKEN_SECRET present"
+        else
+          echo "✗ ACCESS_TOKEN_SECRET missing - CI will fail"
+          exit 1
+        fi
+
+        # Show masked confirmation (do NOT echo actual values)
+        echo "[INFO] infra/.env prepared successfully"
+        echo "::endgroup::"
+
     - name: Run Full Integration Suite (Backend + E2E)
       env:
         SERVICE_TOKEN: ${{ secrets.SERVICE_TOKEN }}
@@ -64,24 +114,10 @@ jobs:
         POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
         POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
         ASTRO_API_URL: ${{ secrets.ASTRO_API_URL }}
-        ASTRO_API_KEY: ${{ secrets.ASTRO_API_KEY }}
         GEOCODE_MAPS_KEY: ${{ secrets.GEOCODE_MAPS_KEY }}
         NIYATI_DEPLOYER_RGN: ${{ secrets.NIYATI_DEPLOYER_RGN }}
       run: |
         chmod +x scripts/ci-run-tests.sh
-        # Ensure infra/.env.ci exists (create from workflow env if missing)
-        if [ ! -f infra/.env.ci ]; then
-          echo "[INFO] infra/.env.ci not found, generating via helper script"
-          chmod +x ./scripts/generate_env_ci.sh
-          ./scripts/generate_env_ci.sh
-        fi
-
-        # docker-compose expects infra/.env — copy generated .env.ci to .env if missing
-        if [ ! -f infra/.env ]; then
-          cp infra/.env.ci infra/.env || true
-          echo "[INFO] infra/.env created from infra/.env.ci"
-        fi
-
         ./scripts/ci-run-tests.sh
 
     - name: Upload Playwright Traces (On Failure)
