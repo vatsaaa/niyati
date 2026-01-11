@@ -11,7 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     environment: prod
     permissions:
-      contents: read
+      contents: write
+      pull-requests: write
       packages: write
 
     steps:
@@ -72,6 +73,7 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: infra/image-digests-${{ github.ref_name }}
+          base: ${{ github.event.repository.default_branch }}
           commit-message: "chore(infra): update image digests for ${{ github.ref_name }}"
           title: "chore(infra): update image digests for ${{ github.ref_name }}"
           body: |

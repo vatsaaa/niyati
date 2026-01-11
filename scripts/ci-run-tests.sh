@@ -108,6 +108,23 @@ cleanup() {
                 $COMPOSE_CMD -p "$PROJECT_NAME" logs --no-color --timestamps --tail=100 "$svc" > "$ARTIFACTS_COVERAGE_DIR/ci-logs/${svc}.log" 2>&1 || true
             done
             log_info "Compose logs written to $ARTIFACTS_COVERAGE_DIR/ci-logs/"
+            # Redact known secret values from collected logs to avoid leaking secrets in artifacts
+            if [[ -f "$ENV_FILE" ]]; then
+                log_info "Redacting secrets from collected logs..."
+                # Keys to redact; extend as needed
+                for key in ACCESS_TOKEN_SECRET ASTRO_API_KEY POSTGRES_PASSWORD DATABASE_URL GHCR_PAT; do
+                    val=$(grep -E "^${key}=" "$ENV_FILE" | sed -E 's/^'"${key}"'=//g' || true)
+                    if [[ -n "$val" ]]; then
+                        # Replace literal occurrences in collected logs with [REDACTED]
+                        for f in "$ARTIFACTS_COVERAGE_DIR/ci-logs/"*; do
+                            if [[ -f "$f" ]]; then
+                                sed -i.bak "s|${val}|[REDACTED]|g" "$f" 2>/dev/null || true
+                            fi
+                        done
+                    fi
+                done
+                log_info "Redaction complete"
+            fi
         fi
 
         log_step "🧹 Cleaning up CI stack..."
