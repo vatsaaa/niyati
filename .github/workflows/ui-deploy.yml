@@ -4,6 +4,7 @@ on:
   push:
     # Trigger on repository default branches (master) and main if used
     branches: [ master, main ]
+  workflow_dispatch: {}
 
 permissions:
   id-token: write
