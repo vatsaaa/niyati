@@ -20,6 +20,7 @@ x-prod-env: &prod-env
 services:
   postgres:
     container_name: niyati-postgres-prod
+    image: ghcr.io/vatsaaa/niyati-postgres:production
     ports:
       - "0.0.0.0:5432:5432"
     volumes:
@@ -35,6 +36,7 @@ services:
 
   redis:
     container_name: niyati-redis-prod
+    image: ghcr.io/vatsaaa/niyati-redis:production
     volumes:
       - redis-data-prod:/data
     restart: always
@@ -119,7 +121,7 @@ services:
 
   # Caddy reverse proxy
   caddy:
-    image: caddy:2-alpine
+    image: ghcr.io/vatsaaa/niyati-caddy:production
     container_name: niyati-caddy-prod
     restart: always
     ports:
