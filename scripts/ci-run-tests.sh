@@ -97,6 +97,19 @@ cleanup() {
         log_warn "Skipping cleanup (--no-cleanup). Stack is still running."
         log_info "To clean up manually: $COMPOSE_CMD -p $PROJECT_NAME down -v --remove-orphans"
     else
+        # If we failed, collect compose logs for debugging before tearing down
+        if [[ $exit_code -ne 0 ]]; then
+            log_warn "CI failed (exit code=$exit_code). Collecting compose logs to artifacts/ci-logs for debugging..."
+            mkdir -p "$ARTIFACTS_COVERAGE_DIR/ci-logs"
+            # Capture full compose logs
+            $COMPOSE_CMD -p "$PROJECT_NAME" logs --no-color --timestamps > "$ARTIFACTS_COVERAGE_DIR/ci-logs/compose-logs.txt" 2>&1 || true
+            # Capture per-service recent logs for quick inspection
+            for svc in bff-auth bff-platform postgres redis n8n ui-service caddy; do
+                $COMPOSE_CMD -p "$PROJECT_NAME" logs --no-color --timestamps --tail=100 "$svc" > "$ARTIFACTS_COVERAGE_DIR/ci-logs/${svc}.log" 2>&1 || true
+            done
+            log_info "Compose logs written to $ARTIFACTS_COVERAGE_DIR/ci-logs/"
+        fi
+
         log_step "🧹 Cleaning up CI stack..."
         $COMPOSE_CMD -p "$PROJECT_NAME" down -v --remove-orphans 2>/dev/null || true
     fi

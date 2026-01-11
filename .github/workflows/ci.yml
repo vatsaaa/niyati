@@ -92,6 +92,14 @@ jobs:
         path: e2e/test-results/
         retention-days: 7
 
+    - name: Upload CI Compose Logs (On Failure)
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ci-compose-logs
+        path: artifacts/coverage/ci-logs/**
+        retention-days: 7
+
     - name: Upload Coverage Artifacts
       if: always()
       uses: actions/upload-artifact@v4
