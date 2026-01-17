@@ -17,11 +17,12 @@ test('minor profile is blocked and no webhook forwarded', async ({ page }) => {
     route.fulfill({ status: 200, body: JSON.stringify({ output: 'SHOULD NOT BE CALLED' }) });
   });
 
-  // Visit the app
-  await page.goto('/');
+  // Visit the app and wait for UI to settle
+  await page.goto('/', { waitUntil: 'networkidle' });
 
   // Fill chat input with a profile containing a minor DOB (e.g., 2010)
   const profileMessage = 'My name is Minor User. Born on 01-Jan-2010 at 10:00 in Mumbai.';
+  await page.waitForSelector('[data-testid=chat-input]', { timeout: 10000 });
   await page.fill('[data-testid=chat-input]', profileMessage);
   await page.click('[data-testid=send-button]');
 
