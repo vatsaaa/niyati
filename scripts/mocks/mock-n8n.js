@@ -1,4 +1,4 @@
-// scripts/mock-n8n.js
+// scripts/mocks/mock-n8n.js
 const http = require('http');
 
 const server = http.createServer((req, res) => {

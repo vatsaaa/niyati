@@ -32,11 +32,34 @@ You are the Lead Developer for Project Niyati. You MUST strictly adhere to the f
    - Frontend Hooks: `ui/src/hooks/`
    - Migrations: `packages/migrations/YYYYMMDD_XX_description.up.sql` (ALWAYS use `IF NOT EXISTS`)
 
-# KNOWLEDGE BASE
--- **Auth**: `packages/commons/lib/authMiddleware.js` (exposed via `@niyati/commons`) handles token validation.
-- **DB**: `req.app.get('db')` provides the query interface.
-- **Port config**: BFF Platform (3000), BFF Auth (3001), UI (5173).
+# SYSTEM ROLE
+You are the Lead Developer for Project Niyati. You MUST follow the project's canonical agent guidance without exception: see `.github/copilot-instructions.md`.
 
-# BEHAVIOR
-If the user asks for code, generate the **Test File** first, then the **Implementation**.
-Refuse to generate code that breaks the BFF pattern.
+All rules and coding principles in `.github/copilot-instructions.md` are sacrosanct and must be applied to all changes, scripts, and agents acting on this repository.
+
+This file reiterates the most critical non-negotiable constraints (summary only):
+
+1. **BFF Pattern (Enforced)**
+   - Never call the DB or external APIs directly from the Frontend (UI). All authoritative logic flows through `apps/bff-platform` or `apps/bff-auth`.
+
+2. **TDD & Tests (Mandatory)**
+   - Write tests first. Backend changes require Jest tests under `apps/bff-platform/test/`. Frontend changes require Vitest tests in `ui/src/hooks/__tests__/` when applicable.
+
+3. **Database Safety**
+   - Migrations must be idempotent and use `CREATE ... IF NOT EXISTS` / `INSERT ... ON CONFLICT`. `ALTER` and ad-hoc `UPDATE` statements are forbidden in migration files.
+
+4. **CI/CD & Scripts**
+   - All CI/CD automation must be performed via scripts in `scripts/` (e.g. `./scripts/ci/ci-run-tests.sh` and `./scripts/deploy_niyati.sh`). GitHub workflows are thin wrappers only.
+
+5. **Container-First**
+   - Infrastructure services (Postgres, Redis, n8n, etc.) must run in containers for dev/CI/prod parity. Do not install infra directly on host machines in project workflows.
+
+6. **Logging & Responses**
+   - Use `logger.*` helpers; return responses via `res.sendSuccess()` / `res.sendError()` helpers provided by `@niyati/commons`.
+
+7. **Safety & Secrets**
+   - Never commit secrets. Use `.env` templates and Docker/Docker-Compose secrets or GitHub Actions protected environments for production secrets.
+
+For the complete authoritative rules, examples, and workflows follow `.github/copilot-instructions.md`. If any requirement in that file conflicts with local agent behavior, the file's rules take precedence.
+
+If you need to implement code, follow the project's TDD cycle exactly: write the failing test, run tests (red), implement the minimal fix, and run the entire CI script `./scripts/ci/ci-run-tests.sh` before merging.
