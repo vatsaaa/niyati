@@ -16,12 +16,12 @@ RUN npm install
 
 # Copy source code
 COPY apps/bff-platform .
-COPY scripts/ ./scripts/
+COPY scripts/docker/ ./scripts/
 
 # Copy utility scripts
-COPY scripts/wait-for-db.sh /usr/local/bin/wait-for-db.sh
-COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
-COPY scripts/healthcheck-http.sh /usr/local/bin/healthcheck-http.sh
+COPY scripts/docker/wait-for-db.sh /usr/local/bin/wait-for-db.sh
+COPY scripts/docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY scripts/docker/healthcheck-http.sh /usr/local/bin/healthcheck-http.sh
 RUN chmod +x /usr/local/bin/wait-for-db.sh /usr/local/bin/entrypoint.sh /usr/local/bin/healthcheck-http.sh
 
 FROM base AS production

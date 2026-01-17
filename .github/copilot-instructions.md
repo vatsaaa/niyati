@@ -10,6 +10,11 @@ AI-powered astrology platform. BFF architecture, JavaScript only.
 > **Database is IMMUTABLE** — No `UPDATE`, no `ALTER`. Always idempotent, from scratch.
 > **Infrastructure is ISOLATED** — Dev, CI, and Prod use non-overlapping ports, networks, volumes.
 > **Tests are INDEPENDENT** — Run via CI scripts, deploy scripts, or standalone. Always reproducible.
+> **CI/CD via SCRIPTS ONLY** — Never run raw Docker/npm commands. Always use `./scripts/ci/ci-run-tests.sh`, `./scripts/deploy_niyati.sh`, etc. Ensures consistency and reproducibility.
+> **CONTAINERS ONLY** — All infrastructure (PostgreSQL, Redis, n8n, etc.) runs in Docker containers. Never install databases, message queues, or middleware directly on local machine. Ensures consistency across dev/CI/prod.
+> **ISOLATED ENVIRONMENTS** — Always use virtual environments: Python (`venv`/`virtualenv`), Node.js (npm workspaces with `node_modules` hoisting). Never install dependencies globally. Ensures reproducible builds and no version conflicts.
+> **FAIL FAST, FAIL LOUDLY** — Validate early in dev/CI. Use `set -euo pipefail` in scripts. Prefer explicit errors over silent failures. CI must fail on any test failure, linting error, or missing required env var.
+> **EXPLICIT OVER CLEVER** — Prefer readable, maintainable code over clever tricks. Use descriptive names, avoid abbreviations. Comment *why*, not *what*. Code should be self-documenting.
 
 ## Architecture & Data Flow
 
@@ -33,6 +38,8 @@ UI NEVER performs authoritative actions:
 - **Charges**: Must be idempotent (use `reqId`) to prevent double deductions on retry.
 
 Flow: `UI → n8n webhook (AI response) → UI calls BFF /chat/classify → UI calls BFF /deduct-credits → BFF deducts`
+
+**SINGLE SOURCE OF TRUTH**: No duplicate logic across services/layers. Business logic in BFF, UI is renderer only. Database schema in migrations, never ad-hoc queries. Configuration in `app_config` table, not hardcoded.
 
 ### Lightweight UI Principles
 
@@ -69,7 +76,7 @@ UI is a **thin rendering layer** — no heavy processing, NLP, or business logic
 niyati/
 ├── .github/
 │   ├── workflows/          # GitHub Actions (thin wrappers)
-│   │   ├── ci.yml          # Main CI → calls scripts/ci-run-tests.sh
+│   │   ├── ci.yml          # Main CI → calls scripts/ci/ci-run-tests.sh
 │   │   ├── ui-deploy.yml   # UI deployment to S3/CloudFront
 │   │   └── security.yml    # Security scanning
 │   └── copilot-instructions.md
@@ -146,7 +153,7 @@ docker compose up -d postgres # Start clean
 ### n8n Workflow (AI Orchestration)
 - Receives chat messages via webhook, executes AI agent with Ollama LLM, returns `{output}`
 - Workflow definition: [apps/bff-platform/n8n/NiyatiWorkflow.json](apps/bff-platform/n8n/NiyatiWorkflow.json)
-- **CI uses mock**: [scripts/mock-n8n.js](scripts/mock-n8n.js) — simple HTTP server returning canned responses
+  - **CI uses mock**: [scripts/mocks/mock-n8n.js](scripts/mocks/mock-n8n.js) — simple HTTP server returning canned responses
 
 ### Worker Service (Background Jobs)
 - Location: [apps/worker/worker.js](apps/worker/worker.js)
@@ -155,6 +162,8 @@ docker compose up -d postgres # Start clean
 - Uses `getSecret()` pattern for Docker secrets (`_FILE` env vars)
 
 ### Secrets Pattern (Docker)
+
+**NO SECRETS IN CODE**: All secrets via environment variables or Docker secrets (using `getSecret()` pattern). Never commit credentials, API keys, or tokens. Use `.env.example` as template, actual `.env` files are gitignored.
 
 Services use `getSecret(envVar, fileEnvVar)` to read secrets from files in production:
 
@@ -364,7 +373,7 @@ When implementing features or fixing bugs, AI agents MUST:
 3. **Verify RED** — Run test to confirm it fails (proves test is valid)
 4. **Implement code** — Write minimal code to make test pass
 5. **Verify GREEN** — Run test to confirm it passes
-6. **Run CI** — Execute `./scripts/ci-run-tests.sh` before considering work complete
+6. **Run CI** — Execute `./scripts/ci/ci-run-tests.sh` before considering work complete
 
 **Never skip tests**. If asked to "just fix it quickly", still write the test first.
 
@@ -445,19 +454,51 @@ cd apps/bff-platform && npm test -- queryClassifier.test.js
 
 > **Design Principle**: All CI/CD logic lives in bash scripts ([scripts/](scripts/)), NOT in GitHub workflow YAML. Workflows are thin wrappers that call scripts. This enables local reproducibility and easier debugging.
 
+### CI/CD Improvements & Fixes (January 2026)
+
+**Issues Fixed:**
+1. ✅ **Script path references** — Updated all Dockerfiles, docker-compose files, workflows to use new script locations (`scripts/ci/`, `scripts/docker/`, `scripts/mocks/`)
+2. ✅ **Database not created** — Added `CREATE DATABASE` command in CI runner before applying migrations (line 68-69 in `scripts/ci/ci-run-tests.sh`)
+3. ✅ **Migrations not running** — Added migration application loop with proper error handling (lines 71-78)
+4. ✅ **E2E tests failing** — Fixed by adding complete Docker Compose setup/teardown in CI runner
+5. ✅ **Environment isolation** — CI now uses `infra/.env.ci` exclusively (separate ports, CI-specific config)
+6. ✅ **Non-idempotent CI** — Added cleanup trap, `docker compose down -v` before `up`, database recreation
+7. ✅ **Missing error handling** — Added proper error checks, exit codes, and trap cleanup
+
+**Principle Established:**
+> **CI/CD via SCRIPTS ONLY** — Never run raw `docker compose` or `npm` commands in workflows. Always use wrapper scripts (`./scripts/ci/ci-run-tests.sh`, `./scripts/deploy_niyati.sh`). This ensures:
+> - Consistent behavior between CI and local execution
+> - Single source of truth for logic (scripts, not YAML)
+> - Easier debugging (run scripts locally)
+> - Better error handling and logging
+
+**Environment Configuration:**
+- **CI**: Uses `infra/.env.ci` (ports 6173, 4000, 4001, 56432, 7379) — loaded automatically by CI runner
+- **Dev**: Uses `infra/.env` (default ports)
+- **Prod**: Uses `infra/.env.example` as template + secrets
+
 ### Script Organization
 
 ```
 scripts/
 ├── lib/
 │   └── common.sh           # Shared library (MUST source in all scripts)
-├── ci-run-tests.sh         # Full CI: backend + E2E tests
+├── ci/                     # CI test runners
+│   ├── ci-run-tests.sh    # Main CI runner (backend + E2E)
+│   └── run_e2e_with_coverage.sh
+├── docker/                 # Container helper scripts
+│   ├── wait-for-db.sh
+│   ├── entrypoint.sh
+│   └── healthcheck-http.sh
+├── mocks/                  # Mock servers for CI
+│   ├── mock-n8n.js        # Mock AI agent (canned responses)
+│   ├── mock-webhook.js
+│   ├── simulate_webhook.js
+│   └── sample_event.json
 ├── deploy_niyati.sh        # Comprehensive deployment script
 ├── docker-dev.sh           # Development Docker helper
 ├── db.sh                   # Database management
-├── smoke_test.sh           # Health verification
-├── mock-n8n.js             # Mock n8n for CI (canned responses)
-└── mock-webhook.js         # Mock webhook for testing
+└── smoke_test.sh           # Health verification
 ```
 
 ### Shared Library ([scripts/lib/common.sh](scripts/lib/common.sh))
@@ -482,21 +523,43 @@ cd "$PROJECT_ROOT"
 | HTTP | `check_url_with_retries`, `run_health_checks` |
 | Utility | `confirm_action`, `require_command`, `get_timestamp` |
 
-### CI Test Runner ([scripts/ci-run-tests.sh](scripts/ci-run-tests.sh))
+### CI Test Runner ([scripts/ci/ci-run-tests.sh](scripts/ci/ci-run-tests.sh))
 
 **Purpose**: Idempotent CI script that runs all tests in a clean Docker environment.
 
 ```bash
 # Full CI suite (default)
-./scripts/ci-run-tests.sh
+./scripts/ci/ci-run-tests.sh
 
 # Skip E2E tests (faster, backend only)
-./scripts/ci-run-tests.sh --skip-e2e
+./scripts/ci/ci-run-tests.sh --skip-e2e
 
 # Skip backend tests (E2E only)
-./scripts/ci-run-tests.sh --skip-backend
+./scripts/ci/ci-run-tests.sh --skip-backend
 
 # Keep stack running for debugging
+./scripts/ci/ci-run-tests.sh --no-cleanup
+```
+
+**What it does** (in order):
+1. Loads CI environment from `infra/.env.ci` (CI-specific ports, config)
+2. Tears down any existing CI stack (`docker compose down -v`) — **clean slate**
+3. Builds and starts CI stack with mock n8n
+4. Waits for all services to be healthy
+5. Creates database `niyati_ci` if it doesn't exist
+6. Applies database migrations from scratch (idempotent)
+7. Applies seed data (idempotent `ON CONFLICT DO NOTHING`)
+8. Runs backend Jest tests (`bff-platform`, `bff-auth`)
+9. Runs E2E Playwright tests
+10. Cleans up on exit (success or failure) via trap
+
+**Key Features**:
+- **Idempotent**: Safe to run multiple times, always starts fresh
+- **Clean database**: Volumes destroyed, schema rebuilt from migrations
+- **Cleanup trap**: Always cleans up, even on Ctrl+C or failure
+- **Separate ports**: CI uses different ports to avoid conflicts with dev
+- **Mock n8n**: Uses [scripts/mocks/mock-n8n.js](scripts/mocks/mock-n8n.js) for deterministic AI responses
+- **No shared state**: Each run is completely independent
 ./scripts/ci-run-tests.sh --no-cleanup
 ```
 
@@ -516,7 +579,7 @@ cd "$PROJECT_ROOT"
 - **Clean database**: Volumes destroyed, schema rebuilt from migrations
 - **Cleanup trap**: Always cleans up, even on Ctrl+C or failure
 - **Separate ports**: CI uses different ports to avoid conflicts with dev
-- **Mock n8n**: Uses [scripts/mock-n8n.js](scripts/mock-n8n.js) for deterministic AI responses
+- **Mock n8n**: Uses [scripts/mocks/mock-n8n.js](scripts/mocks/mock-n8n.js) for deterministic AI responses
 - **No shared state**: Each run is completely independent
 
 ### Test Independence Principles
@@ -588,7 +651,7 @@ Workflows are **thin wrappers** that call scripts:
 **[.github/workflows/ci.yml](.github/workflows/ci.yml)** — Main CI:
 ```yaml
 - name: Run Full Integration Suite
-  run: ./scripts/ci-run-tests.sh
+  run: ./scripts/ci/ci-run-tests.sh
 ```
 
 **[.github/workflows/ui-deploy.yml](.github/workflows/ui-deploy.yml)** — UI Deployment:
@@ -654,7 +717,7 @@ CI uses separate ports to allow running alongside dev:
 
 ### Mock Services
 
-**[scripts/mock-n8n.js](scripts/mock-n8n.js)**:
+**[scripts/mocks/mock-n8n.js](scripts/mocks/mock-n8n.js)**:
 - Simple HTTP server that returns canned AI responses
 - Used in CI instead of real n8n + Ollama
 - Returns: `{ output: "Hello — I see your profile. Here's today's horoscope: You will feel a gentle clarity today.\n" }`
@@ -693,9 +756,9 @@ log_step "Starting..."
 
 | Task | Command |
 |------|---------|
-| **Run full CI** | `./scripts/ci-run-tests.sh` |
-| CI (backend only) | `./scripts/ci-run-tests.sh --skip-e2e` |
-| CI (keep stack) | `./scripts/ci-run-tests.sh --no-cleanup` |
+| **Run full CI** | `./scripts/ci/ci-run-tests.sh` |
+| CI (backend only) | `./scripts/ci/ci-run-tests.sh --skip-e2e` |
+| CI (keep stack) | `./scripts/ci/ci-run-tests.sh --no-cleanup` |
 | **Deploy dev** | `./scripts/deploy_niyati.sh --env=dev --action=deploy` |
 | **Deploy prod** | `./scripts/deploy_niyati.sh --env=prod --action=deploy` |
 | Fresh start | `./scripts/deploy_niyati.sh --env=dev --action=fresh` |
@@ -709,7 +772,7 @@ log_step "Starting..."
 | Dev stack | `docker compose up -d` |
 | Dev logs | `docker compose logs -f` |
 | Start dev UI | `cd ui && npm run dev` |
-| Mock n8n | `node scripts/mock-n8n.js` |
+| Mock n8n | `node scripts/mocks/mock-n8n.js` |
 | DB shell | `./scripts/db.sh shell` |
 | Run migrations | `./scripts/db.sh migrate` |
 
@@ -742,7 +805,7 @@ log_step "Starting..."
 - **Write test FIRST** — Before any implementation code
 - **Red-Green-Refactor** — Test fails → implement → test passes → refactor
 - **No shortcuts** — Even "quick fixes" require a failing test first
-- **Run CI before commit** — `./scripts/ci-run-tests.sh` must pass
+- **Run CI before commit** — `./scripts/ci/ci-run-tests.sh` must pass
 
 ### 2. Database: Idempotent, From Scratch, No Mutations
 - **Always parameterized** — Use `$1`, `$2`. NEVER concatenate strings.
@@ -815,7 +878,9 @@ docker compose --env-file .env.ci -f docker-compose.yml -f docker-compose.ci.yml
 ```
 
 **Important**: When `bff-auth` calls `bff-platform` internally, it uses `BFF_PLATFORM_BASE` environment variable. In CI, this is set to `http://bff-platform:4000/api/v1` to match the CI port.
+## Documentation as Code
 
+**DOCUMENTATION AS CODE**: Keep docs in sync with code changes. Update [.github/copilot-instructions.md](.github/copilot-instructions.md) when patterns change. Update README when commands change. Docs that lie are worse than no docs.
 ## For AI Agents: Quick Start
 
 When you need to make changes to Niyati:

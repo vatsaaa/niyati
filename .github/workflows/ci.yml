@@ -49,25 +49,24 @@ jobs:
           fi
         done
 
-    - name: Prepare CI Environment (infra/.env)
+    - name: Prepare CI Environment (infra/.env.ci)
       env:
         ACCESS_TOKEN_SECRET: ${{ secrets.ACCESS_TOKEN_SECRET }}
         ASTRO_API_KEY: ${{ secrets.ASTRO_API_KEY }}
       run: |
-        echo "::group::Prepare infra/.env for CI"
+        echo "::group::Prepare infra/.env.ci for CI"
         
-        # Generate base infra/.env if missing
-        if [ ! -f infra/.env ]; then
-          echo "[INFO] infra/.env not found, generating via helper script"
-          chmod +x ./scripts/generate_env_ci.sh
-          ./scripts/generate_env_ci.sh
+        # Ensure infra/.env.ci exists (should be in repo)
+        if [ ! -f infra/.env.ci ]; then
+          echo "[ERROR] infra/.env.ci not found - this file should be committed to repo"
+          exit 1
         fi
 
         # Inject ACCESS_TOKEN_SECRET (required for bff-auth)
         if [ -n "${ACCESS_TOKEN_SECRET:-}" ]; then
           echo "[INFO] Using ACCESS_TOKEN_SECRET from repository secrets"
-          sed -i.bak '/^ACCESS_TOKEN_SECRET=/d' infra/.env || true
-          echo "ACCESS_TOKEN_SECRET=${ACCESS_TOKEN_SECRET}" >> infra/.env
+          sed -i.bak '/^ACCESS_TOKEN_SECRET=/d' infra/.env.ci || true
+          echo "ACCESS_TOKEN_SECRET=${ACCESS_TOKEN_SECRET}" >> infra/.env.ci
         else
           echo "[WARN] ACCESS_TOKEN_SECRET not in secrets; generating temporary value for CI"
           if command -v openssl >/dev/null 2>&1; then
@@ -75,20 +74,20 @@ jobs:
           else
             ACCESS_TOKEN_SECRET_GEN=$(head -c32 /dev/urandom | base64 | tr -d '\n')
           fi
-          sed -i.bak '/^ACCESS_TOKEN_SECRET=/d' infra/.env || true
-          echo "ACCESS_TOKEN_SECRET=${ACCESS_TOKEN_SECRET_GEN}" >> infra/.env
+          sed -i.bak '/^ACCESS_TOKEN_SECRET=/d' infra/.env.ci || true
+          echo "ACCESS_TOKEN_SECRET=${ACCESS_TOKEN_SECRET_GEN}" >> infra/.env.ci
         fi
 
         # Inject ASTRO_API_KEY (optional but recommended)
         if [ -n "${ASTRO_API_KEY:-}" ]; then
           echo "[INFO] Using ASTRO_API_KEY from repository secrets"
-          sed -i.bak '/^ASTRO_API_KEY=/d' infra/.env || true
-          echo "ASTRO_API_KEY=${ASTRO_API_KEY}" >> infra/.env
+          sed -i.bak '/^ASTRO_API_KEY=/d' infra/.env.ci || true
+          echo "ASTRO_API_KEY=${ASTRO_API_KEY}" >> infra/.env.ci
         fi
 
         # Verify critical secrets are present
-        echo "[INFO] Verifying required secrets in infra/.env..."
-        if grep -q '^ACCESS_TOKEN_SECRET=' infra/.env; then
+        echo "[INFO] Verifying required secrets in infra/.env.ci..."
+        if grep -q '^ACCESS_TOKEN_SECRET=' infra/.env.ci; then
           echo "✓ ACCESS_TOKEN_SECRET present"
         else
           echo "✗ ACCESS_TOKEN_SECRET missing - CI will fail"
@@ -96,7 +95,7 @@ jobs:
         fi
 
         # Show masked confirmation (do NOT echo actual values)
-        echo "[INFO] infra/.env prepared successfully"
+        echo "[INFO] infra/.env.ci prepared successfully"
         echo "::endgroup::"
 
     - name: Run Full Integration Suite (Backend + E2E)
@@ -117,8 +116,8 @@ jobs:
         GEOCODE_MAPS_KEY: ${{ secrets.GEOCODE_MAPS_KEY }}
         NIYATI_DEPLOYER_RGN: ${{ secrets.NIYATI_DEPLOYER_RGN }}
       run: |
-        chmod +x scripts/ci-run-tests.sh
-        ./scripts/ci-run-tests.sh
+        chmod +x scripts/ci/ci-run-tests.sh
+        ./scripts/ci/ci-run-tests.sh
 
     - name: Upload Playwright Traces (On Failure)
       if: failure()

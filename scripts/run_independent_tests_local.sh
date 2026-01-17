@@ -58,4 +58,4 @@ if [ "${1:-}" = "--e2e" ]; then
   BASE_URL="http://localhost:${CADDY_PORT:-6173}" npx playwright test
 fi
 
-echo "Done. To run full CI suite, run: ./scripts/ci-run-tests.sh"
+echo "Done. To run full CI suite, run: ./scripts/ci/ci-run-tests.sh"

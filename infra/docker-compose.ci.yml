@@ -14,7 +14,7 @@ services:
   n8n:
     image: node:20-alpine
     volumes:
-      - ../scripts/mock-n8n.js:/app/mock-n8n.js:ro
+      - ../scripts/mocks/mock-n8n.js:/app/mock-n8n.js:ro
     command: node /app/mock-n8n.js
     expose:
       - "5678"

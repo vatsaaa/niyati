@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// simulate_webhook.js
+// scripts/mocks/simulate_webhook.js
 // Small script to POST webhook events to a local server for testing.
 // Usage examples:
 //  node simulate_webhook.js --url http://localhost:3000/api/webhook --event dev.event --note hello --reqId 123e4567-e89b-12d3-a456-426614174000 --secret mysecret

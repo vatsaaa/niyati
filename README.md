@@ -477,7 +477,7 @@ For CI testing, a mock n8n service is available:
 docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d
 ```
 
-The mock service runs `scripts/mock-n8n.js` which returns canned responses.
+The mock service runs `scripts/mocks/mock-n8n.js` which returns canned responses.
 
 #### Environment Variables
 
@@ -763,6 +763,25 @@ All environment variables are configured in the root `.env` file.
 
 ## Scripts Reference
 
+### scripts/ folder layout
+
+- `scripts/ci/` — CI runners and helpers (e.g. `ci-run-tests.sh`).
+- `scripts/docker/` — Utilities copied into containers (e.g. `wait-for-db.sh`, `entrypoint.sh`).
+- `scripts/mocks/` — Small mock servers used in CI (e.g. `mock-n8n.js`).
+- `scripts/lib/` — Shared shell helpers (logging, env helpers).
+
+Usage highlights (see `scripts/` for detailed examples):
+
+- Run full CI locally: `./scripts/ci/ci-run-tests.sh`
+- Run backend-only CI (fast): `./scripts/ci/ci-run-tests.sh --skip-e2e`
+- Start local mock n8n: `node scripts/mocks/mock-n8n.js`
+
+Best practices:
+
+- Keep topology and declarative infra in `infra/` (compose files, Caddyfile, env templates).
+- Keep executable, environment-specific helpers in `scripts/` so CI/workflows and Dockerfiles can call them.
+- When moving scripts, update Dockerfile `COPY` paths to `scripts/docker/` and CI runners to `scripts/ci/`.
+
 ### scripts/docker-setup.sh
 Initial setup script that creates environment files from examples.
 
@@ -927,6 +946,26 @@ cd e2e && npm test
 - Debug issues in complete isolation
 - No port conflicts or volume corruption
 - Tests are reproducible regardless of what else is running
+
+## Infra publishing
+
+This repository publishes base infra images to GHCR and provides production compose overlays in `infra/`.
+
+Key points:
+
+- We publish base images with a `production` tag under `ghcr.io/vatsaaa/*`.
+- The `publish-infra-images` workflow runs on tags like `infra-v*` and pushes images, recording digests in `infra/IMAGE_DIGESTS.txt`.
+- Do NOT commit secrets. Use a protected Actions environment named `prod` for production secrets and require reviewers for workflows that use `prod`.
+
+Manual publish example:
+
+```bash
+docker pull postgres:15-alpine
+docker tag postgres:15-alpine ghcr.io/vatsaaa/niyati-postgres:production
+docker push ghcr.io/vatsaaa/niyati-postgres:production
+```
+
+After images are pushed, pin images by digest in `infra/docker-compose.prod.yml` using the recorded `infra/IMAGE_DIGESTS.txt`.
 
 ### Script Idempotency
 

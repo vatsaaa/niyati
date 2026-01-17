@@ -20,7 +20,8 @@ ENV NODE_ENV=production
 RUN apk add --no-cache dumb-init netcat-openbsd
 
 # Copy shared helper scripts
-COPY scripts/wait-for-db.sh scripts/entrypoint.sh /usr/local/bin/
+COPY scripts/docker/wait-for-db.sh /usr/local/bin/wait-for-db.sh
+COPY scripts/docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/wait-for-db.sh /usr/local/bin/entrypoint.sh
 
 # Non-root user for better security
