@@ -659,6 +659,38 @@ export function useChat(profile, updateProfile, addMessage, auth) {
           }
         }
 
+      // Determine if the current profile represents a minor. Prefer explicit `isAdult` when available,
+      // otherwise compute from `birthDate` if present.
+      const computeAgeFromDob = (dob) => {
+        if (!dob) return null;
+        try {
+          const d = new Date(dob);
+          if (isNaN(d.getTime())) return null;
+          const now = new Date();
+          let age = now.getFullYear() - d.getFullYear();
+          const monthDiff = now.getMonth() - d.getMonth();
+          if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < d.getDate())) age--;
+          return age;
+        } catch (e) {
+          return null;
+        }
+      };
+
+      const computedAge = computeAgeFromDob(currentProfile.birthDate);
+      const isMinor = (typeof currentProfile.isAdult === 'boolean') ? (currentProfile.isAdult === false) : (computedAge != null ? computedAge < 18 : false);
+
+      // If the profile is a minor, do NOT forward full profile to external webhook; refuse politely.
+      if (isMinor) {
+        addMessage({
+          id: Date.now() + Math.random(),
+          text: "I'm sorry — we cannot process detailed birth-chart requests for users who are under 18. Please consult a guardian for assistance.",
+          sender: 'bot',
+          timestamp: new Date()
+        });
+        setIsLoading(false);
+        return;
+      }
+
       // Determine what message to send to n8n:
       // - First time (profile not sent): send full profile details in message body
       // - Subsequent times: send only the user's message

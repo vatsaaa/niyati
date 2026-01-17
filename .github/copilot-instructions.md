@@ -598,6 +598,17 @@ Workflows are **thin wrappers** that call scripts:
 
 **[.github/workflows/security.yml](.github/workflows/security.yml)** — Security scanning
 
+### Protected Branches
+
+- **PR Only:** Direct pushes to `master` are forbidden; all changes must be submitted via a pull request.
+- **Required Checks:** Merge only after all required CI checks pass (backend Jest + E2E run via `./scripts/ci/ci-run-tests.sh`).
+- **Merge Strategy:** Prefer "Squash and merge" for feature PRs; use "Rebase and merge" for small fixups; use a merge commit for release PRs.
+- **Reviewers & Approvals:** Require at least one approving reviewer; include maintainer/team review for release or sensitive changes.
+- **Local Verification:** Run `./scripts/ci/ci-run-tests.sh` locally before opening a PR; `--skip-e2e` is acceptable for fast iteration.
+- **Hotfixes:** For emergency fixes, create a `hotfix/` branch, tag maintainers, and include CI artifacts; maintainers may fast-track after approvals.
+- **CI Flakes & Evidence:** If CI fails intermittently, re-run and attach Playwright traces/logs to the PR for triage.
+- **Conflict Resolution:** Rebase onto `master` or resolve conflicts locally before merging.
+
 ### Docker Compose Architecture
 
 **Layered Configuration**:
