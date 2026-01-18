@@ -120,6 +120,9 @@ Options:
   --deep               Deep verification with E2E tests (~5-10 min)
   --dry-run            Print commands without executing
   --verbose            Show detailed output
+    Environment secrets:
+    - GHCR_TOKEN: Personal access token (or CI secret) with `read:packages` for ghcr.io pulls (optional - recommended for private images)
+    - GHCR_USER: Username for ghcr.io login (default: vatsaaa)
   --log-file=PATH      Save deploy output to PATH (appends)
   -y, --yes            Non-interactive mode (auto-confirm prompts)
   --no-start           When used with --action=fresh, perform full wipe but do NOT start services
@@ -598,6 +601,35 @@ run_validations() {
     echo ""
 }
 
+# Ensure registry authentication is available when pulling private images
+ensure_registry_auth() {
+    if [[ $DRY_RUN -eq 1 ]]; then
+        log_debug "DRY-RUN: would ensure registry auth"
+        return 0
+    fi
+
+    # Prefer explicit GHCR_TOKEN provided via CI secrets. If not present, skip.
+    if [[ -n "${GHCR_TOKEN:-}" ]]; then
+        local ghcr_user="${GHCR_USER:-vatsaaa}"
+        log_info "Authenticating with ghcr.io as $ghcr_user"
+        if echo "$GHCR_TOKEN" | docker login ghcr.io -u "$ghcr_user" --password-stdin >/dev/null 2>&1; then
+            log_success "Authenticated to ghcr.io"
+            return 0
+        else
+            log_error "Failed to authenticate to ghcr.io. Ensure GHCR_TOKEN and GHCR_USER are correct and have 'read:packages' scope."
+            return 1
+        fi
+    fi
+
+    # If running in GitHub Actions prefer OIDC (handled by actions/docker/login), otherwise warn
+    if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+        log_warn "No GHCR_TOKEN provided. In GitHub Actions you should use 'docker/login-action' with OIDC or set GHCR_TOKEN secret."
+    else
+        log_debug "No GHCR_TOKEN provided; assuming public images or pre-authenticated daemon"
+    fi
+    return 0
+}
+
 # =============================================================================
 # HEALTH CHECK FUNCTIONS
 # =============================================================================
@@ -833,6 +865,7 @@ action_deploy() {
     
     # Step 4: Start services
     log_info "Starting all services..."
+    ensure_registry_auth || { release_lock; exit 1; }
     run_cmd "$COMPOSE_CMD up -d"
     
     # Step 5: Health checks
@@ -899,6 +932,7 @@ action_rebuild() {
     
     # Start services
     log_info "Starting all services..."
+    ensure_registry_auth || { release_lock; exit 1; }
     run_cmd "$COMPOSE_CMD up -d"
     
     sleep 5
@@ -1066,6 +1100,7 @@ action_fresh() {
 
     # Step 8: Start services (migrations run automatically via healthcheck dependencies)
     log_info "=== Step 8/8: Start services ==="
+    ensure_registry_auth || { release_lock; exit 1; }
     run_cmd "$COMPOSE_CMD up -d"
     
     # Wait for services to be healthy
