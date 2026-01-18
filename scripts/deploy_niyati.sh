@@ -435,6 +435,7 @@ validate_secrets() {
     local required_secrets=(
         "postgres_password"
         "jwt_secret"
+        "access_token_secret"
     )
     
     # If infra/secrets doesn't exist, we might be using env vars, but let's check for the files first

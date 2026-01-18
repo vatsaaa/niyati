@@ -29,6 +29,8 @@ services:
       - postgres_password
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-niyati_prod}
+      # Unset POSTGRES_PASSWORD from base compose - use only _FILE variant with secrets
+      POSTGRES_PASSWORD: ""
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGRES_DB: ${POSTGRES_DB:-niyati_prod}
       POSTGRES_MAX_CONNECTIONS: "200"
