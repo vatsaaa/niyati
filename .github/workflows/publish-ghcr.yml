@@ -1,0 +1,63 @@
+name: Build and Publish Images to GHCR (OIDC)
+
+on:
+  push:
+    branches: [ master ]
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+jobs:
+  build-and-publish:
+    name: Build and publish
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry (OIDC)
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Build & push bff-platform
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: apps/bff-platform/Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/niyati-bff-platform:${{ github.sha }}
+
+      - name: Build & push bff-auth
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: apps/bff-auth/Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/niyati-bff-auth:${{ github.sha }}
+
+      - name: Build & push ui
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: apps/ui/Dockerfile
+          target: production
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/niyati-ui:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/niyati-ui:latest
+
+      - name: Output image digests
+        run: |
+          echo "Platform: ghcr.io/${{ github.repository_owner }}/niyati-bff-platform:${{ github.sha }}"
+          echo "Auth: ghcr.io/${{ github.repository_owner }}/niyati-bff-auth:${{ github.sha }}"
+          echo "UI: ghcr.io/${{ github.repository_owner }}/niyati-ui:${{ github.sha }}"
