@@ -103,16 +103,18 @@ router.post('/sync', async (req, res) => {
     }
 
     // Upsert into user_credits (bff-platform owns billing/credits)
+    // Note: On UPDATE we preserve existing credits (don't overwrite with default 10)
+    // Credits are only set to default 10 on initial INSERT
     const upsertCreditsSql = `
       INSERT INTO user_credits (user_id, credits, credits_last_reset, total_paid_amount, is_paid, last_payment_amount, last_payment_verified, upi_id, upi_txn_id, created_at, updated_at)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now(), now())
       ON CONFLICT (user_id) DO UPDATE SET
-        credits = COALESCE(EXCLUDED.credits, user_credits.credits),
-        credits_last_reset = COALESCE(EXCLUDED.credits_last_reset, user_credits.credits_last_reset),
-        total_paid_amount = COALESCE(EXCLUDED.total_paid_amount, user_credits.total_paid_amount),
-        is_paid = COALESCE(EXCLUDED.is_paid, user_credits.is_paid),
-        last_payment_amount = COALESCE(EXCLUDED.last_payment_amount, user_credits.last_payment_amount),
-        last_payment_verified = COALESCE(EXCLUDED.last_payment_verified, user_credits.last_payment_verified),
+        credits = user_credits.credits,
+        credits_last_reset = COALESCE(user_credits.credits_last_reset, EXCLUDED.credits_last_reset),
+        total_paid_amount = COALESCE(user_credits.total_paid_amount, EXCLUDED.total_paid_amount),
+        is_paid = COALESCE(user_credits.is_paid, EXCLUDED.is_paid),
+        last_payment_amount = COALESCE(user_credits.last_payment_amount, EXCLUDED.last_payment_amount),
+        last_payment_verified = COALESCE(user_credits.last_payment_verified, EXCLUDED.last_payment_verified),
         upi_id = COALESCE(EXCLUDED.upi_id, user_credits.upi_id),
         upi_txn_id = COALESCE(EXCLUDED.upi_txn_id, user_credits.upi_txn_id),
         updated_at = now()
