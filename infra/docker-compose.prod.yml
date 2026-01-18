@@ -25,9 +25,11 @@ services:
       - "0.0.0.0:5432:5432"
     volumes:
       - postgres-data-prod:/var/lib/postgresql/data
+    secrets:
+      - postgres_password
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-niyati_prod}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGRES_DB: ${POSTGRES_DB:-niyati_prod}
       POSTGRES_MAX_CONNECTIONS: "200"
       POSTGRES_SHARED_BUFFERS: "1GB"
@@ -49,10 +51,15 @@ services:
     ports: []
     expose:
       - "${BFF_AUTH_PORT:-3001}"
+    secrets:
+      - postgres_password
+      - jwt_secret
+      - access_token_secret
     environment:
       <<: *prod-env
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      JWT_SECRET: ${JWT_SECRET}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      JWT_SECRET_FILE: /run/secrets/jwt_secret
+      ACCESS_TOKEN_SECRET_FILE: /run/secrets/access_token_secret
       SMTP_USER: ${SMTP_USER}
       SMTP_PASSWORD: ${SMTP_PASSWORD}
       CORS_ALLOWED: ${CORS_ALLOWED}
@@ -67,9 +74,11 @@ services:
     ports: []
     expose:
       - "${BFF_PLATFORM_PORT:-3000}"
+    secrets:
+      - postgres_password
     environment:
       <<: *prod-env
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       CORS_ALLOWED: ${CORS_ALLOWED}
       ALLOW_CROSS_SITE_COOKIES: ${ALLOW_CROSS_SITE_COOKIES:-false}
     restart: always
@@ -88,10 +97,12 @@ services:
 
   worker:
     container_name: niyati-worker-prod
+    secrets:
+      - worker_token
     environment:
       SMTP_USER: ${SMTP_USER}
       SMTP_PASSWORD: ${SMTP_PASSWORD}
-      WORKER_TOKEN: ${WORKER_TOKEN}
+      WORKER_TOKEN_FILE: /run/secrets/worker_token
     restart: always
     profiles: []  # Enable in production (override base profile)
 
@@ -103,9 +114,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    secrets:
+      - postgres_password
     environment:
       - POSTGRES_USER=${POSTGRES_USER:-niyati_prod}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
       - POSTGRES_DB=${POSTGRES_DB:-niyati_prod}
       - PGHOST=postgres
       - PGPORT=5432
@@ -157,3 +170,20 @@ volumes:
     driver: local
   caddy-config-prod:
     driver: local
+
+# =============================================================================
+# DOCKER SECRETS - Production credential management
+# =============================================================================
+# Secrets are read from files in the secrets/ directory (gitignored)
+# Services access them via /run/secrets/<secret_name> inside containers
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password
+  jwt_secret:
+    file: ./secrets/jwt_secret
+  access_token_secret:
+    file: ./secrets/access_token_secret
+  worker_token:
+    file: ./secrets/worker_token
+  service_token:
+    file: ./secrets/service_token

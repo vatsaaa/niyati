@@ -7,8 +7,9 @@ FROM node:20-alpine AS deps
 
 WORKDIR /app
 
-# Copy package files
-COPY package*.json ./
+# Copy package files from the UI folder (build context is project root)
+# ensure we install the UI's dependencies, not the monorepo root ones
+COPY apps/ui/package*.json ./
 
 # Install dependencies
 RUN npm ci
@@ -33,8 +34,16 @@ ENV VITE_APP_VERSION=$VITE_APP_VERSION
 ENV VITE_DEBUG_MODE=$VITE_DEBUG_MODE
 ENV VITE_VERBOSE_LOGGING=$VITE_VERBOSE_LOGGING
 
-# Copy source code
-COPY . .
+# Copy only UI source and config files (avoid copying repo root which contains
+# a root package.json that would override the UI package.json and run repo-level scripts)
+COPY apps/ui/package*.json ./
+COPY apps/ui/src ./src
+COPY apps/ui/public ./public
+COPY apps/ui/index.html ./
+COPY apps/ui/vite.config.js ./
+COPY apps/ui/tailwind.config.js ./
+COPY apps/ui/postcss.config.js ./
+COPY apps/ui/eslint.config.js ./
 
 # Build the application
 RUN npm run build
@@ -47,12 +56,19 @@ WORKDIR /app
 # Install dumb-init and curl for reliable healthchecks
 RUN apk add --no-cache dumb-init curl
 
-# Copy package files and install deps
-COPY package*.json ./
+# Copy package files for the development stage and install deps
+# when build context is the repo root we must reference the apps/ui/package.json
+COPY apps/ui/package*.json ./
 RUN npm install
 
-# Copy source code
-COPY . .
+# Copy only the UI source code (NOT the entire repo which would overwrite package.json)
+COPY apps/ui/src ./src
+COPY apps/ui/public ./public
+COPY apps/ui/index.html ./
+COPY apps/ui/vite.config.js ./
+COPY apps/ui/tailwind.config.js ./
+COPY apps/ui/postcss.config.js ./
+COPY apps/ui/eslint.config.js ./
 
 # Create non-root user
 RUN addgroup -g 1001 -S nodejs && \

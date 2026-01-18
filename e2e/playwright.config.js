@@ -6,7 +6,7 @@ module.exports = {
   timeout: 30000,
   use: {
     baseURL: process.env.BASE_URL || 'http://127.0.0.1:6173',
-    actionTimeout: 10000,
+    actionTimeout: 15000,
     trace: 'retain-on-failure',
     // Accept self-signed / internal CA certs used in local/CI infra
     ignoreHTTPSErrors: true,

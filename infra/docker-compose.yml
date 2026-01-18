@@ -162,8 +162,8 @@ services:
   ui-service:
     <<: *node-service
     build:
-      context: ../apps/ui
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: apps/ui/Dockerfile
       target: ${BUILD_TARGET:-development}
       args:
         VITE_BFF_BASE_URL: ${VITE_BFF_BASE_URL:-}

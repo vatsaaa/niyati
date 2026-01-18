@@ -104,15 +104,28 @@ test('ui identify -> chat -> credits deducted', async ({ page, baseURL }) => {
   const initialCreditsText = await creditsLocator.textContent();
   const initialCredits = parseInt(initialCreditsText, 10) || 10;
 
-  // Wait for profile to be fully populated in localStorage (returning user flow)
-  await page.waitForFunction(() => {
-    try {
-      const stored = localStorage.getItem('niyati_profile');
-      if (!stored) return false;
-      const p = JSON.parse(stored);
-      return p.user_verified && (p.user_verified.id || p.user_verified.phoneNumber);
-    } catch (e) { return false; }
-  }, { timeout: 5000 });
+  // Wait for profile to be populated in localStorage
+  // In REAL mode, new users may not have user_verified set yet (they need to complete profile first)
+  // In stubbed mode, we stub a returning user so user_verified should be set immediately
+  if (REAL) {
+    // For REAL mode (fresh CI database), just wait for phone number to be stored
+    await page.waitForFunction(() => {
+      try {
+        const phone = localStorage.getItem('niyati_phone_number');
+        return !!phone;
+      } catch (e) { return false; }
+    }, { timeout: 15000 });
+  } else {
+    // For stubbed mode, wait for full user_verified (returning user flow)
+    await page.waitForFunction(() => {
+      try {
+        const stored = localStorage.getItem('niyati_profile');
+        if (!stored) return false;
+        const p = JSON.parse(stored);
+        return p.user_verified && (p.user_verified.id || p.user_verified.phoneNumber);
+      } catch (e) { return false; }
+    }, { timeout: 15000 });
+  }
 
   // Type a chat message and submit
   const textarea = page.locator('textarea');

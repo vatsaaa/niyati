@@ -25,6 +25,10 @@ node_modules/
 .env.ui
 .env.ui.local
 
+# Docker secrets directory (NEVER commit!)
+/infra/secrets/
+secrets/
+
 # Allow environment templates (these should be committed)
 !.env.development
 !.env.staging
@@ -80,6 +84,8 @@ build/
 
 # Docker override (local)
 docker-compose.override.yml
+# Local prod overrides for testing without GHCR auth
+**/docker-compose.*.local.yml
 
 # ngrok and local tunnels
 .ngrok/
@@ -94,3 +100,4 @@ docker-compose.override.yml
 /ui/test-results/
 /ui/playwright-report/
 
+/infra/secrets

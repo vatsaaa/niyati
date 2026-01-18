@@ -240,6 +240,26 @@ get_compose_cmd() {
     esac
 }
 
+# Ensure scripts rely on `docker compose` rather than raw `docker` where possible.
+# Scans the scripts folder for raw `docker` usage (excluding `docker compose` and docker-compose) and
+# returns non-zero if violations are found. This can be used as an enforcement check in deploy/test scripts.
+ensure_compose_only() {
+    local repo_root
+    repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    # Search for 'docker ' occurrences in scripts/ but ignore allowed patterns
+    local violations
+    violations=$(grep -R --line-number -n "\bdocker \b" "$repo_root/scripts" 2>/dev/null || true)
+    # Filter out allowed variants (docker compose and docker-compose)
+    violations=$(echo "$violations" | grep -v "docker compose" | grep -v "docker-compose" || true)
+
+    if [[ -n "$violations" ]]; then
+        echo
+        echo "[ENFORCEMENT] Raw 'docker' usage found in scripts (prefer 'docker compose'):\n$violations"
+        return 1
+    fi
+    return 0
+}
+
 # Wait for a container to be healthy
 wait_for_container() {
     local container="$1"
@@ -287,7 +307,9 @@ wait_for_postgres() {
     
     log_info "Waiting for PostgreSQL to be ready..."
     while [[ $attempt -le $max_attempts ]]; do
-        if docker exec "$container" pg_isready -U "$db_user" -d "$db_name" >/dev/null 2>&1; then
+        # Prefer compose exec when possible (works when service name is 'postgres')
+        local compose_cmd="${COMPOSE_CMD:-$(get_compose_cmd)}"
+        if $compose_cmd exec -T postgres pg_isready -U "$db_user" -d "$db_name" >/dev/null 2>&1; then
             log_success "PostgreSQL is ready"
             return 0
         fi
