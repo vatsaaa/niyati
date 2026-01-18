@@ -101,3 +101,4 @@ docker-compose.override.yml
 /ui/playwright-report/
 
 /infra/secrets
+.nyc_output_merge/
