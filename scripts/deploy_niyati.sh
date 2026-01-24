@@ -80,6 +80,12 @@ SKIP_HEALTH=0
 DEEP_CLEAN=0
 NO_START=0
 
+# Verify action options
+COMPONENT="all"
+QUICK_CHECK=0
+RUN_TESTS=0
+DEEP_VERIFY=0
+
 # =============================================================================
 # USAGE / HELP
 # =============================================================================
@@ -100,17 +106,25 @@ Actions:
   fresh     Complete fresh start: clean everything, rebuild, deploy (like new machine)
   migrate   Run database migrations only
   status    Show status of all services
+  verify    Comprehensive verification of deployment (containers, health, config, tests)
 
 Options:
   --env=dev|prod       Environment (default: dev)
   --action=<action>    Action to perform (default: deploy)
   --project-name=NAME  Compose project name (default: niyati or niyati-prod)
   --service=<name>     Target specific service (for restart action)
+  --component=<name>   Target specific component for verify (default: all)
+                       Options: all, postgres, redis, bff-platform, bff-auth, ui, caddy, worker
+  --quick              Quick verification (health checks only, ~30 sec)
+  --run-tests          Include smoke tests in verification (~2 min)
+  --deep               Deep verification with E2E tests (~5-10 min)
   --dry-run            Print commands without executing
   --verbose            Show detailed output
+    Environment secrets:
+    - GHCR_TOKEN: Personal access token (or CI secret) with `read:packages` for ghcr.io pulls (optional - recommended for private images)
+    - GHCR_USER: Username for ghcr.io login (default: vatsaaa)
   --log-file=PATH      Save deploy output to PATH (appends)
   -y, --yes            Non-interactive mode (auto-confirm prompts)
-        --deep               When used with --action=clean, perform deep cleanup (remove images, prune build cache)
   --no-start           When used with --action=fresh, perform full wipe but do NOT start services
   --skip-checks        Skip pre-deploy validation checks
   --skip-health        Skip post-deploy health verification
@@ -128,6 +142,15 @@ Examples:
 
   # Rebuild all images and redeploy
   ./scripts/deploy_niyati.sh --env=dev --action=rebuild
+
+  # Verify deployment (quick health checks)
+  ./scripts/deploy_niyati.sh --env=prod --action=verify --quick
+
+  # Deep verification with full tests
+  ./scripts/deploy_niyati.sh --env=prod --action=verify --deep
+
+  # Verify specific component
+  ./scripts/deploy_niyati.sh --env=prod --action=verify --component=bff-platform
 
   # Clean up everything
   ./scripts/deploy_niyati.sh --action=clean --yes
@@ -157,9 +180,9 @@ for arg in "$@"; do
             ;;
         --action=*)
             ACTION="${arg#--action=}"
-            if [[ ! "$ACTION" =~ ^(deploy|restart|stop|rebuild|clean|fresh|migrate|status)$ ]]; then
+            if [[ ! "$ACTION" =~ ^(deploy|restart|stop|rebuild|clean|fresh|migrate|status|verify)$ ]]; then
                 log_error "Invalid --action value: $ACTION"
-                log_error "Valid actions: deploy, restart, stop, rebuild, clean, fresh, migrate, status"
+                log_error "Valid actions: deploy, restart, stop, rebuild, clean, fresh, migrate, status, verify"
                 exit 1
             fi
             ;;
@@ -195,6 +218,22 @@ for arg in "$@"; do
         --no-start)
             NO_START=1
             ;;
+        --component=*)
+            COMPONENT="${arg#--component=}"
+            ;;
+        --quick)
+            QUICK_CHECK=1
+            ;;
+        --run-tests)
+            RUN_TESTS=1
+            ;;
+        --deep)
+            if [[ "$ACTION" == "clean" ]]; then
+                DEEP_CLEAN=1
+            else
+                DEEP_VERIFY=1
+            fi
+            ;;
         # Legacy support
         --prod)
             ENV="prod"
@@ -204,6 +243,16 @@ for arg in "$@"; do
             ;;
     esac
 done
+
+# Enforce compose-only policy in prod verification to avoid raw-docker ad-hoc checks
+if [[ "$ACTION" == "verify" && "$ENV" == "prod" ]]; then
+    if ! ensure_compose_only >/dev/null 2>&1; then
+        echo
+        log_error "Detected raw 'docker' usage in scripts - enforce use of 'docker compose' in CI/Prod scripts."
+        log_error "Run 'grep -R "docker " scripts/ | grep -v "docker compose"' to see occurrences."
+        exit 1
+    fi
+fi
 
 # =============================================================================
 # COMPOSE COMMAND SETUP
@@ -384,8 +433,9 @@ validate_secrets() {
     local secret_dir="infra/secrets"
     
     local required_secrets=(
-        "postgres_password.txt"
-        "jwt_secret.txt"
+        "postgres_password"
+        "jwt_secret"
+        "access_token_secret"
     )
     
     # If infra/secrets doesn't exist, we might be using env vars, but let's check for the files first
@@ -550,6 +600,35 @@ run_validations() {
     validate_secrets || exit 1
     validate_ports || exit 1
     echo ""
+}
+
+# Ensure registry authentication is available when pulling private images
+ensure_registry_auth() {
+    if [[ $DRY_RUN -eq 1 ]]; then
+        log_debug "DRY-RUN: would ensure registry auth"
+        return 0
+    fi
+
+    # Prefer explicit GHCR_TOKEN provided via CI secrets. If not present, skip.
+    if [[ -n "${GHCR_TOKEN:-}" ]]; then
+        local ghcr_user="${GHCR_USER:-vatsaaa}"
+        log_info "Authenticating with ghcr.io as $ghcr_user"
+        if echo "$GHCR_TOKEN" | docker login ghcr.io -u "$ghcr_user" --password-stdin >/dev/null 2>&1; then
+            log_success "Authenticated to ghcr.io"
+            return 0
+        else
+            log_error "Failed to authenticate to ghcr.io. Ensure GHCR_TOKEN and GHCR_USER are correct and have 'read:packages' scope."
+            return 1
+        fi
+    fi
+
+    # If running in GitHub Actions prefer OIDC (handled by actions/docker/login), otherwise warn
+    if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+        log_warn "No GHCR_TOKEN provided. In GitHub Actions you should use 'docker/login-action' with OIDC or set GHCR_TOKEN secret."
+    else
+        log_debug "No GHCR_TOKEN provided; assuming public images or pre-authenticated daemon"
+    fi
+    return 0
 }
 
 # =============================================================================
@@ -731,18 +810,29 @@ run_migrations() {
         log_info "Running migrations via migrate service..."
         run_cmd "$COMPOSE_CMD --profile migration run --rm migrate"
     else
-        # Development: run migrations with explicit mounts for local files
-        log_info "Running migrations with local file mounts..."
-        local network="${PROJECT}_niyati"
+        # Development: run JS migration runner inside the built image so project
+        # dependencies (eg. 'pg') are available. Keeps JS-based migrations working
+        # while running from local environment.
+        log_info "Running migrations via run_migrations.js inside image niyati/bff-platform:local..."
+        local migrations_dir="$PROJECT_ROOT/packages/migrations"
+        local run_script="$PROJECT_ROOT/scripts/run_migrations.js"
+        local network_name="${PROJECT}_niyati"
         local db_url="postgresql://${POSTGRES_USER:-niyati}:${POSTGRES_PASSWORD:-niyati_dev_pass}@postgres:5432/${POSTGRES_DB:-niyati_dev}"
-        
+
+        if [[ ! -f "$run_script" ]]; then
+            log_error "Migration runner not found: $run_script"
+            return 1
+        fi
+
         run_cmd "docker run --rm \
-            --network $network \
-            -v \"$PROJECT_ROOT/packages/migrations:/migrations:ro\" \
-            -v \"$PROJECT_ROOT/scripts/run_migrations.js:/scripts/run_migrations.js:ro\" \
+            --network $network_name \
+            -v \"$migrations_dir:/migrations:ro\" \
+            -v \"$run_script:/app/scripts/run_migrations.js:ro\" \
+            -w /app \
             -e DATABASE_URL=\"$db_url\" \
+            -e NODE_PATH=/app/apps/bff-platform/node_modules:/app/packages/commons/node_modules \
             niyati/bff-platform:local \
-            node /scripts/run_migrations.js"
+            node scripts/run_migrations.js"
     fi
     
     log_success "Migrations completed"
@@ -776,6 +866,7 @@ action_deploy() {
     
     # Step 4: Start services
     log_info "Starting all services..."
+    ensure_registry_auth || { release_lock; exit 1; }
     run_cmd "$COMPOSE_CMD up -d"
     
     # Step 5: Health checks
@@ -842,6 +933,7 @@ action_rebuild() {
     
     # Start services
     log_info "Starting all services..."
+    ensure_registry_auth || { release_lock; exit 1; }
     run_cmd "$COMPOSE_CMD up -d"
     
     sleep 5
@@ -1009,6 +1101,7 @@ action_fresh() {
 
     # Step 8: Start services (migrations run automatically via healthcheck dependencies)
     log_info "=== Step 8/8: Start services ==="
+    ensure_registry_auth || { release_lock; exit 1; }
     run_cmd "$COMPOSE_CMD up -d"
     
     # Wait for services to be healthy
@@ -1032,6 +1125,283 @@ action_migrate() {
     
     acquire_lock
     run_migrations
+}
+
+# ACTION: verify - Comprehensive verification of deployment
+action_verify() {
+    print_header "Niyati Verification ($ENV)"
+    
+    local component="${COMPONENT:-all}"
+    local test_level="standard"
+    
+    if [[ $QUICK_CHECK -eq 1 ]]; then
+        test_level="quick"
+    elif [[ $DEEP_VERIFY -eq 1 ]]; then
+        test_level="deep"
+    elif [[ $RUN_TESTS -eq 1 ]]; then
+        test_level="with-tests"
+    fi
+    
+    log_info "Verification level: $test_level"
+    log_info "Target component: $component"
+    echo ""
+    
+    acquire_lock
+    
+    # Step 1: Verify containers are running
+    log_step "Step 1: Container Status"
+    verify_containers "$component"
+    
+    # Step 2: Health endpoint checks
+    if [[ $QUICK_CHECK -eq 0 ]]; then
+        log_step "Step 2: Health Endpoints"
+        verify_health_endpoints "$component"
+    fi
+    
+    # Step 3: Database verification
+    if [[ "$component" == "all" || "$component" == "postgres" ]] && [[ $QUICK_CHECK -eq 0 ]]; then
+        log_step "Step 3: Database"
+        verify_database
+    fi
+    
+    # Step 4: Configuration and secrets
+    if [[ $QUICK_CHECK -eq 0 ]]; then
+        log_step "Step 4: Configuration"
+        verify_configuration "$component"
+    fi
+    
+    # Step 5: Smoke tests
+    if [[ $RUN_TESTS -eq 1 || $DEEP_VERIFY -eq 1 ]]; then
+        log_step "Step 5: Smoke Tests"
+        run_smoke_tests
+    fi
+    
+    # Step 6: E2E tests (deep verification only)
+    if [[ $DEEP_VERIFY -eq 1 ]]; then
+        log_step "Step 6: E2E Tests"
+        run_e2e_tests
+    fi
+    
+    echo ""
+    log_success "Verification complete for $component in $ENV environment!"
+    release_lock
+}
+
+# Helper: Verify containers are running
+verify_containers() {
+    local component="$1"
+    local failed=0
+    
+    if [[ "$component" == "all" ]]; then
+        log_info "Checking all containers..."
+        local compose_cmd
+        compose_cmd="$COMPOSE_CMD"
+        local containers
+        containers=$($compose_cmd ps --all --format "{{.Name}}: {{.State}}")
+        if [[ -z "$containers" ]]; then
+            log_error "No niyati containers are running!"
+            failed=1
+        else
+            echo "$containers" | while read -r line; do
+                if echo "$line" | grep -qi "running"; then
+                    log_info "✓ $line"
+                else
+                    log_error "✗ $line"
+                    failed=1
+                fi
+            done
+        fi
+    else
+        log_info "Checking component: $component..."
+        local container_name="niyati-${component}-prod"
+        if [[ "$ENV" != "prod" ]]; then
+            local compose_cmd
+            compose_cmd="$COMPOSE_CMD"
+            container_name=$($compose_cmd ps --filter "name=$component" --format "{{.Name}}" | head -1)
+        fi
+        
+        if [[ -z "$container_name" ]]; then
+            log_error "Component $component is not running"
+            return 1
+        fi
+        
+        local status=$(docker inspect --format='{{.State.Status}}' "$container_name" 2>/dev/null)
+        if [[ "$status" == "running" ]]; then
+            log_info "✓ $container_name: running"
+        else
+            log_error "✗ $container_name: $status"
+            failed=1
+        fi
+    fi
+    
+    return $failed
+}
+
+# Helper: Verify health endpoints
+verify_health_endpoints() {
+    local component="$1"
+    local base_url
+    local auth_port
+    
+    # Use environment-specific URLs
+    if [[ "$ENV" == "prod" ]]; then
+        base_url="http://localhost:80"
+        auth_port="80"  # In prod, auth is accessed via Caddy proxy
+    else
+        base_url="http://localhost:5173"
+        auth_port="${BFF_AUTH_PORT:-3001}"
+    fi
+    
+    log_info "Checking health endpoints..."
+    
+    # BFF Platform health
+    if [[ "$component" == "all" || "$component" == "bff-platform" ]]; then
+        if check_url_with_retries "$base_url/api/v1/telemetry/health" 3 2; then
+            log_info "✓ BFF Platform: healthy"
+        else
+            log_error "✗ BFF Platform: health check failed"
+        fi
+    fi
+    
+    # BFF Auth health (check directly via port since telemetry isn't routed through Caddy)
+    if [[ "$component" == "all" || "$component" == "bff-auth" ]]; then
+        local auth_url
+        local auth_container
+        if [[ "$ENV" == "prod" ]]; then
+            # In prod, check via Caddy proxy - use users/identify endpoint with OPTIONS to test reachability
+            auth_url="$base_url/api/v1/users/identify"
+            auth_container="niyati-bff-auth-prod"
+        else
+            auth_url="http://localhost:${auth_port}/api/v1/telemetry/health"
+            auth_container="niyati-bff-auth-1"
+        fi
+        # First try the external endpoint
+        if check_url_with_retries "$auth_url" 2 1; then
+            log_info "✓ BFF Auth: healthy"
+        else
+            # Fallback: check directly inside container
+            if docker exec "$auth_container" wget -qO- http://localhost:3001/api/v1/telemetry/health >/dev/null 2>&1; then
+                log_info "✓ BFF Auth: healthy (via container)"
+            else
+                log_error "✗ BFF Auth: health check failed"
+            fi
+        fi
+    fi
+    
+    # Caddy health
+    if [[ "$component" == "all" || "$component" == "caddy" ]]; then
+        if check_url_with_retries "$base_url/health" 3 2; then
+            log_info "✓ Caddy: healthy"
+        else
+            log_error "✗ Caddy: health check failed"
+        fi
+    fi
+}
+
+# Helper: Verify database
+verify_database() {
+    log_info "Checking database connection..."
+    local db_container=""
+
+    # Prefer explicit prod container name, but fall back to any postgres container
+    if [[ "$ENV" == "prod" ]]; then
+        db_container=$(docker ps --filter "name=niyati-postgres-prod" --format "{{.Names}}" | head -1)
+        if [[ -z "$db_container" ]]; then
+            # Try by image ancestor (postgres) or any container with 'postgres' in name
+            db_container=$(docker ps --filter "ancestor=postgres:15-alpine" --format "{{.Names}}" | head -1)
+        fi
+    else
+        db_container=$(docker ps --filter "name=niyati-postgres-1" --format "{{.Names}}" | head -1)
+        if [[ -z "$db_container" ]]; then
+            db_container=$(docker ps --filter "name=postgres" --format "{{.Names}}" | head -1)
+        fi
+    fi
+
+    if [[ -z "$db_container" ]]; then
+        log_error "PostgreSQL container not found"
+        return 1
+    fi
+
+    # Check database is accepting connections (use pg_isready inside container)
+    if docker exec "$db_container" pg_isready -U "${POSTGRES_USER:-niyati}" >/dev/null 2>&1; then
+        log_info "✓ Database: accepting connections"
+    else
+        log_error "✗ Database: not accepting connections"
+        return 1
+    fi
+    
+    # Check migrations table exists
+    local db_name="niyati_prod"
+    if [[ "$ENV" != "prod" ]]; then
+        db_name="niyati_dev"
+    fi
+    
+    local migrations_check=$(docker exec "$db_container" psql -U niyati -d "$db_name" -t -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_name='schema_migrations'" 2>/dev/null | tr -d ' ')
+    if [[ "$migrations_check" == "1" ]]; then
+        log_info "✓ Database: migrations table present"
+    else
+        log_warn "⚠ Database: migrations table not found"
+    fi
+}
+
+# Helper: Verify configuration
+verify_configuration() {
+    local component="$1"
+    log_info "Verifying configuration..."
+    
+    # Check secrets are mounted
+    local secrets_ok=1
+    for secret in postgres_password jwt_secret access_token_secret worker_token service_token; do
+        if [[ -f "$PROJECT_ROOT/infra/secrets/$secret" ]]; then
+            log_debug "✓ Secret file: $secret"
+        else
+            log_warn "⚠ Secret file missing: $secret"
+            secrets_ok=0
+        fi
+    done
+    
+    if [[ $secrets_ok -eq 1 ]]; then
+        log_info "✓ All secret files present"
+    fi
+    
+    # Verify environment file exists
+    if [[ -f "$PROJECT_ROOT/infra/.env" ]]; then
+        log_info "✓ Environment file: infra/.env"
+    else
+        log_warn "⚠ Environment file missing: infra/.env"
+    fi
+}
+
+# Helper: Run smoke tests
+run_smoke_tests() {
+    log_info "Running smoke tests..."
+    
+    if [[ -f "$PROJECT_ROOT/scripts/smoke_test.sh" ]]; then
+        if bash "$PROJECT_ROOT/scripts/smoke_test.sh"; then
+            log_info "✓ Smoke tests: passed"
+        else
+            log_error "✗ Smoke tests: failed"
+            return 1
+        fi
+    else
+        log_warn "⚠ Smoke test script not found, skipping"
+    fi
+}
+
+# Helper: Run E2E tests
+run_e2e_tests() {
+    log_info "Running E2E tests..."
+    
+    if [[ -f "$PROJECT_ROOT/scripts/ci-run-tests.sh" ]]; then
+        if bash "$PROJECT_ROOT/scripts/ci-run-tests.sh" --skip-backend; then
+            log_info "✓ E2E tests: passed"
+        else
+            log_error "✗ E2E tests: failed"
+            return 1
+        fi
+    else
+        log_warn "⚠ E2E test script not found, skipping"
+    fi
 }
 
 # ACTION: status
@@ -1134,6 +1504,9 @@ case "$ACTION" in
         ;;
     migrate)
         action_migrate
+        ;;
+    verify)
+        action_verify
         ;;
     status)
         action_status

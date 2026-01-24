@@ -1,17 +1,43 @@
 const path = require('path');
-const express = require('express');
-const bodyParser = require('body-parser');
-const cors = require('cors');
-const helmet = require('helmet');
-const compression = require('compression');
-const dotenv = require('dotenv');
-const { Pool } = require('pg');
 const fs = require('fs');
+const dotenv = require('dotenv');
 
 // Load env from repo root .env by default (skip in tests to avoid overriding Jest's NODE_ENV)
 if (process.env.NODE_ENV !== 'test') {
   dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 }
+
+// =============================================================================
+// Docker Secrets Support - Must run BEFORE any module that validates auth config
+// =============================================================================
+// Read secrets from _FILE env vars (Docker secrets pattern) and set the actual
+// env vars so that downstream modules can use them.
+function loadSecretFromFile(envVar, fileEnvVar) {
+  const filePath = process.env[fileEnvVar];
+  if (filePath && fs.existsSync(filePath)) {
+    try {
+      const value = fs.readFileSync(filePath, 'utf8').trim();
+      process.env[envVar] = value;
+      console.log(`[secrets] Loaded ${envVar} from ${fileEnvVar}`);
+    } catch (e) {
+      console.error(`[secrets] Failed to read ${fileEnvVar}:`, e.message);
+    }
+  }
+}
+
+// Load all secrets before importing modules that validate them
+loadSecretFromFile('ACCESS_TOKEN_SECRET', 'ACCESS_TOKEN_SECRET_FILE');
+loadSecretFromFile('JWT_SECRET', 'JWT_SECRET_FILE');
+
+// =============================================================================
+// Now safe to import modules that validate auth config
+// =============================================================================
+const express = require('express');
+const bodyParser = require('body-parser');
+const cors = require('cors');
+const helmet = require('helmet');
+const compression = require('compression');
+const { Pool } = require('pg');
 
 // Use repository-relative commons to ensure consistent requires inside container
 const commons = require('@niyati/commons');

@@ -34,7 +34,7 @@ function validateChecks(opts = {}) {
     'bff-auth': [
       { key: 'ASTRO_API_URL', desc: 'Astrology provider base URL' },
       { key: 'ASTRO_API_KEY', desc: 'Astrology provider API key' },
-      { key: 'ACCESS_TOKEN_SECRET', desc: 'JWT access token secret' }
+      { key: 'ACCESS_TOKEN_SECRET', desc: 'JWT access token secret', allowAlternative: ['ACCESS_TOKEN_SECRET_FILE'] }
     ],
     'worker': [
       { key: 'REDIS_URL', desc: 'Redis connection URL (or REDIS_HOST)', allowAlternative: ['REDIS_HOST'] },

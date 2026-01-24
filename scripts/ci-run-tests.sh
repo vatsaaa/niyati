@@ -129,6 +129,11 @@ cleanup() {
 
         log_step "🧹 Cleaning up CI stack..."
         $COMPOSE_CMD -p "$PROJECT_NAME" down -v --remove-orphans 2>/dev/null || true
+        
+        # Explicit volume removal as fallback
+        for vol in postgres-data redis-data caddy_data caddy_config ui-dist; do
+            docker volume rm "${PROJECT_NAME}_${vol}" 2>/dev/null || true
+        done
     fi
     exit $exit_code
 }
@@ -224,6 +229,12 @@ fi
 log_step "🗑️  Tearing down any existing CI stack..."
 $COMPOSE_CMD -p "$PROJECT_NAME" down -v --remove-orphans 2>/dev/null || true
 
+# Explicit volume removal as fallback (docker compose down -v sometimes misses volumes)
+log_step "🧹 Explicitly removing CI volumes to ensure clean database state..."
+for vol in postgres-data redis-data caddy_data caddy_config ui-dist; do
+    docker volume rm "${PROJECT_NAME}_${vol}" 2>/dev/null || true
+done
+
 # Ensure UI lockfile exists so Docker `npm ci` does not fail
 if [[ ! -f "apps/ui/package-lock.json" ]]; then
     log_step "⚙️  Generating apps/ui/package-lock.json for CI (non-committed)"
@@ -279,7 +290,23 @@ for f in $(ls -1 packages/migrations/*.up.sql 2>/dev/null | sort); do
 done
 
 # =============================================================================
-# STEP 3.5: CI LINT - detect legacy localStorage keys in tests/source
+# STEP 3.5: DATABASE CLEANUP - ensure clean state for E2E tests
+# Truncate/clean test-related tables so E2E tests can start fresh.
+# This is a safety net in case volumes were not fully removed.
+# =============================================================================
+
+log_step "🧹 Cleaning database for fresh E2E test state..."
+$COMPOSE_CMD -p "$PROJECT_NAME" exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" <<'EOF' >/dev/null
+-- Delete test user data to ensure "new user" tests work correctly
+-- Uses phone numbers from the E2E test specs
+DELETE FROM user_profiles WHERE phone_number IN ('+1-9992223333', '+919999999999', '+919876543210', '+14155551234');
+DELETE FROM users WHERE phone_number IN ('+1-9992223333', '+919999999999', '+919876543210', '+14155551234');
+DELETE FROM charge_transactions WHERE user_phone IN ('+1-9992223333', '+919999999999', '+919876543210', '+14155551234');
+EOF
+log_info "Database cleaned for E2E tests"
+
+# =============================================================================
+# STEP 3.6: CI LINT - detect legacy localStorage keys in tests/source
 # Fail fast if any tests reference `niyati_user_` keys. This prevents
 # E2E flakes caused by key renames between code and tests.
 # =============================================================================

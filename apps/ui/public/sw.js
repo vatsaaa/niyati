@@ -145,7 +145,14 @@ async function handleNavigationRequest(request, event) {
     // Cache successful responses
     if (networkResponse && networkResponse.status === 200) {
       const cache = await caches.open(CACHE_DYNAMIC);
-      cache.put(request, networkResponse.clone());
+      try {
+        const proto = new URL(request.url).protocol;
+        if (proto === 'http:' || proto === 'https:') {
+          await cache.put(request, networkResponse.clone());
+        }
+      } catch (e) {
+        // Ignore caching for unsupported/invalid URL schemes (e.g., chrome-extension://)
+      }
     }
     
     return networkResponse;
@@ -181,10 +188,16 @@ async function handleAPIRequest(request) {
     // Cache successful API responses (except telemetry)
     if (response && response.status === 200 && !request.url.includes('/telemetry')) {
       const cache = await caches.open(CACHE_API);
-      cache.put(request, response.clone());
-      
-      // Limit cache size
-      await limitCacheSize(CACHE_API, MAX_API_CACHE_SIZE);
+      try {
+        const proto = new URL(request.url).protocol;
+        if (proto === 'http:' || proto === 'https:') {
+          await cache.put(request, response.clone());
+          // Limit cache size
+          await limitCacheSize(CACHE_API, MAX_API_CACHE_SIZE);
+        }
+      } catch (e) {
+        // Ignore caching for unsupported/invalid URL schemes
+      }
     }
 
     return response;
@@ -226,10 +239,16 @@ async function handleImageRequest(request) {
     
     if (networkResponse && networkResponse.status === 200) {
       const cache = await caches.open(CACHE_IMAGES);
-      cache.put(request, networkResponse.clone());
-      
-      // Limit cache size
-      await limitCacheSize(CACHE_IMAGES, MAX_IMAGE_CACHE_SIZE);
+      try {
+        const proto = new URL(request.url).protocol;
+        if (proto === 'http:' || proto === 'https:') {
+          await cache.put(request, networkResponse.clone());
+          // Limit cache size
+          await limitCacheSize(CACHE_IMAGES, MAX_IMAGE_CACHE_SIZE);
+        }
+      } catch (e) {
+        // Ignore caching for unsupported/invalid URL schemes
+      }
     }
 
     return networkResponse;
@@ -256,10 +275,16 @@ async function handleStaticRequest(request) {
     
     if (networkResponse && networkResponse.status === 200) {
       const cache = await caches.open(CACHE_DYNAMIC);
-      cache.put(request, networkResponse.clone());
-      
-      // Limit cache size
-      await limitCacheSize(CACHE_DYNAMIC, MAX_DYNAMIC_CACHE_SIZE);
+      try {
+        const proto = new URL(request.url).protocol;
+        if (proto === 'http:' || proto === 'https:') {
+          await cache.put(request, networkResponse.clone());
+          // Limit cache size
+          await limitCacheSize(CACHE_DYNAMIC, MAX_DYNAMIC_CACHE_SIZE);
+        }
+      } catch (e) {
+        // Ignore caching for unsupported/invalid URL schemes
+      }
     }
 
     return networkResponse;

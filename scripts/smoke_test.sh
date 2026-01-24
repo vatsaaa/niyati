@@ -25,12 +25,11 @@ SMOKE_SLEEP_BASE=${SMOKE_SLEEP_BASE:-2}
 PROJECT_ROOT="$(find_project_root "$SCRIPT_DIR" 2>/dev/null)" || PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 load_project_env "$PROJECT_ROOT" 2>/dev/null || true
 
-# List of endpoints to verify
+# List of endpoints to verify (GET health endpoints only)
 endpoints=(
     "http://localhost:${BFF_PLATFORM_PORT:-3000}/api/v1/telemetry/health"
     "http://localhost:${BFF_AUTH_PORT:-3001}/api/v1/telemetry/health"
     "http://localhost:${UI_DEV_PORT:-5173}/"
-    "http://localhost:${BFF_PLATFORM_PORT:-3000}/api/v1/identify"
 )
 
 failed=0

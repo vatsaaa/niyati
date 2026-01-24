@@ -18,7 +18,8 @@ source "${SCRIPT_DIR}/lib/common.sh"
 PROJECT_ROOT="$(find_project_root "$SCRIPT_DIR")"
 cd "$PROJECT_ROOT"
 
-CONTAINER_NAME="postgres"
+# Default container name uses niyati project prefix in dev mode
+CONTAINER_NAME="niyati-postgres-1"
 COMPOSE_MODE="dev"
 PROD_MODE=false
 
@@ -99,12 +100,16 @@ db_restart() {
 
 db_status() {
     log_info "PostgreSQL container status:"
-    docker ps -a --filter "name=$CONTAINER_NAME" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+    local compose_cmd
+    compose_cmd=$(get_compose_cmd "$COMPOSE_MODE")
+    $compose_cmd ps --all --format "table {{.Name}}\t{{.State}}\t{{.Ports}}"
 }
 
 db_logs() {
     log_info "PostgreSQL logs (last 50 lines, press Ctrl+C to exit):"
-    docker logs -f --tail 50 "$CONTAINER_NAME"
+    local compose_cmd
+    compose_cmd=$(get_compose_cmd "$COMPOSE_MODE")
+    $compose_cmd logs -f --tail=50 postgres
 }
 
 db_psql() {
@@ -112,7 +117,8 @@ db_psql() {
     local dbuser="${POSTGRES_USER:-niyati}"
     
     log_info "Connecting to PostgreSQL as $dbuser..."
-    docker exec -it "$CONTAINER_NAME" psql -U "$dbuser" -d "$dbname"
+        compose_cmd=$(get_compose_cmd "$COMPOSE_MODE")
+        $compose_cmd exec -T postgres psql -U "$dbuser" -d "$dbname"
 }
 
 db_migrate() {
@@ -133,7 +139,8 @@ db_migrate() {
     for migration in "$migrations_dir"/*.up.sql; do
         if [[ -f "$migration" ]]; then
             log_step "Applying $(basename "$migration")..."
-            docker exec -i "$CONTAINER_NAME" psql -U "$dbuser" -d "$dbname" < "$migration"
+                compose_cmd=$(get_compose_cmd "$COMPOSE_MODE")
+                $compose_cmd exec -T postgres psql -U "$dbuser" -d "$dbname" < "$migration"
         fi
     done
     
@@ -147,7 +154,7 @@ db_seed() {
     compose_cmd=$(get_compose_cmd "$COMPOSE_MODE")
     
     # Check if auth service is running
-    if ! docker ps --filter "name=bff-auth" --format "{{.Names}}" | grep -q "bff-auth"; then
+    if ! $compose_cmd ps --filter "name=bff-auth" --format "{{.Name}}" | grep -q "bff-auth"; then
         log_warn "BFF Auth service not running. Starting it..."
         $compose_cmd up -d bff-auth
         sleep 5
@@ -155,9 +162,9 @@ db_seed() {
     
     local bff_container="bff-auth"
     
-    # Check if seed script exists
-    if docker exec "$bff_container" test -f /app/scripts/seed_test_data.js 2>/dev/null; then
-        docker exec -it "$bff_container" node /app/scripts/seed_test_data.js
+    # Check if seed script exists (use compose exec where possible)
+    if $compose_cmd exec -T bff-auth sh -c "test -f /app/scripts/seed_test_data.js" 2>/dev/null; then
+        $compose_cmd exec -T bff-auth node /app/scripts/seed_test_data.js
         log_success "Seeding completed"
     else
         # Fallback: look for SQL seed migrations under packages/migrations
@@ -170,7 +177,8 @@ db_seed() {
                     log_step "Applying seed migration: $(basename "$seedfile")"
                     local dbname="${POSTGRES_DB:-niyati_dev}"
                     local dbuser="${POSTGRES_USER:-niyati}"
-                    docker exec -i "$CONTAINER_NAME" psql -U "$dbuser" -d "$dbname" < "$seedfile"
+                        compose_cmd=$(get_compose_cmd "$COMPOSE_MODE")
+                        $compose_cmd exec -T postgres psql -U "$dbuser" -d "$dbname" < "$seedfile"
                 fi
             done
         fi
@@ -199,8 +207,9 @@ db_reset() {
     local dbuser="${POSTGRES_USER:-niyati}"
     
     log_warn "Dropping and recreating database..."
-    docker exec -it "$CONTAINER_NAME" psql -U "$dbuser" -d postgres -c "DROP DATABASE IF EXISTS $dbname;"
-    docker exec -it "$CONTAINER_NAME" psql -U "$dbuser" -d postgres -c "CREATE DATABASE $dbname OWNER $dbuser;"
+        compose_cmd=$(get_compose_cmd "$COMPOSE_MODE")
+        $compose_cmd exec -T postgres psql -U "$dbuser" -d postgres -c "DROP DATABASE IF EXISTS $dbname;"
+        $compose_cmd exec -T postgres psql -U "$dbuser" -d postgres -c "CREATE DATABASE $dbname OWNER $dbuser;"
     
     log_success "Database reset complete. Run migrations to set up schema."
 }
@@ -211,7 +220,8 @@ db_backup() {
     local dbuser="${POSTGRES_USER:-niyati}"
     
     log_info "Backing up database to $backup_file..."
-    docker exec "$CONTAINER_NAME" pg_dump -U "$dbuser" -d "$dbname" > "$backup_file"
+        compose_cmd=$(get_compose_cmd "$COMPOSE_MODE")
+        $compose_cmd exec -T postgres pg_dump -U "$dbuser" -d "$dbname" > "$backup_file"
     log_success "Backup saved to $backup_file"
 }
 
@@ -233,7 +243,8 @@ db_restore() {
     local dbuser="${POSTGRES_USER:-niyati}"
     
     log_warn "Restoring database from $backup_file..."
-    docker exec -i "$CONTAINER_NAME" psql -U "$dbuser" -d "$dbname" < "$backup_file"
+        compose_cmd=$(get_compose_cmd "$COMPOSE_MODE")
+        $compose_cmd exec -T postgres psql -U "$dbuser" -d "$dbname" < "$backup_file"
     log_success "Database restored"
 }
 
@@ -248,13 +259,14 @@ db_health() {
     fi
     
     # Show connection info
-    docker exec "$CONTAINER_NAME" psql -U "$dbuser" -d "$dbname" -c "SELECT version();" -t
-    docker exec "$CONTAINER_NAME" psql -U "$dbuser" -d "$dbname" -c \
+        compose_cmd=$(get_compose_cmd "$COMPOSE_MODE")
+        $compose_cmd exec -T postgres psql -U "$dbuser" -d "$dbname" -c "SELECT version();" -t
+        $compose_cmd exec -T postgres psql -U "$dbuser" -d "$dbname" -c \
         "SELECT current_database() as database, current_user as user, pg_size_pretty(pg_database_size(current_database())) as size;" -t
     
     # Show table count
     local table_count
-    table_count=$(docker exec "$CONTAINER_NAME" psql -U "$dbuser" -d "$dbname" -t -c \
+        table_count=$($compose_cmd exec -T postgres psql -U "$dbuser" -d "$dbname" -t -c \
         "SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema');")
     echo "User tables: $table_count"
 }

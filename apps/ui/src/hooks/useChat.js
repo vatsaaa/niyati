@@ -273,7 +273,7 @@ export function useChat(profile, updateProfile, addMessage, auth) {
     if (isProfileLocked() && isProfileUpdateAttempt(inputText)) {
       addMessage({
         id: Date.now() + Math.random(),
-        text: "I appreciate you wanting to update your details! To edit any profile information, simply double-click on the specific detail you'd like to change in the profile section above. This ensures your birth chart remains accurate for personalized predictions.",
+        text: "I appreciate you wanting to update your details! To edit any profile information, simply double-click on the specific detail you would like to change in the profile section above. This ensures your birth chart remains accurate for personalized predictions.",
         sender: 'bot',
         timestamp: new Date()
       });
@@ -283,6 +283,7 @@ export function useChat(profile, updateProfile, addMessage, auth) {
 
     // Only extract and update profile fields if profile hasn't been sent yet
     const profileAlreadyLocked = isProfileLocked();
+    let profileJustCompleted = false;
     
     if (!profileAlreadyLocked) {
       try {
@@ -332,6 +333,17 @@ export function useChat(profile, updateProfile, addMessage, auth) {
             });
           }
         }
+        
+        // Check if profile is now complete after this extraction
+        const profileNowComplete = hasAllRequiredFields(currentProfile);
+        const wasCompleteBeforeExtraction = hasAllRequiredFields({
+          name: extracted.name ? null : currentProfile.name,
+          birthDate: extracted.dob ? null : currentProfile.birthDate,
+          placeOfBirth: extracted.placeOfBirth ? null : currentProfile.placeOfBirth,
+          timeOfBirth: extracted.timeOfBirth ? null : currentProfile.timeOfBirth
+        });
+        
+        profileJustCompleted = profileNowComplete && !wasCompleteBeforeExtraction;
       }
     } catch (extractError) {
       console.error('Error extracting profile fields:', extractError?.message || extractError);
@@ -563,7 +575,7 @@ export function useChat(profile, updateProfile, addMessage, auth) {
           addMessage({
             id: Date.now() + Math.random(),
             image: '/payment/PayQR.jpeg',
-            text: `I'd love to help you explore what the future holds!\n\nHowever, with free credits you can only ask about today's horoscope. Future predictions require paid credits.\n\nTo unlock future predictions and all premium features, scan the QR code above to pay \u20b9${config.payment_amount_inr} (adds ${creditsFromPayment} credits) and share your UPI ID and 12-digit transaction ID.`,
+            text: `I would love to help you explore what the future holds!\n\nHowever, with free credits you can only ask about today's horoscope. Future predictions require paid credits.\n\nTo unlock future predictions and all premium features, scan the QR code above to pay \u20b9${config.payment_amount_inr} (adds ${creditsFromPayment} credits) and share your UPI ID and 12-digit transaction ID.`,
             sender: 'bot',
             timestamp: new Date()
           });
@@ -576,7 +588,7 @@ export function useChat(profile, updateProfile, addMessage, auth) {
           addMessage({
             id: Date.now() + Math.random(),
             image: '/payment/PayQR.jpeg',
-            text: `I'd love to help you with detailed birth chart analysis and personalized predictions!\n\nHowever, as a free user with ${userCredits} credits, you can only access today's horoscope (${config.credits_horoscope_cost} credits). Premium questions cost ${config.credits_premium_cost} credits.\n\nTo unlock all premium features, scan the QR code above to pay \u20b9${config.payment_amount_inr} (adds ${creditsFromPayment} credits) and share your UPI ID and 12-digit transaction ID.`,
+            text: `I would love to help you with detailed birth chart analysis and personalized predictions!\n\nHowever, as a free user with ${userCredits} credits, you can only access today's horoscope (${config.credits_horoscope_cost} credits). Premium questions cost ${config.credits_premium_cost} credits.\n\nTo unlock all premium features, scan the QR code above to pay \u20b9${config.payment_amount_inr} (adds ${creditsFromPayment} credits) and share your UPI ID and 12-digit transaction ID.`,
             sender: 'bot',
             timestamp: new Date()
           });
@@ -585,6 +597,32 @@ export function useChat(profile, updateProfile, addMessage, auth) {
           return;
         }
         // Allow today's horoscope queries and casual conversation to proceed to n8n
+      }
+      
+      // Send confirmation message after profile is complete (from bff-platform, not n8n)
+      if (profileJustCompleted && hasAllRequiredFields(currentProfile)) {
+        const firstName = currentProfile.name ? currentProfile.name.split(' ')[0] : '';
+        const currentLoc = currentProfile.currentLocation || 'your current location';
+        const creditsAmount = currentProfile.credits ?? 10;
+        
+        let confirmationMessage = '';
+        if (isPaidUser) {
+          // For paid users
+          confirmationMessage = `Hi ${firstName}, I now know your name and birth details. I also see that you are in ${currentLoc}. You have ${creditsAmount} credits. As a valued member, you can ask me about your future, career prospects, love life, and receive detailed astrological insights.`;
+        } else {
+          // For free users - mention what they CAN do (today's questions) without explicitly saying "not paid"
+          confirmationMessage = `Hi ${firstName}, I now know your name and birth details. I also see that you are in ${currentLoc}. You have ${creditsAmount} credits and you can ask questions about what today holds for you. For questions about your future, love life, career and more, additional credits are available.`;
+        }
+        
+        addMessage({
+          id: Date.now() + Math.random(),
+          text: confirmationMessage,
+          sender: 'bot',
+          timestamp: new Date()
+        });
+        
+        setIsLoading(false);
+        return;
       }
 
       if (!hasAllRequiredFields(currentProfile) && !isReturning) {
@@ -683,7 +721,7 @@ export function useChat(profile, updateProfile, addMessage, auth) {
       if (isMinor) {
         addMessage({
           id: Date.now() + Math.random(),
-          text: "I'm sorry — we cannot process detailed birth-chart requests for users who are under 18. Please consult a guardian for assistance.",
+          text: "I am sorry — we cannot process detailed birth-chart requests for users who are under 18. Please consult a guardian for assistance.",
           sender: 'bot',
           timestamp: new Date()
         });

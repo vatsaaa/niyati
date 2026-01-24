@@ -49,6 +49,8 @@ services:
       SERVICE_TOKEN: ${SERVICE_TOKEN:-ci-test-token}
       N8N_WEBHOOK_URL: http://n8n:5678/webhook/chat
       BFF_AUTH_BASE: http://bff-auth:${BFF_AUTH_PORT:-4001}/api/v1
+      # CI uses port 6173 - override CORS_ALLOWED for CI environment
+      CORS_ALLOWED: http://localhost:6173,http://127.0.0.1:6173
     # Mount a host folder for coverage artifacts so CI can collect them
     volumes:
       - ../../artifacts/coverage/bff-platform:/usr/src/app/coverage:rw
@@ -63,14 +65,16 @@ services:
       SERVICE_TOKEN: ${SERVICE_TOKEN:-ci-test-token}
       BFF_PLATFORM_BASE: http://bff-platform:${BFF_PLATFORM_PORT:-4000}/api/v1
       ACCESS_TOKEN_SECRET: ${ACCESS_TOKEN_SECRET:-ci-test-secret}
+      # CI uses port 6173 - override CORS_ALLOWED for CI environment
+      CORS_ALLOWED: http://localhost:6173,http://127.0.0.1:6173
     volumes:
       - ../../artifacts/coverage/bff-auth:/usr/src/app/coverage:rw
     command: sh -c "npx c8 --reporter=lcov --reporter=json --reporter=text -- npm start"
 
   ui-service:
     build:
-      context: ../apps/ui
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: apps/ui/Dockerfile
       target: production
       args:
         VITE_N8N_WEBHOOK_URL: ${VITE_N8N_WEBHOOK_URL:-/webhook/chat}
