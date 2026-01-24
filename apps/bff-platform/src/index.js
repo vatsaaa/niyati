@@ -273,6 +273,8 @@ apiRouter.post('/chat', chatAuthMiddleware, async (req, res) => {
           name: userName,
           phoneNumber: mdUser.phoneNumber || null,
           birthDate: normalizedDob || null,
+          timeOfBirth: normalizedTob || mdUser.timeOfBirth || mdUser.time_of_birth || null,
+          placeOfBirth: mdUser.placeOfBirth || mdUser.place_of_birth || mdUser.pob || null,
           age: age,
           isAdult: (age !== null) ? (age >= 18) : null,
           gender: mdUser.gender || null,

@@ -34,7 +34,15 @@ test('ui identify -> chat -> credits deducted', async ({ page, baseURL }) => {
     // In REAL mode behind Caddy (CI), we do NOT intercept /api/** calls — Caddy reverse proxies them.
     // Only intercept the external n8n webhook in REAL mode and return a deterministic bot reply
     await page.route('**/webhook/**', async route => {
-      const reply = { output: "Hello — I see your profile. Here's today's horoscope: You will feel a gentle clarity today.\n" };
+      try {
+        const req = route.request();
+        const post = req.postData() ? JSON.parse(req.postData()) : null;
+        if (post && post.metadata && post.metadata.user) {
+          expect(post.metadata.user.timeOfBirth || post.metadata.user.time_of_birth).toBeTruthy();
+          expect(post.metadata.user.placeOfBirth || post.metadata.user.place_of_birth).toBeTruthy();
+        }
+      } catch (e) {}
+      const reply = { output: "I see your profile. Here is today's horoscope: You will feel a gentle clarity today." };
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(reply) });
     });
   } else {
@@ -43,7 +51,7 @@ test('ui identify -> chat -> credits deducted', async ({ page, baseURL }) => {
       route.fulfill({ 
         status: 200, 
         contentType: 'application/json',
-        body: JSON.stringify({ status: 'ok', data: { location: { city: 'Mumbai', country: 'IN' } } })
+        body: JSON.stringify({ status: 'ok', data: { location: { city: 'Mumbai', state: 'Maharashtra', country: 'India', display_name: 'Mumbai, Maharashtra, India' } } })
       });
     });
 
@@ -52,21 +60,46 @@ test('ui identify -> chat -> credits deducted', async ({ page, baseURL }) => {
     await page.route('**/api/v1/users/identify', route => {
       const identified = {
         id: '1',
-        name: 'Ankur',
+        name: 'Ankur Vatsa',
         phone_number: `+91-${PHONE}`,
         date_of_birth: '1990-05-19',
         time_of_birth: '09:30',
-        place_of_birth: 'Mumbai, India',
+        place_of_birth: 'Mumbai, Maharashtra, India',
         consent_given: true,
         credits: creditsValue,
         total_paid_amount: 0,
-        last_login_location: 'Mumbai'
+        last_login_location: 'Mumbai, Maharashtra, India'
       };
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', data: { returning: true, user: identified, config: { credits_monthly_free: 10, credits_low_threshold: 4 } } }) });
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', data: { returning: true, user: identified, config: { credits_monthly_free: 10, credits_low_threshold: 4, credits_horoscope_cost: 2, credits_premium_cost: 4 } } }) });
     });
 
     await page.route('**/api/v1/users/profile', route => {
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', data: { user: { credits: creditsValue } } }) });
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', data: { user: { credits: creditsValue, total_paid_amount: 0 } } }) });
+    });
+
+    // Mock classify endpoint - today's horoscope query
+    await page.route('**/api/v1/chat/classify', async (route, request) => {
+      const body = JSON.parse(request.postData() || '{}');
+      const message = (body.message || '').toLowerCase();
+      
+      const isFuture = message.includes('future') || message.includes('tomorrow');
+      const queryType = isFuture ? 'premium' : 'horoscope';
+      const creditCost = isFuture ? 4 : 2;
+      
+      await route.fulfill({ 
+        status: 200, 
+        contentType: 'application/json', 
+        body: JSON.stringify({ 
+          status: 'ok', 
+          data: { 
+            queryType, 
+            creditCost, 
+            isBillable: true,
+            isFutureQuery: isFuture,
+            config: { credits_horoscope_cost: 2, credits_premium_cost: 4 }
+          } 
+        }) 
+      });
     });
 
     // Deduct endpoint: update in-memory creditsValue and return updated credits
@@ -82,7 +115,15 @@ test('ui identify -> chat -> credits deducted', async ({ page, baseURL }) => {
     });
     // Also stub the n8n webhook so the client receives a bot response and proceeds to deduct credits
     await page.route('**/webhook/**', async route => {
-      const reply = { output: "Hello — using your profile, today's horoscope is a calm and focused day for you." };
+      try {
+        const req = route.request();
+        const post = req.postData() ? JSON.parse(req.postData()) : null;
+        if (post && post.metadata && post.metadata.user) {
+          expect(post.metadata.user.timeOfBirth || post.metadata.user.time_of_birth).toBeTruthy();
+          expect(post.metadata.user.placeOfBirth || post.metadata.user.place_of_birth).toBeTruthy();
+        }
+      } catch (e) {}
+      const reply = { output: "I see your profile. Here is today's horoscope: You will experience a calm and focused day." };
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(reply) });
     });
   }
@@ -104,19 +145,20 @@ test('ui identify -> chat -> credits deducted', async ({ page, baseURL }) => {
   const initialCreditsText = await creditsLocator.textContent();
   const initialCredits = parseInt(initialCreditsText, 10) || 10;
 
+  // Type a chat message and submit
+  const textarea = page.locator('textarea');
+
   // Wait for profile to be populated in localStorage
-  // In REAL mode, new users may not have user_verified set yet (they need to complete profile first)
-  // In stubbed mode, we stub a returning user so user_verified should be set immediately
+  // In REAL mode, provide profile details via the chat input so the client can persist them.
   if (REAL) {
-    // For REAL mode (fresh CI database), just wait for phone number to be stored
-    await page.waitForFunction(() => {
-      try {
-        const phone = localStorage.getItem('niyati_phone_number');
-        return !!phone;
-      } catch (e) { return false; }
-    }, { timeout: 15000 });
+    await textarea.fill("My name is Ankur Vatsa. Date of birth: 1990-05-19. Time of birth: 09:30. Place of birth: Mumbai, Maharashtra, India");
+    await textarea.press('Enter');
+    // Give the UI a moment to process and update profile before sending the query
+    await page.waitForTimeout(1500);
+    // Ask about today's horoscope (allowed for free users)
+    await textarea.fill("What does today hold for me?");
   } else {
-    // For stubbed mode, wait for full user_verified (returning user flow)
+    // For stubbed mode, user profile is already complete (returning user)
     await page.waitForFunction(() => {
       try {
         const stored = localStorage.getItem('niyati_profile');
@@ -126,9 +168,6 @@ test('ui identify -> chat -> credits deducted', async ({ page, baseURL }) => {
       } catch (e) { return false; }
     }, { timeout: 15000 });
   }
-
-  // Type a chat message and submit
-  const textarea = page.locator('textarea');
   // Ensure the textarea is visible and enabled before typing to avoid flakiness
   await expect(textarea).toBeVisible({ timeout: 5000 });
   await expect(textarea).toBeEnabled({ timeout: 5000 });

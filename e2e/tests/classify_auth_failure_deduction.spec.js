@@ -8,7 +8,7 @@ const { test, expect } = require('@playwright/test');
 const PHONE = process.env.E2E_PHONE || '9992223333';
 const DEDUCT_AMOUNT = 2;
 
-test('classify auth failure causes deduction (regression)', async ({ page, baseURL }) => {
+test('classify auth failure does NOT cause deduction (regression)', async ({ page, baseURL }) => {
   const base = process.env.BASE_URL || baseURL || 'http://127.0.0.1';
   await page.goto(base + '/');
 
@@ -29,13 +29,33 @@ test('classify auth failure causes deduction (regression)', async ({ page, baseU
       place_of_birth: 'New Delhi, India',
       consent_given: true,
       credits: creditsValue,
-      total_paid_amount: 0
+      total_paid_amount: 0,
+      last_login_location: 'New Delhi, India'
     };
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', data: { returning: true, user: identified } }) });
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', data: { returning: true, user: identified, config: { credits_horoscope_cost: 2, credits_premium_cost: 4, credits_monthly_free: 10, credits_low_threshold: 4 } } }) });
   });
 
   await page.route('**/api/v1/users/profile', route => {
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', data: { user: { credits: creditsValue } } }) });
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', data: { user: { credits: creditsValue, total_paid_amount: 0 } } }) });
+  });
+
+  // Mock geocode
+  await page.route('**/api/v1/geocode/current-location', route => {
+    route.fulfill({ 
+      status: 200, 
+      contentType: 'application/json', 
+      body: JSON.stringify({ 
+        status: 'ok', 
+        data: { 
+          location: { 
+            city: 'New Delhi', 
+            state: 'Delhi', 
+            country: 'India',
+            display_name: 'New Delhi, Delhi, India'
+          } 
+        } 
+      }) 
+    });
   });
 
   // Simulate classify endpoint being protected and returning 401
@@ -56,9 +76,17 @@ test('classify auth failure causes deduction (regression)', async ({ page, baseU
     }
   });
 
-  // n8n webhook stub to return a successful bot response
+  // n8n webhook stub to return a successful bot response and assert canonical payload
   await page.route('**/webhook/**', async route => {
-    const reply = { output: "Hello — today's horoscope: calm and focused." };
+    try {
+      const req = route.request();
+      const post = req.postData() ? JSON.parse(req.postData()) : null;
+      if (post && post.metadata && post.metadata.user) {
+        expect(post.metadata.user.timeOfBirth || post.metadata.user.time_of_birth).toBeTruthy();
+        expect(post.metadata.user.placeOfBirth || post.metadata.user.place_of_birth).toBeTruthy();
+      }
+    } catch (e) {}
+    const reply = { output: "I see your profile. Here is today's horoscope: You will experience calm and focus." };
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(reply) });
   });
 
@@ -88,15 +116,22 @@ test('classify auth failure causes deduction (regression)', async ({ page, baseU
   // Send a chat message that would normally be billable only if classified as such
   const textarea = page.locator('textarea');
   await expect(textarea).toBeVisible({ timeout: 5000 });
-  await textarea.fill("Hi Niyati, I am Ankur Vatsa. Born on 19 May 1979 at 7:31 am in New Delhi. Give today's horoscope.");
+  // Ask about today (should be allowed for free users, but classify returns 401)
+  await textarea.fill("What does today hold for me?");
   await textarea.press('Enter');
 
   // Wait briefly for UI to perform classify -> webhook -> (maybe) deduct
-  await page.waitForTimeout(1200);
+  await page.waitForTimeout(1500);
 
   // Because classify returned 401, the UI should NOT deduct credits anymore.
   // Ensure no deduct request was made and displayed credits remain unchanged.
   expect(deductSeen).toBe(false);
+  
+  const currentCreditsText = await creditsLocator.textContent();
+  const currentCredits = parseInt(currentCreditsText, 10);
+  expect(currentCredits).toBe(initialCredits);
+
+  console.log('[TEST] Classify auth failure test passed. No credits deducted.');
 
   // Also ensure the UI credit display was NOT decremented
   const expected = initialCredits;

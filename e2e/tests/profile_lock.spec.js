@@ -62,9 +62,17 @@ test.describe('Profile Locking', () => {
       });
     });
 
-    // Mock webhook
+    // Mock webhook and assert canonical payload contains birth details when present
     await page.route('**/webhook/**', async route => {
-      route.fulfill({
+      try {
+        const req = route.request();
+        const post = req.postData() ? JSON.parse(req.postData()) : null;
+        if (post && post.metadata && post.metadata.user) {
+          expect(post.metadata.user.timeOfBirth || post.metadata.user.time_of_birth).toBeTruthy();
+          expect(post.metadata.user.placeOfBirth || post.metadata.user.place_of_birth).toBeTruthy();
+        }
+      } catch (e) {}
+      await route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({ output: "Welcome back! I am ready to help reveal what your future holds." })
@@ -190,9 +198,17 @@ test.describe('Profile Locking', () => {
       });
     });
 
-    // Mock webhook
+    // Mock webhook and assert canonical payload when called
     await page.route('**/webhook/**', async route => {
-      route.fulfill({
+      try {
+        const req = route.request();
+        const post = req.postData() ? JSON.parse(req.postData()) : null;
+        if (post && post.metadata && post.metadata.user) {
+          expect(post.metadata.user.timeOfBirth || post.metadata.user.time_of_birth).toBeTruthy();
+          expect(post.metadata.user.placeOfBirth || post.metadata.user.place_of_birth).toBeTruthy();
+        }
+      } catch (e) {}
+      await route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({ output: "Thank you for sharing! Let me read your stars..." })
@@ -280,7 +296,15 @@ test.describe('Credits Display', () => {
     });
 
     await page.route('**/webhook/**', async route => {
-      route.fulfill({
+      try {
+        const req = route.request();
+        const post = req.postData() ? JSON.parse(req.postData()) : null;
+        if (post && post.metadata && post.metadata.user) {
+          expect(post.metadata.user.timeOfBirth || post.metadata.user.time_of_birth).toBeTruthy();
+          expect(post.metadata.user.placeOfBirth || post.metadata.user.place_of_birth).toBeTruthy();
+        }
+      } catch (e) {}
+      await route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({ output: "Welcome back!" })

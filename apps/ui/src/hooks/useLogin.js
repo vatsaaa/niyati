@@ -301,9 +301,9 @@ Instructions: Welcome this returning user warmly. Keep it brief and friendly - t
         }
         // New user - welcome them and ask for their details
         const welcomeMessages = [
-          "Welcome to Niyati! I'm your personal astrology guide. To create your birth chart and reveal what destiny has in store for you, I'll need a few details. Could you please tell me your full name, date of birth, time of birth, and place of birth?",
-          "Namaste! I'm Niyati, your cosmic companion. To unveil the secrets written in your stars, please share your full name, date of birth (DD/MM/YYYY), time of birth, and birthplace.",
-          "Hello and welcome! I'm Niyati, here to help you discover your astrological destiny. To get started, could you share your name, when you were born (date and time), and where you were born?"
+          "Welcome to Niyati! I am your personal astrology guide. To create your birth chart and reveal what destiny has in store for you, I need a few details. Could you please tell me your full name, date of birth, time of birth, and place of birth?",
+          "Namaste! I am Niyati, your cosmic companion. To unveil the secrets written in your stars, please share your full name, date of birth (DD/MM/YYYY), time of birth, and birthplace.",
+          "Hello and welcome! I am Niyati, here to help you discover your astrological destiny. To get started, could you please share your name, when you were born (date and time), and where you were born?"
         ];
         const randomWelcome = welcomeMessages[Math.floor(Math.random() * welcomeMessages.length)];
         addMessage({

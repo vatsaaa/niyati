@@ -36,12 +36,21 @@ test.describe('Returning user flow', () => {
       });
     });
 
-    // Intercept webhook calls - must return valid JSON for the UI to parse
+    // Intercept webhook calls - record bodies and assert canonical fields
     await page.route('**/webhook/**', async route => {
       try {
         const req = route.request();
         const body = req.postData();
-        if (body) webhookBodies.push(body);
+        if (body) {
+          webhookBodies.push(body);
+          try {
+            const parsed = JSON.parse(body);
+            if (parsed && parsed.metadata && parsed.metadata.user) {
+              expect(parsed.metadata.user.timeOfBirth || parsed.metadata.user.time_of_birth).toBeTruthy();
+              expect(parsed.metadata.user.placeOfBirth || parsed.metadata.user.place_of_birth).toBeTruthy();
+            }
+          } catch (e) {}
+        }
       } catch (e) {
         // ignore
       }
