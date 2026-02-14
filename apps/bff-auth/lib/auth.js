@@ -538,5 +538,33 @@ router.post('/oauth/callback', async (req, res) => {
   }
 });
 
+// POST /auth/validate
+// Validates an access token (JWT) sent as Authorization: Bearer <token>.
+// Used by bff-platform's authenticateOrReject middleware to verify tokens remotely.
+// Returns the decoded user payload on success, 401 on invalid/expired/missing token.
+router.post('/validate', (req, res) => {
+  const auth = req.headers.authorization || '';
+  let token = '';
+  if (auth.startsWith('Bearer ')) token = auth.slice(7).trim();
+  if (!token) {
+    return res.sendError(RC('UNAUTHORIZED'), 'authentication_required');
+  }
+
+  try {
+    const { verifyAccessToken } = commonAuth;
+    const payload = verifyAccessToken(token);
+    if (!payload || !payload.sub) {
+      return res.sendError(RC('UNAUTHORIZED'), 'invalid_token_claims');
+    }
+    // Return the decoded user payload (sub, phone, iat, exp, etc.)
+    return res.sendSuccess({ user: payload });
+  } catch (err) {
+    if (err.name === 'TokenExpiredError') {
+      return res.sendError(RC('UNAUTHORIZED'), 'token_expired');
+    }
+    return res.sendError(RC('UNAUTHORIZED'), 'invalid_access_token');
+  }
+});
+
 module.exports = router;
 

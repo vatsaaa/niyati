@@ -18,7 +18,9 @@ describe('bff-platform users routes', () => {
         sanitize: v => v,
         ErrorCodes: responses.ErrorCodes,
         config: {},
-        dateUtils: { computeIsAdult: jest.fn(() => true) }
+        dateUtils: { computeIsAdult: jest.fn(() => true) },
+        // Passthrough auth middleware for business-logic tests
+        authenticateOrReject: (req, res, next) => next()
       };
     });
 
@@ -318,5 +320,78 @@ describe('bff-platform users routes', () => {
       expect(res.body.data.credits_monthly_free).toBe(10);
       expect(res.body.data.credits_horoscope_cost).toBe(2);
     });
+  });
+});
+
+// --- Authentication enforcement tests ---
+// These tests verify that sensitive routes reject unauthenticated requests
+// by using a REJECTING mock for authenticateOrReject.
+describe('bff-platform users auth enforcement', () => {
+  let app;
+
+  beforeEach(() => {
+    jest.resetModules();
+    process.env.SERVICE_TOKEN = '';
+
+    jest.mock('@niyati/commons', () => {
+      const responses = require('@niyati/commons/lib/responses');
+      return {
+        logger: { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn(), fatal: jest.fn(), trace: jest.fn() },
+        sanitize: v => v,
+        ErrorCodes: responses.ErrorCodes,
+        config: {},
+        dateUtils: { computeIsAdult: jest.fn(() => true) },
+        // Rejecting auth middleware — returns 401 for unauthenticated requests
+        authenticateOrReject: (req, res, next) => {
+          const auth = req.headers.authorization || '';
+          if (auth.startsWith('Bearer ')) return next();
+          return res.sendError(responses.ErrorCodes.UNAUTHORIZED, 'authentication_required');
+        }
+      };
+    });
+
+    const router = require('../lib/users');
+    const { app: testApp } = createTestApp('/api/v1/users', router);
+    app = testApp;
+  });
+
+  afterEach(() => jest.restoreAllMocks());
+
+  test('POST /deduct-credits returns 401 without auth token', async () => {
+    const res = await request(app)
+      .post('/api/v1/users/deduct-credits')
+      .send({ phoneNumber: '+911234567890', amount: 2 });
+    expect(res.statusCode).toBe(401);
+    expect(res.body.status).toBe('error');
+  });
+
+  test('POST /add-credits returns 401 without auth token', async () => {
+    const res = await request(app)
+      .post('/api/v1/users/add-credits')
+      .send({ phoneNumber: '+911234567890', amount: 50, paymentRef: 'ref-1' });
+    expect(res.statusCode).toBe(401);
+    expect(res.body.status).toBe('error');
+  });
+
+  test('POST /profile returns 401 without auth token', async () => {
+    const res = await request(app)
+      .post('/api/v1/users/profile')
+      .send({ phoneNumber: '+911234567890', name: 'Test' });
+    expect(res.statusCode).toBe(401);
+    expect(res.body.status).toBe('error');
+  });
+
+  test('GET /config remains accessible without auth', async () => {
+    const fakeDb = { async query() { return { rows: [{ key: 'credits_monthly_free', value: '10' }] }; } };
+    app.set('db', fakeDb);
+    const res = await request(app).get('/api/v1/users/config');
+    expect(res.statusCode).toBe(200);
+  });
+
+  test('GET /lookup remains accessible without auth (service-to-service)', async () => {
+    const fakeDb = { async query() { return { rows: [], rowCount: 0 }; } };
+    app.set('db', fakeDb);
+    const res = await request(app).get('/api/v1/users/lookup').query({ phoneNumber: '+911234567890' });
+    expect(res.statusCode).toBe(200);
   });
 });

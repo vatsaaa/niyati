@@ -14,7 +14,8 @@ describe('NLP merge behavior (profile extractor router)', () => {
         sanitize: v => v,
         ErrorCodes: responses.ErrorCodes,
         config: {},
-        dateUtils: { computeIsAdult: jest.fn(() => true) }
+        dateUtils: { computeIsAdult: jest.fn(() => true) },
+        authenticateOrReject: (req, res, next) => next()
       };
     });
 

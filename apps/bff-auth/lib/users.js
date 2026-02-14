@@ -5,6 +5,10 @@ function RC(codeName) { const r = _responses(); return r && r.ErrorCodes && r.Er
 const router = express.Router();
 const axios = require('axios');
 
+// JWT issuance for phone-based identification
+const { auth: commonAuth } = require('@niyati/commons');
+const { createAccessToken } = commonAuth;
+
 // Helper to validate phone number (basic)
 function isValidPhone(phone) {
     // Allow +[1-9] followed by digits, spaces, hyphens
@@ -179,9 +183,13 @@ router.post('/identify', async (req, res) => {
             if (resp && resp.data && resp.data.status === 'ok') {
                 const user = resp.data.data ? resp.data.data.user : null;
                 if (user) {
-                    return res.sendSuccess({ returning: true, user });
+                    // Issue access token for authenticated session
+                    const access_token = createAccessToken({ sub: user.id || user.user_id, phone: phoneNumber });
+                    return res.sendSuccess({ returning: true, user, access_token });
                 }
-                return res.sendSuccess({ returning: false });
+                // New user: issue token keyed on phone (no DB record yet)
+                const access_token = createAccessToken({ sub: phoneNumber, phone: phoneNumber });
+                return res.sendSuccess({ returning: false, access_token });
             }
 
             return res.sendError(RC('PROVIDER_ERROR'), 'lookup_failed');

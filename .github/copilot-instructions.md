@@ -26,6 +26,33 @@ Worker ← Redis (queue) — handles async jobs (email, etc.)
 - **Backend**: Node.js + Express (CommonJS: `require`/`module.exports`)
 - **n8n**: Runs locally on port 5678 (NOT containerized in dev/prod). Handles AI orchestration, conversation memory, LLM prompt control.
 
+### Authentication Flow
+
+**bff-auth is the authentication module.** It issues JWT access tokens on `POST /users/identify`.
+
+1. UI calls `POST /api/v1/users/identify` (→ bff-auth) with phone number
+2. bff-auth looks up user, returns `{ returning, user?, access_token }` — JWT signed with `ACCESS_TOKEN_SECRET`
+3. UI stores token in `sessionStorage` + memory (`services/authToken.js`)
+4. `bffFetch()` automatically attaches `Authorization: Bearer <token>` on all subsequent API calls
+5. bff-platform validates token via `authenticateOrReject` middleware (→ calls `POST /auth/validate` on bff-auth)
+6. Sensitive routes (deduct-credits, add-credits, profile, profile/extract) reject unauthenticated requests with 401
+
+**Protected routes** (require `Authorization: Bearer <token>`):
+- `POST /users/deduct-credits` — credit deduction
+- `POST /users/add-credits` — credit addition
+- `POST /users/profile` — profile save/update
+- `POST /profile/extract` — NLP profile field extraction
+- `POST /chat` — chat messages (via bff-platform)
+
+**Public routes** (no auth required):
+- `POST /users/identify` — user lookup + token issuance (via bff-auth)
+- `GET /users/config` — app configuration
+- `POST /chat/classify` — query classification (lightweight, no side effects)
+- `GET /geocode/*` — geocoding
+- `GET /telemetry/health` — health check
+- `POST /users/sync` — service-to-service (X-Service-Token)
+- `GET /users/lookup` — service-to-service
+
 ### Caddy Routing (order matters)
 
 | Path | Destination | Notes |
@@ -599,7 +626,62 @@ When you need to make changes to Niyati:
 
 - **Caddy routing**: `/api/v1/users/*` → bff-auth, EXCEPT `deduct-credits` and `add-credits` → bff-platform
 - **bffFetch paths**: Use `/users/profile` NOT `/api/v1/users/profile` (buildApiUrl adds the prefix)
+- **bffFetch auth**: Automatically attaches `Authorization: Bearer` from `authToken.js` — no manual header needed
 - **vitest**: Hoisted to root `node_modules/`; UI uses `npx vitest` in its test script
 - **Compose files**: All in `infra/`, not at project root
 - **Env files**: All in `infra/`, not at project root
 - **Both BFFs share the same Postgres DB** — bff-platform can write to auth tables directly
+- **authenticateOrReject middleware**: Applied to sensitive bff-platform routes. In test mocks, include `authenticateOrReject: (req, res, next) => next()` for passthrough
+
+## Git Workflow (Protected master)
+
+`master` is protected — direct pushes are forbidden. All changes go through Pull Requests.
+
+### For AI Agents: Commit and Push Flow
+
+```bash
+# 1. Create feature branch (NOT on master)
+git checkout -b fix/my-feature-description
+
+# 2. Check what changed
+git status --short
+git diff --stat HEAD
+
+# 3. SECURITY CHECK: scan for leaked secrets (only docs references OK)
+git diff HEAD -- . ':!package-lock.json' | grep -iE "(password|secret|token|api.key|private.key)" | grep "^+"
+
+# 4. Verify .gitignore covers sensitive files
+git ls-files --cached -- 'infra/.env' 'infra/secrets/'
+
+# 5. Stage and commit (Conventional Commits format)
+git add -A
+git commit -m "fix: brief description
+
+- Detail 1
+- Detail 2"
+
+# 6. Push feature branch
+git push origin fix/my-feature-description
+
+# 7. Create PR using gh-CLI (write body to temp file to avoid escaping issues)
+gh pr create \
+  --base master \
+  --head fix/my-feature-description \
+  --title "fix: brief description" \
+  --body-file /tmp/pr-body.md
+
+# 8. Check CI status
+gh pr checks fix/my-feature-description
+
+# 9. After CI passes, merge
+gh pr merge fix/my-feature-description --squash --delete-branch
+
+# 10. Clean up: return to master
+git checkout master && git pull
+```
+
+### Required Checks
+
+- **Full Stack Tests** CI job must pass before merge
+- Run `./scripts/ci-run-tests.sh` locally before opening PRs
+- Never push directly to `master`

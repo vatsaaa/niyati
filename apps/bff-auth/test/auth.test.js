@@ -99,4 +99,38 @@ describe('auth routes', () => {
     expect(res.statusCode).toBe(401);
     expect(res.body.status).toBe('error');
   });
+
+  // --- POST /auth/validate ---
+
+  test('POST /validate returns user for valid access token', async () => {
+    const { createAccessToken } = require('@niyati/commons').auth;
+    const token = createAccessToken({ sub: 'user-42', phone: '+911234567890' });
+
+    const res = await request(app)
+      .post('/api/v1/auth/validate')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.status).toBe('ok');
+    expect(res.body.data).toHaveProperty('user');
+    expect(res.body.data.user).toHaveProperty('sub', 'user-42');
+    expect(res.body.data.user).toHaveProperty('phone', '+911234567890');
+  });
+
+  test('POST /validate returns 401 without token', async () => {
+    const res = await request(app)
+      .post('/api/v1/auth/validate');
+
+    expect(res.statusCode).toBe(401);
+    expect(res.body.status).toBe('error');
+  });
+
+  test('POST /validate returns 401 for expired/invalid token', async () => {
+    const res = await request(app)
+      .post('/api/v1/auth/validate')
+      .set('Authorization', 'Bearer invalid.token.here');
+
+    expect(res.statusCode).toBe(401);
+    expect(res.body.status).toBe('error');
+  });
 });
