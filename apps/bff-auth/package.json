@@ -9,6 +9,7 @@
     "test": "jest --config jest.config.cjs --runInBand"
   },
   "dependencies": {
+    "@niyati/auth-core": "file:../../packages/auth-core",
     "@niyati/commons": "file:../../packages/commons",
     "axios": "^1.5.0",
     "bcryptjs": "^2.4.3",

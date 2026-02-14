@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Sparkles, Phone, ChevronDown } from 'lucide-react';
+import { setAccessToken } from '../services/authToken';
 
 const LoginForm = ({
   onLogin,
@@ -54,16 +55,22 @@ const LoginForm = ({
         });
         if (res && res.ok) {
           const payload = await res.json();
-          if (payload && payload.status === 'ok' && payload.data && payload.data.returning) {
-            // Ensure the consent checkbox value is forwarded for returning users
-            const identified = payload.data.user || {};
-            try {
-              identified.consent_given = !!consentChecked;
-            } catch (e) {
-              // ignore
+          if (payload && payload.status === 'ok' && payload.data) {
+            // Store access token for authenticated API calls
+            if (payload.data.access_token) {
+              setAccessToken(payload.data.access_token);
             }
-            // Pass identified user and config back to parent login handler
-            return onLogin(tempPhone, selectedCountry, identified, payload.data.config || null);
+            if (payload.data.returning) {
+              // Ensure the consent checkbox value is forwarded for returning users
+              const identified = payload.data.user || {};
+              try {
+                identified.consent_given = !!consentChecked;
+              } catch (e) {
+                // ignore
+              }
+              // Pass identified user and config back to parent login handler
+              return onLogin(tempPhone, selectedCountry, identified, payload.data.config || null);
+            }
           }
         }
       } catch (e) {

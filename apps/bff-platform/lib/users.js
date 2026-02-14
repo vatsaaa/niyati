@@ -1,8 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const axios = require('axios');
-const { logger, sanitize, ErrorCodes, config } = require('@niyati/commons');
+const commons = require('@niyati/commons');
+const { logger, sanitize, ErrorCodes, config } = commons;
 const { classify, getQueryCreditCost, getQueryType } = require('./nlpClassifier');
+
+// Auth middleware for sensitive routes (deduct-credits, add-credits, profile)
+// Falls back to passthrough only if authenticateOrReject is not available (e.g. misconfigured commons)
+const authMiddleware = commons.authenticateOrReject || ((req, res, next) => next());
 
 // Cache for app_config values (refresh every 5 minutes)
 let configCache = {};
@@ -255,7 +260,8 @@ router.post('/identify', async (req, res) => {
 
 // POST /users/profile
 // Body: profile object for saving/updating user profile
-router.post('/profile', async (req, res) => {
+// Requires authentication (Bearer token)
+router.post('/profile', authMiddleware, async (req, res) => {
   try {
     const profile = req.body || {};
     if (!profile.phoneNumber) {
@@ -437,7 +443,8 @@ router.get('/lookup', async (req, res) => {
 // Body: { phoneNumber: "+91-9899162012", amount: 2, queryType: "horoscope" | "premium" }
 // Headers: x-idempotency-key (required for idempotent deductions)
 // Deducts credits after a successful query response
-router.post('/deduct-credits', async (req, res) => {
+// Requires authentication (Bearer token)
+router.post('/deduct-credits', authMiddleware, async (req, res) => {
   try {
     const phone = (req.body.phoneNumber || '').trim();
     const amount = parseInt(req.body.amount, 10) || 2;
@@ -623,7 +630,8 @@ router.post('/can-ask', async (req, res) => {
 // POST /users/add-credits
 // Body: { phoneNumber: "+91-9899162012", amount: 500 } (amount in INR)
 // Adds credits after payment verification
-router.post('/add-credits', async (req, res) => {
+// Requires authentication (Bearer token)
+router.post('/add-credits', authMiddleware, async (req, res) => {
   try {
     const phone = (req.body.phoneNumber || '').trim();
     const amountINR = parseInt(req.body.amount, 10) || 0;

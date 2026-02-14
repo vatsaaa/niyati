@@ -6,6 +6,7 @@ describe('users routes', () => {
 
   beforeEach(() => {
     jest.resetModules();
+    process.env.ACCESS_TOKEN_SECRET = 'testsecret';
     // Use real response helpers; mock logger only
     jest.mock('@niyati/commons/lib/logger', () => ({ logger: { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn(), fatal: jest.fn(), trace: jest.fn(),  error: jest.fn(), info: jest.fn() } }));
 
@@ -78,6 +79,41 @@ describe('users routes', () => {
     const res = await request(app).post('/api/v1/users/identify').send({ phoneNumber: '+12345678' });
     expect(res.statusCode).toBe(200);
     expect(res.body.status).toBe('ok');
-    expect(res.body.data).toEqual({ returning: false });
+    expect(res.body.data).toHaveProperty('returning', false);
+    expect(res.body.data).toHaveProperty('access_token');
+  });
+
+  // --- access_token issuance on identify ---
+
+  test('POST /identify returns access_token for returning user', async () => {
+    process.env.ACCESS_TOKEN_SECRET = 'testsecret';
+    const axios = require('axios');
+    axios.get = jest.fn().mockResolvedValue({
+      data: { status: 'ok', data: { user: { id: 'uuid-7', phone_number: '+919876543210', name: 'Returning User', credits: 8 } } }
+    });
+
+    const res = await request(app).post('/api/v1/users/identify').send({ phoneNumber: '+919876543210' });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.status).toBe('ok');
+    expect(res.body.data).toHaveProperty('returning', true);
+    expect(res.body.data).toHaveProperty('access_token');
+    expect(typeof res.body.data.access_token).toBe('string');
+    expect(res.body.data.access_token.length).toBeGreaterThan(10);
+    // Token should be a valid JWT (3 dot-separated parts)
+    expect(res.body.data.access_token.split('.')).toHaveLength(3);
+  });
+
+  test('POST /identify returns access_token for new user', async () => {
+    process.env.ACCESS_TOKEN_SECRET = 'testsecret';
+    const axios = require('axios');
+    axios.get = jest.fn().mockResolvedValue({ data: { status: 'ok', data: null } });
+
+    const res = await request(app).post('/api/v1/users/identify').send({ phoneNumber: '+919876543211' });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.status).toBe('ok');
+    expect(res.body.data).toHaveProperty('returning', false);
+    expect(res.body.data).toHaveProperty('access_token');
+    expect(typeof res.body.data.access_token).toBe('string');
+    expect(res.body.data.access_token.split('.')).toHaveLength(3);
   });
 });

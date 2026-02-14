@@ -11,7 +11,11 @@
 
 const express = require('express');
 const router = express.Router();
-const { logger, sanitize, ErrorCodes } = require('@niyati/commons');
+const commons = require('@niyati/commons');
+const { logger, sanitize, ErrorCodes } = commons;
+
+// Auth middleware for profile extraction (requires Bearer token)
+const authMiddleware = commons.authenticateOrReject || ((req, res, next) => next());
 // reuse existing NLP.js classifier in the platform
 let nlpClassifier = null;
 try {
@@ -278,8 +282,9 @@ async function tryNlpJsExtract(text) {
 /**
  * POST /extract
  * Extract profile fields from natural language text
+ * Requires authentication (Bearer token)
  */
-router.post('/extract', async (req, res) => {
+router.post('/extract', authMiddleware, async (req, res) => {
   try {
     const { text } = req.body;
     

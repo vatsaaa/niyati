@@ -37,12 +37,13 @@ AI-powered conversational astrology platform delivering personalized horoscopes,
 ┌─────────────┐     ┌─────────────┐     ┌──────────────┐     ┌─────────────┐
 │   Browser   │────▶│    Caddy    │────▶│ bff-platform │────▶│     n8n     │
 │  (React UI) │◀────│  (Reverse   │◀────│  (Express)   │◀────│  (AI Agent) │
-│   Vite/PWA  │     │   Proxy)    │     └──────────────┘     └──────┬──────┘
-└─────────────┘     │  :5173/80   │     ┌──────────────┐            │
-                    │             │────▶│   bff-auth   │     ┌──────▼──────┐
-                    └─────────────┘     │  (Express)   │     │   Ollama    │
-                                        └──────┬───────┘     │  (Llama3.1) │
-                                               │             └─────────────┘
+│   Vite/PWA  │     │   Proxy)    │     │  🔒 Auth MW  │     └──────┬──────┘
+└─────────────┘     │  :5173/80   │     └──────────────┘            │
+                    │             │     ┌──────────────┐     ┌──────▼──────┐
+                    │             │────▶│   bff-auth   │     │   Ollama    │
+                    └─────────────┘     │  (Express)   │     │  (Llama3.1) │
+                                        │  🔑 JWT issuer│     └─────────────┘
+                                        └──────┬───────┘
                     ┌─────────────┐     ┌──────▼───────┐
                     │   Worker    │◀────│   Redis      │
                     │ (jobs/email)│     │  :6379       │
@@ -53,6 +54,8 @@ AI-powered conversational astrology platform delivering personalized horoscopes,
                                         └──────────────┘
 ```
 
+**Authentication Flow**: bff-auth issues JWT access tokens on `POST /users/identify`. The UI stores the token and sends it as `Authorization: Bearer <token>` on all subsequent API calls. bff-platform validates tokens via `authenticateOrReject` middleware (calls `POST /auth/validate` on bff-auth) before processing sensitive routes (deduct-credits, add-credits, profile, profile/extract).
+
 ### Message & Data Flow
 
 #### New User Onboarding
@@ -60,14 +63,15 @@ AI-powered conversational astrology platform delivering personalized horoscopes,
 ```
 1. User opens app → Caddy serves React SPA from /srv
 2. User enters phone + consent → UI calls POST /api/v1/users/identify (→ bff-auth)
-3. bff-auth looks up user in DB → returns { returning: false } for new users
-4. UI shows welcome message, begins conversational profile collection
-5. User provides name, DOB, TOB, place of birth in natural language
-6. UI calls POST /api/v1/profile/extract (→ bff-platform) for NLP extraction
-7. Profile fields extracted → UI displays in sidebar, asks for missing fields
-8. All fields collected → UI calls POST /api/v1/users/profile (→ bff-platform)
-9. bff-platform upserts user_profiles, user_credits, AND users tables
-10. UI shows PayQR for non-paid users (₹500 for 50 credits)
+3. bff-auth looks up user in DB → returns { returning: false, access_token: "<JWT>" }
+4. UI stores access_token (sessionStorage + memory) for authenticated API calls
+5. UI shows welcome message, begins conversational profile collection
+6. User provides name, DOB, TOB, place of birth in natural language
+7. UI calls POST /api/v1/profile/extract (→ bff-platform, 🔒 Bearer token) for NLP extraction
+8. Profile fields extracted → UI displays in sidebar, asks for missing fields
+9. All fields collected → UI calls POST /api/v1/users/profile (→ bff-platform, 🔒 Bearer token)
+10. bff-platform validates token via bff-auth, then upserts user_profiles, user_credits, AND users tables
+11. UI shows PayQR for non-paid users (₹500 for 50 credits)
 ```
 
 #### Chat & Billing Flow
@@ -79,8 +83,8 @@ AI-powered conversational astrology platform delivering personalized horoscopes,
    - casual (greetings, profile info) → isBillable: false, cost: 0
    - horoscope (zodiac, rashifal)     → isBillable: true,  cost: 2
    - premium (birth chart, remedies)  → isBillable: true,  cost: 4
-4. If isBillable → UI calls POST /api/v1/users/deduct-credits (→ bff-platform)
-5. bff-platform deducts from DB → returns updated balance
+4. If isBillable → UI calls POST /api/v1/users/deduct-credits (→ bff-platform, 🔒 Bearer token)
+5. bff-platform validates token, deducts from DB → returns updated balance
 6. UI displays AI response + server-confirmed credit balance
 ```
 
@@ -88,12 +92,13 @@ AI-powered conversational astrology platform delivering personalized horoscopes,
 
 ```
 1. User enters phone → POST /api/v1/users/identify (→ bff-auth)
-2. bff-auth returns { returning: true, user: { name, credits, ... } }
-3. UI calls GET /api/v1/geocode/current-location (→ bff-platform)
-4. UI compares current location with last_login_location
-5. UI calls n8n webhook with user context → receives personalized greeting
-6. If n8n fails → UI generates local fallback greeting
-7. UI calls POST /api/v1/users/profile (→ bff-platform) to update last_login_location
+2. bff-auth returns { returning: true, user: { name, credits, ... }, access_token: "<JWT>" }
+3. UI stores access_token for authenticated API calls
+4. UI calls GET /api/v1/geocode/current-location (→ bff-platform)
+5. UI compares current location with last_login_location
+6. UI calls n8n webhook with user context → receives personalized greeting
+7. If n8n fails → UI generates local fallback greeting
+8. UI calls POST /api/v1/users/profile (→ bff-platform, 🔒 Bearer token) to update last_login_location
 ```
 
 ### Caddy Routing Rules
@@ -892,3 +897,110 @@ docker exec -i niyati-postgres-prod psql -U niyati -d niyati_prod \
 # Full CI
 ./scripts/ci-run-tests.sh
 ```
+
+---
+
+## Contributing: Git Workflow
+
+The `master` branch is **protected** — direct pushes are forbidden. All changes go through Pull Requests with required CI checks.
+
+### Prerequisites
+
+```bash
+# Verify git and GitHub CLI are installed
+git --version       # >= 2.x
+gh --version        # >= 2.x (install: brew install gh)
+
+# Authenticate gh-CLI with your GitHub account (one-time setup)
+gh auth login       # Follow the interactive prompt (HTTPS recommended)
+```
+
+### Step-by-Step: Commit and Push Changes
+
+```bash
+# 1. Make sure you're on a feature branch (NOT master)
+#    If on master, create a new branch from your current state
+git checkout -b fix/my-feature-description
+
+# 2. Check what files have changed
+git status --short
+
+# 3. Review the diff for unintended changes
+git diff --stat HEAD
+
+# 4. SECURITY CHECK: scan diff for leaked secrets before committing
+#    Only documentation references should appear, never actual passwords/keys
+git diff HEAD -- . ':!package-lock.json' | grep -iE "(password|secret|token|api.key|private.key)" | grep "^+"
+
+# 5. Verify .gitignore covers sensitive files (should show NO output)
+git ls-files --cached -- 'infra/.env' 'infra/secrets/'
+
+# 6. Stage all changes
+git add -A
+
+# 7. Commit with a descriptive message (Conventional Commits format)
+#    Types: fix, feat, docs, refactor, test, chore, ci
+git commit -m "fix: brief description of change
+
+- Detail 1: what was changed and why
+- Detail 2: another change in this commit
+- Detail 3: tests added/updated"
+
+# 8. Push the feature branch to remote
+git push origin fix/my-feature-description
+```
+
+### Step-by-Step: Open a Pull Request
+
+```bash
+# 9. Create PR using gh-CLI
+#    --base: target branch (always master)
+#    --head: your feature branch
+#    --title: PR title (matches commit message convention)
+#    --body-file: markdown file with PR description (or use --body for inline)
+gh pr create \
+  --base master \
+  --head fix/my-feature-description \
+  --title "fix: brief description of change" \
+  --body-file /path/to/pr-body.md
+
+# Alternative: create PR with inline body
+gh pr create \
+  --base master \
+  --head fix/my-feature-description \
+  --title "fix: brief description of change" \
+  --body "## Summary
+Describe the changes here.
+
+### Testing
+- All bff-platform tests: N passed
+- All bff-auth tests: N passed
+- All UI tests: N passed"
+
+# 10. Check PR status and CI results
+gh pr status                              # Overview of your PRs
+gh pr checks fix/my-feature-description   # View CI check results
+gh pr view fix/my-feature-description     # View PR details in terminal
+
+# 11. After CI passes and review approved, merge the PR
+#     Squash merge is the default strategy for feature branches
+gh pr merge fix/my-feature-description --squash --delete-branch
+```
+
+### Required Checks
+
+Before a PR can be merged:
+- **Full Stack Tests** CI job must pass (`./scripts/ci-run-tests.sh`)
+- This includes: backend unit tests (bff-platform, bff-auth), E2E Playwright tests
+
+### Quick Reference
+
+| Task | Command |
+|------|---------|
+| Create branch | `git checkout -b fix/description` |
+| Stage + commit | `git add -A && git commit -m "fix: description"` |
+| Push branch | `git push origin fix/description` |
+| Create PR | `gh pr create --base master --head fix/description --title "fix: description"` |
+| Check CI status | `gh pr checks fix/description` |
+| Merge PR | `gh pr merge fix/description --squash --delete-branch` |
+| Return to master | `git checkout master && git pull` |
