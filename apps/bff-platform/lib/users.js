@@ -344,6 +344,51 @@ router.post('/profile', async (req, res) => {
       return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'credits_upsert_failed');
     }
 
+    // Also upsert into auth `users` table so /internal/users/lookup works.
+    // Caddy routes /api/v1/users/profile here (bff-platform) rather than bff-auth,
+    // so we must ensure the auth identity row exists in the same shared database.
+    try {
+      const upsertAuthUsersSql = `
+        INSERT INTO users (phone_number, name, date_of_birth, time_of_birth, place_of_birth, lat, lon, timezone, consent_given, consent_date, credits, is_adult, last_login_location, last_login_lat, last_login_lon, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CASE WHEN $9 THEN now() ELSE NULL END, $10, $11, $12, $13, $14, now(), now())
+        ON CONFLICT (phone_number) DO UPDATE SET
+          name = COALESCE(EXCLUDED.name, users.name),
+          date_of_birth = COALESCE(EXCLUDED.date_of_birth, users.date_of_birth),
+          time_of_birth = COALESCE(EXCLUDED.time_of_birth, users.time_of_birth),
+          place_of_birth = COALESCE(EXCLUDED.place_of_birth, users.place_of_birth),
+          lat = COALESCE(EXCLUDED.lat, users.lat),
+          lon = COALESCE(EXCLUDED.lon, users.lon),
+          timezone = COALESCE(EXCLUDED.timezone, users.timezone),
+          consent_given = COALESCE(EXCLUDED.consent_given, users.consent_given),
+          is_adult = COALESCE(EXCLUDED.is_adult, users.is_adult),
+          last_login_location = COALESCE(EXCLUDED.last_login_location, users.last_login_location),
+          last_login_lat = COALESCE(EXCLUDED.last_login_lat, users.last_login_lat),
+          last_login_lon = COALESCE(EXCLUDED.last_login_lon, users.last_login_lon),
+          updated_at = now()
+        RETURNING id, phone_number, name
+      `;
+      const authParams = [
+        profile.phoneNumber,
+        profile.name || null,
+        profile.dateOfBirth || null,
+        profile.timeOfBirth || null,
+        profile.placeOfBirth || null,
+        profile.lat ? parseFloat(profile.lat) : null,
+        profile.lon ? parseFloat(profile.lon) : null,
+        profile.timezone || null,
+        profile.consentGiven !== undefined ? !!profile.consentGiven : null,
+        creditsResult.rows[0].credits ?? 10,
+        profileResult.rows[0].is_adult ?? null,
+        normalizedLastLoginLocation,
+        profile.last_login_lat ? parseFloat(profile.last_login_lat) : null,
+        profile.last_login_lon ? parseFloat(profile.last_login_lon) : null
+      ];
+      await db.query(upsertAuthUsersSql, authParams);
+      logger.info({ msg: 'users.profile.auth_users_upserted', phone: profile.phoneNumber });
+    } catch (authErr) {
+      logger.warn({ msg: 'users.profile.auth_users_upsert_failed', phone: profile.phoneNumber, err: authErr && authErr.message });
+    }
+
     logger.info({ msg: 'users.profile.success', phone: profile.phoneNumber, user_id: profileResult.rows[0].user_id });
     return res.sendSuccess({ user: Object.assign({}, profileResult.rows[0], creditsResult.rows[0]) });
   } catch (err) {

@@ -125,7 +125,7 @@ export async function processCompleteProfile(profile, countries, phoneNumber) {
   };
 
   if (persistPayload.phoneNumber) {
-    await bffFetchWithRetry('/users/profile', {
+    await bffFetchWithRetry('/api/v1/users/profile', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(persistPayload),

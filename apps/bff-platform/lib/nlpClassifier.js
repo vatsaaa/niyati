@@ -227,5 +227,52 @@ module.exports = {
   isTodayQuestion,
   getQueryType,
   getQueryCreditCost,
-  classify // for backward compatibility
+  classify, // for backward compatibility
+  // Additional helpers for compatibility with legacy tests and callers
+  isAstrologyRelated,
+  getInsufficientCreditsMessage,
+  getExhaustedCreditsMessage
 };
+
+/**
+ * Helper: Check if question is astrology-related (synchronous)
+ */
+function isAstrologyRelated(text) {
+  if (!text || typeof text !== 'string') return false;
+  const t = text.toLowerCase();
+  const astrologyKeywords = [
+    'horoscope', 'zodiac', 'astrology', 'star', 'planet', 'birth chart', 'kundali',
+    'rashi', 'nakshatra', 'dasha', 'transit', 'moon sign', 'sun sign', 'ascendant',
+    'lagna', 'graha', 'mangal', 'shani', 'rahu', 'ketu', 'jupiter', 'venus', 'mars',
+    'saturn', 'mercury', 'prediction', 'prophecy', 'destiny', 'fate', 'fortune',
+    'lucky', 'auspicious', 'muhurat', 'marriage', 'married', 'marry', 'career', 
+    'job', 'promotion', 'health', 'wealth', 'money', 'finance',
+    'love', 'relationship', 'compatibility', 'future', 'past life', 'karma',
+    'children', 'child', 'baby', 'pregnant', 'travel', 'abroad', 'immigration'
+  ];
+  return astrologyKeywords.some(keyword => t.includes(keyword));
+}
+
+/**
+ * Generate varied insufficient credits message (synchronous)
+ */
+function getInsufficientCreditsMessage(credits, needed) {
+  const messages = [
+    `You have ${credits} credits remaining, but this question requires ${needed} credits. Please add more credits to continue exploring your cosmic journey.`,
+    `This insight requires ${needed} credits, and you have ${credits}. Consider upgrading to unlock deeper astrological wisdom.`,
+    `I'd love to help with this, but you need ${needed} credits (you have ${credits}). Add credits to continue your celestial exploration.`
+  ];
+  return messages[Math.floor(Math.random() * messages.length)];
+}
+
+/**
+ * Generate varied exhausted credits message (synchronous)
+ */
+function getExhaustedCreditsMessage() {
+  const messages = [
+    "You've used all your credits for this month. The stars will await your return! Consider upgrading for continued cosmic guidance.",
+    "Your monthly credits have been fully explored. Upgrade to a paid subscription to continue your astrological journey.",
+    "All credits have been used. To keep unveiling what destiny holds, please add more credits or upgrade your subscription."
+  ];
+  return messages[Math.floor(Math.random() * messages.length)];
+}

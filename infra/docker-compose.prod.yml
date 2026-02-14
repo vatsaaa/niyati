@@ -64,7 +64,7 @@ services:
       ACCESS_TOKEN_SECRET_FILE: /run/secrets/access_token_secret
       SMTP_USER: ${SMTP_USER}
       SMTP_PASSWORD: ${SMTP_PASSWORD}
-      CORS_ALLOWED: ${CORS_ALLOWED}
+      CORS_ALLOWED: ${CORS_ALLOWED:-http://localhost:5173,http://localhost}
       ALLOW_CROSS_SITE_COOKIES: ${ALLOW_CROSS_SITE_COOKIES:-false}
     restart: always
 
@@ -81,7 +81,7 @@ services:
     environment:
       <<: *prod-env
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
-      CORS_ALLOWED: ${CORS_ALLOWED}
+      CORS_ALLOWED: ${CORS_ALLOWED:-http://localhost:5173,http://localhost}
       ALLOW_CROSS_SITE_COOKIES: ${ALLOW_CROSS_SITE_COOKIES:-false}
     restart: always
 

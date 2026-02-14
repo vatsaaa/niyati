@@ -34,6 +34,43 @@ describe('users routes', () => {
     expect(res.body.data.created).toBe(false);
   });
 
+  test('POST /profile creates auth users row for new phone-based user', async () => {
+    const axios = require('axios');
+    // Platform lookup returns no user (new user)
+    axios.get = jest.fn().mockResolvedValue({ data: { status: 'ok', data: { user: null } } });
+    // Platform sync succeeds
+    axios.post = jest.fn().mockResolvedValue({ data: { status: 'ok', data: { user: { user_id: 'uuid-1', phone_number: '+919000000001', credits: 10 } } } });
+
+    // Mock db.query to capture INSERT INTO users
+    const queryCalls = [];
+    const mockDb = { query: jest.fn(async (sql, params) => {
+      queryCalls.push({ sql, params });
+      if (sql.includes('INSERT INTO users')) {
+        return { rows: [{ id: 'auth-uuid-1', phone_number: '+919000000001', name: 'Test User' }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    }) };
+    app.set('db', mockDb);
+
+    const res = await request(app).post('/api/v1/users/profile').send({
+      phoneNumber: '+919000000001',
+      name: 'Test User',
+      dateOfBirth: '1990-01-01',
+      timeOfBirth: '09:00',
+      placeOfBirth: 'Delhi',
+      consentGiven: true
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.status).toBe('ok');
+    expect(res.body.data.created).toBe(true);
+
+    // Verify that INSERT INTO users was called
+    const insertCall = queryCalls.find(c => c.sql.includes('INSERT INTO users'));
+    expect(insertCall).toBeDefined();
+    expect(insertCall.params).toContain('+919000000001');
+  });
+
   test('POST /identify returns returning false when lookup returns no user', async () => {
     const axios = require('axios');
     axios.get = jest.fn().mockResolvedValue({ data: { status: 'ok', data: null } });

@@ -1,179 +1,185 @@
 # 🌟 Niyati
 
-AI-powered conversational astrology platform delivering personalized horoscopes, birth-chart insights, and guidance through chat-based interactions.
+AI-powered conversational astrology platform delivering personalized horoscopes, birth-chart insights, and guidance through natural-language chat.
 
 > **⚠️ Development Standards**
 > - **TDD/BDD is MANDATORY** — No code without tests first
-> - **Database is IMMUTABLE** — No `UPDATE`, no `ALTER`. Always idempotent.
-> - **Infrastructure is ISOLATED** — Dev, CI, Prod use non-overlapping ports/networks/volumes
+> - **Database is IMMUTABLE** — No `UPDATE`, no `ALTER`. Always idempotent, from scratch.
+> - **Infrastructure is ISOLATED** — Dev, CI, Prod use non-overlapping ports, networks, volumes
 > - **Tests are INDEPENDENT** — Run via CI scripts, deploy scripts, or standalone
+
+---
 
 ## Table of Contents
 
 - [Architecture](#architecture)
+- [Project Structure](#project-structure)
 - [Quick Start](#quick-start)
-- [Components](#components)
-  - [PostgreSQL Database](#1-postgresql-database)
-  - [Redis Cache](#2-redis-cache)
-  - [MailHog SMTP](#3-mailhog-smtp-server)
-  - [Caddy Proxy](#4-caddy-reverse-proxy)
-  - [n8n Workflow Automation](#5-n8n-workflow-automation)
-  - [ngrok Tunnel](#6-ngrok-tunnel)
-  - [Backend Services](#7-backend-services)
-  - [Frontend UI](#8-frontend-ui-react)
-- [Environment Variables](#environment-variables)
-- [Docker Commands Reference](#docker-commands-reference)
-- [Scripts Reference](#scripts-reference)
+- [Deployment](#deployment)
+- [Stop, Start & Restart](#stop-start--restart)
 - [Testing](#testing)
-- [Production Deployment](#production-deployment)
+- [User Flow Specification](#user-flow-specification)
 - [API Reference](#api-reference)
-- [Specifications](#specifications)
+- [Credits & Billing](#credits--billing)
+- [Database](#database)
+- [Infrastructure & Configuration](#infrastructure--configuration)
+- [Scripts Reference](#scripts-reference)
 - [PWA Features](#pwa-features)
-- [Roadmap & TODOs](#roadmap--todos)
 - [Troubleshooting](#troubleshooting)
-
-## Design: Keep the Client Lightweight (BFF-first)
-
-Purpose: make the UI a thin collector and renderer while moving business logic, policy, and billing to trusted servers (BFF / `bff-platform` + `n8n`). This reduces client complexity, improves security, and centralizes audit/logging and feature flags.
-
-- Server/BFF First
-  - Add a small backend endpoint (extend `apps/bff-platform`) that accepts UI payloads, normalizes metadata (ISO `dateOfBirth`, `timeOfBirth`, `placeOfBirth`, `userName`), computes derived fields (`age`, `ageConfirmed`) and stores authoritative state.
-  - The BFF should decide `isSystemContext` for system-initiated messages and return a short canonical payload to the UI for display.
-  - The BFF forwards a canonical, validated request to `n8n` so the workflow always receives consistent, server-validated data.
-
-- `n8n` as Orchestrator (not Validator)
-  - Keep `n8n` focused on conversation orchestration, memory persistence (age, dob, name) and LLM prompt control.
-  - Post-process LLM outputs in `n8n` to sanitize stage directions (e.g., strip `*smiles*`) and to produce an explicit `isBillable` flag for each outgoing response.
-  - Persist computed fields into the workflow memory node before the agent executes (ensures agent sees authoritative state).
-
-- Centralize Billing & Charge Decisions Server-side
-  - Only BFF or `n8n` should decrement credits after validating `isBillable` and message type.
-  - UI must never perform the authoritative charge; it may show optimistic UI but waits for server confirmation before committing locally.
-  - Charge endpoints must be idempotent (use `reqId` or request tokens) to avoid double deductions during retries.
-
-- UI Responsibilities (keep them tiny)
-  - Collect and minimally validate inputs (format DOB to ISO `YYYY-MM-DD`, basic syntactic checks).
-  - Attach lightweight hints (e.g., `isSystemContext: true`) for system-originated messages but treat hints as non-authoritative.
-  - Send canonical payload to BFF (not directly to `n8n`).
-  - Render messages and defensively sanitize outputs (strip `*stage directions*`) for display only.
-  - Fetch credit balance from backend; display server-confirmed balances.
-
-- Auth, Trust & Observability
-  - Use short-lived tokens / session IDs so backend can validate and tie requests to sessions.
-  - Log parsed DOB/age and `isBillable` decisions server-side for audits. Add feature flags to toggle heuristics safely.
-
-- Quick migration path (minimal changes)
-  1. Add a BFF endpoint: `POST /api/v1/chat/proxy` that accepts UI payloads and returns canonical payload plus `isBillable` and credit balance.
-  2. Update `apps/ui/src/hooks/useChat.js` to call the BFF instead of posting directly to `n8n`.
-  3. Move age computation + persistence + billing-gate logic to BFF and/or `n8n` (pre-agent memory persistence).
-  4. UI renders server-provided `isBillable` and updated credit-balance values returned by the BFF.
-
-- Minimal BFF endpoint spec (example)
-  - Request: `POST /api/v1/chat/proxy`
-    ```json
-    {
-      "reqId": "<client-session-reqid>",
-      "message": "<user or system message text>",
-      "sessionId": "<user-session-id>",
-      "metadata": {
-        "userName": "Ankur Vatsa",
-        "dateOfBirth": "1979-05-19",
-        "timeOfBirth": "07:30",
-        "placeOfBirth": "New Delhi",
-        "isSystemContext": true
-      }
-    }
-    ```
-  - Response: `200 OK`
-    ```json
-    {
-      "reqId": "<same-reqid>",
-      "forwardedToN8n": true,
-      "n8nResponse": { "output": "...", "isBillable": false },
-      "credits": 12
-    }
-    ```
-
-- Testing checklist
-  - Send initial system greeting (with DOB). Verify BFF computes `age`, sets `ageConfirmed`, persists it (or forwards to `n8n` memory), and returns `isBillable=false` and no credit deduction.
-  - Reply with redundant confirmations ("Yes, I'm over 18"). Verify no credits deducted and `ageConfirmed` remains in memory.
-  - Send an actual horoscope question. Verify `isBillable=true` is returned and credits are deducted by server-side billing.
-
-Rationale: this pattern centralizes sensitive logic (billing, age computation) on trusted servers, making the UI easier to maintain and safer to operate in production.
-
 
 ---
 
 ## Architecture
 
-```
-                    ┌────────────────────────────────────┐
-                    │       Frontend (UI) :5173          │
-                    │       React + Vite + Tailwind      │
-                    └───────────────┬────────────────────┘
-                                    │
-              ┌─────────────────────┴─────────────────────┐
-  ┌───────────▼─────────────┐                 ┌───────────▼─────────────┐
-  │   BFF Auth :3001        │                 │   BFF Platform :3000    │
-  │   • Login/Register      │                 │   • Geocoding           │
-  │   • JWT Tokens          │                 │   • Astrology APIs      │
-  │   • Password Reset      │                 │   • Telemetry           │
-  └───────────┬─────────────┘                 └───────────┬─────────────┘
-              │                                           │
-              └─────────────────┬─────────────────────────┘
-                                |
-                  ┌─────────────▼─────────────┐
-                  │   PostgreSQL :5432        │
-                  │   Users, Sessions, OAuth  │
-                  └───────────────────────────┘
+### System Overview
 
-┌─────────────────────────────────────────────────────────────────────┐
-│                     Supporting Services                             │
-├─────────────────────────────────────────────────────────────────────┤
-│  Redis :6379      │  MailHog :8025/:1025  │  ngrok (dev webhooks)   │
-│  Cache/Sessions   │  Dev Email Capture    │  Tunnel for n8n         │
-├─────────────────────────────────────────────────────────────────────┤
-│         n8n :5678  ◄──────────►  Ollama (Llama3.1)                  │
-│         Workflow Automation      Local LLM for AI features          │
-└─────────────────────────────────────────────────────────────────────┘
+```
+┌─────────────┐     ┌─────────────┐     ┌──────────────┐     ┌─────────────┐
+│   Browser   │────▶│    Caddy    │────▶│ bff-platform │────▶│     n8n     │
+│  (React UI) │◀────│  (Reverse   │◀────│  (Express)   │◀────│  (AI Agent) │
+│   Vite/PWA  │     │   Proxy)    │     └──────────────┘     └──────┬──────┘
+└─────────────┘     │  :5173/80   │     ┌──────────────┐            │
+                    │             │────▶│   bff-auth   │     ┌──────▼──────┐
+                    └─────────────┘     │  (Express)   │     │   Ollama    │
+                                        └──────┬───────┘     │  (Llama3.1) │
+                                               │             └─────────────┘
+                    ┌─────────────┐     ┌──────▼───────┐
+                    │   Worker    │◀────│   Redis      │
+                    │ (jobs/email)│     │  :6379       │
+                    └─────────────┘     └──────────────┘
+                                        ┌──────────────┐
+                                        │  PostgreSQL  │
+                                        │  :5432       │
+                                        └──────────────┘
 ```
 
-## Component Interaction
+### Message & Data Flow
+
+#### New User Onboarding
+
 ```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   Browser   │────▶│    Caddy    │────▶│ bff-platform│────▶│     n8n     │
-│  (React UI) │◀────│  (Reverse   │◀────│  (Express)  │◀────│  (AI Agent) │
-└─────────────┘     │   Proxy)    │     └─────────────┘     └─────────────┘
-                    │             │     ┌─────────────┐     ┌─────────────┐
-                    │             │────▶│  bff-auth   │────▶│  PostgreSQL │
-                    └─────────────┘     │  (Express)  │     └─────────────┘
-                                        └─────────────┘     ┌─────────────┐
-                                        ┌─────────────┐     │    Redis    │
-                                        │   Worker    │◀────│   (Queue)   │
-                                        └─────────────┘     └─────────────┘
+1. User opens app → Caddy serves React SPA from /srv
+2. User enters phone + consent → UI calls POST /api/v1/users/identify (→ bff-auth)
+3. bff-auth looks up user in DB → returns { returning: false } for new users
+4. UI shows welcome message, begins conversational profile collection
+5. User provides name, DOB, TOB, place of birth in natural language
+6. UI calls POST /api/v1/profile/extract (→ bff-platform) for NLP extraction
+7. Profile fields extracted → UI displays in sidebar, asks for missing fields
+8. All fields collected → UI calls POST /api/v1/users/profile (→ bff-platform)
+9. bff-platform upserts user_profiles, user_credits, AND users tables
+10. UI shows PayQR for non-paid users (₹500 for 50 credits)
 ```
 
-### Project Structure
+#### Chat & Billing Flow
+
+```
+1. User sends message → UI sends directly to n8n webhook → receives AI response
+2. UI calls POST /api/v1/chat/classify (→ bff-platform) with { message }
+3. bff-platform classifies query:
+   - casual (greetings, profile info) → isBillable: false, cost: 0
+   - horoscope (zodiac, rashifal)     → isBillable: true,  cost: 2
+   - premium (birth chart, remedies)  → isBillable: true,  cost: 4
+4. If isBillable → UI calls POST /api/v1/users/deduct-credits (→ bff-platform)
+5. bff-platform deducts from DB → returns updated balance
+6. UI displays AI response + server-confirmed credit balance
+```
+
+#### Returning User Login
+
+```
+1. User enters phone → POST /api/v1/users/identify (→ bff-auth)
+2. bff-auth returns { returning: true, user: { name, credits, ... } }
+3. UI calls GET /api/v1/geocode/current-location (→ bff-platform)
+4. UI compares current location with last_login_location
+5. UI calls n8n webhook with user context → receives personalized greeting
+6. If n8n fails → UI generates local fallback greeting
+7. UI calls POST /api/v1/users/profile (→ bff-platform) to update last_login_location
+```
+
+### Caddy Routing Rules
+
+Caddy reverse-proxies API requests based on path. Order matters:
+
+| Path | Destination | Purpose |
+|------|-------------|---------|
+| `/api/v1/users/deduct-credits` | **bff-platform:3000** | Credit deduction (explicit override) |
+| `/api/v1/users/add-credits` | **bff-platform:3000** | Credit addition (explicit override) |
+| `/api/v1/users/*` | **bff-auth:3001** | All other user ops (identify, profile, etc.) |
+| `/api/v1/auth/*` | **bff-auth:3001** | Authentication |
+| `/webhook/*` | **n8n:5678** | AI webhook (host.docker.internal in dev/prod) |
+| `/api/*` | **bff-platform:3000** | Everything else (chat, geocode, astrology, profile, telemetry) |
+| `/*` | Static files `/srv` | React SPA with `try_files` fallback |
+
+> **Note**: Both bff-platform and bff-auth define `/users/profile` and `/users/identify` endpoints. Through Caddy, only the **bff-auth** versions are hit for identify. However, `/api/v1/users/profile` is also handled by bff-platform (which Caddy routes to bff-auth, which then syncs with bff-platform). The bff-platform POST `/users/profile` is called directly by the UI via the catch-all `/api/*` route when the full path `/api/v1/users/profile` is used from specific UI flows.
+
+### BFF-First Design Philosophy
+
+The UI is a **thin rendering layer**. All business logic, billing, and validation happens server-side:
+
+| ❌ Never in UI | ✅ Always in BFF |
+|----------------|-----------------|
+| NLP / text classification | `/chat/classify` endpoint |
+| Credit calculations | `/users/deduct-credits` returns balance |
+| Date parsing / normalization | BFF normalizes to ISO format |
+| Complex validation | BFF validates and returns errors |
+| Direct DB queries | All data through BFF endpoints |
+| Profile field extraction | `/profile/extract` uses server-side NLP |
+
+---
+
+## Project Structure
 
 ```
 niyati/
+├── .github/
+│   ├── workflows/              # GitHub Actions (thin wrappers calling scripts/)
+│   │   ├── ci.yml              # Main CI → calls scripts/ci-run-tests.sh
+│   │   ├── ui-deploy.yml       # UI deployment to S3/CloudFront
+│   │   └── security.yml        # Security scanning
+│   └── copilot-instructions.md # AI agent development guide
 ├── apps/
-│   ├── bff-auth/        # Auth service (port 3001)
-│   ├── bff-platform/    # Platform service (port 3000)
-│   ├── ui/              # React frontend (port 5173)
-│   └── worker/          # Background jobs processor
+│   ├── bff-platform/           # Main BFF service (port 3000)
+│   │   ├── lib/                # Route handlers (users, chat, geocode, astrology, profile)
+│   │   ├── services/           # External service integrations (astrology, geocode)
+│   │   ├── src/index.js        # Express app entry point
+│   │   └── test/               # Jest unit tests
+│   ├── bff-auth/               # Auth service (port 3001)
+│   │   ├── lib/                # Route handlers (auth, users, internal, oauth)
+│   │   ├── src/index.js        # Express app entry point
+│   │   └── test/               # Jest unit tests
+│   ├── ui/                     # React + Vite frontend (port 5173)
+│   │   ├── src/hooks/          # useChat, useLogin, useAppState, usePWA
+│   │   ├── src/services/       # API client (bffFetch, bffFetchWithRetry)
+│   │   ├── src/utils/          # Profile extraction, date normalization
+│   │   └── test/               # Vitest unit tests
+│   ├── n8n/                    # n8n workflow definition
+│   │   └── NiyatiWorkflow.json # AI agent workflow (import into n8n)
+│   └── worker/                 # Background job processor
+│       └── worker.js           # Redis queue consumer (email, webhooks)
 ├── packages/
-│   ├── commons/         # Shared libraries (workspace dependency)
-│   └── migrations/      # SQL database migrations
-├── infra/               # Infrastructure and orchestration
-│   ├── docker-compose.yml
-│   ├── docker-compose.prod.yml
-│   ├── docker-compose.ci.yml
-│   ├── Caddyfile
-│   └── .env.example
-├── scripts/             # DevOps and automation scripts
-├── secrets/             # Production secrets (gitignored)
-└── e2e/                 # Playwright end-to-end tests
+│   ├── commons/                # Shared: logger, sanitize, ErrorCodes, config
+│   │   └── test/helpers.js     # createTestApp, createMockDb, createMockCommons
+│   └── migrations/             # SQL migrations (YYYYMMDD_NN_desc.up.sql)
+├── infra/                      # Infrastructure & orchestration
+│   ├── docker-compose.yml      # Base service definitions
+│   ├── docker-compose.override.yml  # Dev defaults (hot reload, local ports)
+│   ├── docker-compose.prod.yml # Production (fixed names, secrets, HTTPS)
+│   ├── docker-compose.ci.yml   # CI (different ports, mock n8n, coverage)
+│   ├── Caddyfile               # Production reverse proxy config
+│   ├── Caddyfile.dev           # Development reverse proxy config
+│   ├── .env                    # Production environment (gitignored)
+│   ├── .env.example            # Template for .env
+│   └── secrets/                # Docker secrets (gitignored)
+├── e2e/                        # Playwright end-to-end tests
+│   └── tests/                  # 11 spec files
+├── scripts/                    # All automation (CI/CD logic lives here, NOT in YAML)
+│   ├── lib/common.sh           # Shared bash library (22 functions)
+│   ├── ci-run-tests.sh         # Full CI: backend + E2E tests
+│   ├── deploy_niyati.sh        # Deployment management (9 actions)
+│   ├── db.sh                   # Database management
+│   ├── mock-n8n.js             # Mock n8n for CI (canned AI responses)
+│   └── ...                     # smoke_test.sh, docker-dev.sh, etc.
+└── README.md
 ```
 
 ---
@@ -182,1048 +188,707 @@ niyati/
 
 ### Prerequisites
 
-- **Docker** and **Docker Compose** (required)
-- **Ollama** for AI features ([ollama.ai](https://ollama.ai)) - required for chat
-- **n8n** for workflow automation - required for AI responses
+- **Docker** and **Docker Compose** v2+ (required)
+- **Node.js** v20+ and npm (for local test runs)
+- **Ollama** for AI features ([ollama.ai](https://ollama.ai))
+- **n8n** for workflow automation (`npm install -g n8n`)
 
-### 1. Clone and Configure
+### 1. Clone & Configure
 
 ```bash
 git clone https://github.com/vatsaaa/niyati.git
 cd niyati
 
-# Run setup script (creates .env files from examples)
-./scripts/docker-setup.sh
-
-# Edit environment files with your API keys
-nano .env
+# Copy example env and edit with your keys
+cp infra/.env.example infra/.env
+nano infra/.env
 ```
 
-### 2. Start All Services
+### 2. Start All Services (Development)
 
 ```bash
-# Stop any existing containers, rebuild, and start fresh
-docker compose down --remove-orphans
-docker compose up -d --build --force-recreate
+# Fresh start with all services
+./scripts/deploy_niyati.sh --env=dev --action=fresh -y
 
-# Verify services are running
-docker compose ps
+# Or manually:
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.override.yml up -d --build
 ```
 
 ### 3. Verify Health
 
 ```bash
-curl http://localhost:3001/api/v1/telemetry/health  # Auth service
-curl http://localhost:3000/api/v1/telemetry/health  # Platform service
+# Check all services
+./scripts/deploy_niyati.sh --action=status
+
+# Or individual health endpoints
+curl http://localhost:3000/api/v1/telemetry/health  # bff-platform
+curl http://localhost:3001/api/v1/telemetry/health  # bff-auth
+curl http://localhost:5173/                          # UI via Caddy
 ```
 
-### 4. Access the Application
+### 4. Start AI Services (required for chat)
+
+```bash
+# Terminal 1: Ollama
+ollama pull llama3.1 && ollama serve
+
+# Terminal 2: n8n
+n8n start
+# Open http://localhost:5678, import apps/n8n/NiyatiWorkflow.json
+```
+
+### 5. Access the Application
 
 | Service | URL | Description |
 |---------|-----|-------------|
-| **UI** | http://localhost:5173 | React frontend |
-| **Auth API** | http://localhost:3001 | Authentication service |
-| **Platform API** | http://localhost:3000 | Business logic service |
-| **MailHog** | http://localhost:8025 | Dev email capture |
+| **UI** | http://localhost:5173 | React app via Caddy |
+| **bff-platform** | http://localhost:3000 | Platform API (direct) |
+| **bff-auth** | http://localhost:3001 | Auth API (direct) |
+| **n8n** | http://localhost:5678 | Workflow editor |
 | **PostgreSQL** | localhost:5432 | Database |
-| **Redis** | localhost:6379 | Cache |
+| **Redis** | localhost:6379 | Cache / job queue |
+| **MailHog** | http://localhost:8025 | Dev email capture |
 
-### 5. Start AI Services (Required for Chat)
+---
+
+## Deployment
+
+All deployment is managed through `scripts/deploy_niyati.sh`. Infrastructure compose files live in `infra/`.
+
+### Actions
+
+| Action | Command | Description |
+|--------|---------|-------------|
+| **deploy** | `./scripts/deploy_niyati.sh --env=prod --action=deploy` | Build, migrate, start |
+| **fresh** | `./scripts/deploy_niyati.sh --env=prod --action=fresh -y` | Clean everything, rebuild from scratch |
+| **restart** | `./scripts/deploy_niyati.sh --env=prod --action=restart` | Restart all services |
+| **restart one** | `./scripts/deploy_niyati.sh --env=prod --action=restart --service=bff-platform` | Restart specific service |
+| **rebuild** | `./scripts/deploy_niyati.sh --env=prod --action=rebuild` | Force rebuild (no-cache) then start |
+| **migrate** | `./scripts/deploy_niyati.sh --env=prod --action=migrate` | Apply DB migrations only |
+| **status** | `./scripts/deploy_niyati.sh --action=status` | Show status of all services |
+| **verify** | `./scripts/deploy_niyati.sh --env=prod --action=verify` | Health checks + config verification |
+| **stop** | `./scripts/deploy_niyati.sh --env=prod --action=stop` | Stop all services |
+| **clean** | `./scripts/deploy_niyati.sh --env=prod --action=clean -y` | Remove containers, volumes, networks |
+
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `--env=dev\|prod` | Target environment (required for most actions) |
+| `--service=<name>` | Target specific service (for restart) |
+| `--component=<name>` | Component to verify (for verify: all/postgres/redis/bff-platform/bff-auth/ui/caddy/worker) |
+| `--dry-run` | Print commands without executing |
+| `--verbose` | Detailed output |
+| `-y, --yes` | Non-interactive (auto-confirm) |
+| `--skip-checks` | Skip pre-deploy validation |
+| `--skip-health` | Skip post-deploy health verification |
+| `--no-start` | With fresh: wipe but don't start |
+| `--quick` | Health-only verification (~30s) |
+| `--run-tests` | Run smoke tests during verify (~2min) |
+| `--deep` | Deep verification with E2E tests (~5-10min) |
+| `--log-file=PATH` | Write logs to file |
+| `--project-name=NAME` | Override Docker project name |
+
+### Deployment Examples
 
 ```bash
-# Terminal 1: Run Ollama with Llama3.1
-ollama pull llama3.1 && ollama serve
+# === PRODUCTION ===
 
-# Terminal 2: Start ngrok tunnel for webhooks
-ngrok http 5678
+# Full fresh production deployment (most common for first deploy or reset)
+./scripts/deploy_niyati.sh --env=prod --action=fresh -y --verbose
 
-# Terminal 3: Start n8n with webhook URL
-WEBHOOK_URL=https://your-ngrok-url.ngrok-free.app n8n start
+# Deploy incremental changes (rebuild + migrate + restart)
+./scripts/deploy_niyati.sh --env=prod --action=deploy
+
+# Rebuild only bff-platform after code changes
+./scripts/deploy_niyati.sh --env=prod --action=restart --service=bff-platform
+
+# Run migrations after adding new .up.sql file
+./scripts/deploy_niyati.sh --env=prod --action=migrate
+
+# Verify everything is healthy
+./scripts/deploy_niyati.sh --env=prod --action=verify --quick
+
+# === DEVELOPMENT ===
+
+# Fresh dev environment
+./scripts/deploy_niyati.sh --env=dev --action=fresh -y
+
+# Just start (if already built)
+./scripts/deploy_niyati.sh --env=dev --action=deploy
+
+# === CI (automated) ===
+./scripts/ci-run-tests.sh              # Full CI (backend + E2E)
+./scripts/ci-run-tests.sh --skip-e2e   # Backend only (faster)
 ```
 
 ---
 
-## Components
+## Stop, Start & Restart
 
-### 1. PostgreSQL Database
-
-PostgreSQL 15 stores users, sessions, OAuth accounts, and application data.
-
-#### Setup
+### Stop All Services
 
 ```bash
-# Start PostgreSQL
-docker compose up -d postgres
+# Graceful stop (preserves data volumes)
+./scripts/deploy_niyati.sh --env=prod --action=stop
 
-# Wait for healthy status
-docker compose ps postgres
+# Or with docker compose directly
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml down
 ```
 
-#### Migrations
-
-Migration files are in `packages/migrations/` with naming convention: `YYYYMMDD_NN_description.up.sql`
-
-> [!IMPORTANT]
-> **Idempotent Migration Strategy**: All DDL and DML must be idempotent.
-> - Use `CREATE TABLE IF NOT EXISTS`.
-> - Use `INSERT INTO ... ON CONFLICT DO NOTHING`.
-> - **STRICTLY FORBIDDEN**: `UPDATE` and `ALTER` statements.
-> - Schema changes require new migration files — rebuild from scratch.
-> - Data fixes use `INSERT ... ON CONFLICT` patterns, never `UPDATE`.
->
-> **Why?** The database should be reproducible from scratch at any time. This ensures:
-> - Consistent environments across dev, CI, prod
-> - Easy rollbacks (just rebuild)
-> - No state drift between environments
-> - Simpler debugging and testing
-
-**Correct Migration Patterns:**
-```sql
--- ✅ CORRECT: Idempotent table creation
-CREATE TABLE IF NOT EXISTS users (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  phone_number VARCHAR(20) UNIQUE NOT NULL
-);
-
--- ✅ CORRECT: Idempotent index
-CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone_number);
-
--- ✅ CORRECT: Idempotent seed data
-INSERT INTO app_config (key, value) VALUES ('credits_monthly_free', '10')
-ON CONFLICT (key) DO NOTHING;
-
--- ❌ FORBIDDEN: Will be rejected in code review
-ALTER TABLE users ADD COLUMN new_field VARCHAR(100);
-UPDATE users SET credits = 0;
-```
+### Start Again (after stop)
 
 ```bash
-# Apply migrations manually
-docker exec -i niyati-postgres-prod psql -U niyati -d niyati_dev < packages/migrations/20251217_01_baseline.up.sql
+# Start existing containers (no rebuild)
+./scripts/deploy_niyati.sh --env=prod --action=deploy
 
-# Or use the migration runner
-./scripts/db.sh migrate
+# Or directly
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml up -d
 ```
 
-#### Database Operations
+### Restart Specific Services
 
 ```bash
-# Connect to PostgreSQL shell
-docker compose exec postgres psql -U niyati -d niyati_dev
+# Restart a single service
+./scripts/deploy_niyati.sh --env=prod --action=restart --service=bff-platform
+./scripts/deploy_niyati.sh --env=prod --action=restart --service=bff-auth
+./scripts/deploy_niyati.sh --env=prod --action=restart --service=caddy
 
-# Check database health
-./scripts/db.sh health
-
-# Backup database
-./scripts/db.sh backup backup.sql
-
-# Restore from backup
-./scripts/db.sh restore backup.sql
-
-# Reset database (WARNING: destructive)
-./scripts/db.sh reset
+# Restart all
+./scripts/deploy_niyati.sh --env=prod --action=restart
 ```
 
-#### Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `POSTGRES_USER` | `niyati` | Database user |
-| `POSTGRES_PASSWORD` | (secret) | Database password |
-| `POSTGRES_DB` | `niyati_dev` | Database name |
-| `POSTGRES_PORT` | `5432` | Database port |
-| `POSTGRES_MAX_CONNECTIONS` | `100` | Max connections |
-| `POSTGRES_SHARED_BUFFERS` | `256MB` | Shared buffer size |
-
----
-
-### 2. Redis Cache
-
-Redis 7 provides caching for sessions, rate limiting, and background job queues.
-
-#### Setup
+### Full Clean Restart (destructive — destroys data)
 
 ```bash
-# Start Redis
-docker compose up -d redis
+# Wipe everything and start over
+./scripts/deploy_niyati.sh --env=prod --action=fresh -y --verbose
 
-# Verify
-docker compose exec redis redis-cli ping
+# Or just clean without starting
+./scripts/deploy_niyati.sh --env=prod --action=clean -y
 ```
 
-#### Stop
+### View Logs
 
 ```bash
-docker compose stop redis
+# All services
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml logs -f
+
+# Specific service
+docker logs -f niyati-bff-platform-prod
+docker logs -f niyati-caddy-prod
+docker logs -f niyati-postgres-prod
 ```
-
-#### Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `REDIS_URL` | `redis://redis:6379` | Redis connection URL |
-| `REDIS_HOST` | `redis` | Redis hostname |
-| `REDIS_PORT` | `6379` | Redis port |
-
----
-
-### 3. MailHog SMTP Server
-
-MailHog captures all outgoing emails in development for testing without sending real emails.
-
-#### Setup
-
-```bash
-# Start MailHog (dev profile)
-docker compose --profile dev up -d mailhog
-```
-
-#### Access
-
-- **Web UI**: http://localhost:8025 (view captured emails)
-- **SMTP**: localhost:1025 (send emails)
-
-#### Stop
-
-```bash
-docker compose stop mailhog
-```
-
-#### Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `MAILHOG_WEB_PORT` | `8025` | Web UI port |
-| `MAILHOG_SMTP_PORT` | `1025` | SMTP port |
-| `SMTP_HOST` | `mailhog` | SMTP host for dev |
-
----
-
-### 4. Caddy Reverse Proxy
-
-Caddy handles HTTP/HTTPS routing, SSL termination, and serves the UI static files.
-
-#### Setup
-
-```bash
-# Caddy starts automatically with docker compose
-docker compose up -d caddy
-```
-
-#### Configuration
-
-Edit `Caddyfile` to modify routing rules:
-
-```caddyfile
-:5173 {
-    # API routes to backend
-    handle /api/v1/auth/* {
-        reverse_proxy bff-auth:3001
-    }
-    handle /api/* {
-        reverse_proxy bff-platform:3000
-    }
-    # Everything else to UI
-    handle {
-        reverse_proxy ui-service:80
-    }
-}
-```
-
-#### Stop
-
-```bash
-docker compose stop caddy
-```
-
-#### Environment Variables (Production)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DOMAIN` | `localhost` | Production domain |
-| `CADDY_EMAIL` | `admin@example.com` | Let's Encrypt email |
-| `CADDY_HTTP_PORT` | `5173` | HTTP port |
-
----
-
-### 5. n8n Workflow Automation
-
-n8n orchestrates AI chat workflows, connecting user messages to Ollama LLM and handling responses.
-
-#### Local Setup (Development)
-
-```bash
-# Install n8n globally
-npm install -g n8n
-
-# Start n8n
-n8n start
-
-# Access at http://localhost:5678
-```
-
-#### Import Workflow
-
-1. Open n8n at http://localhost:5678
-2. Import workflow from `apps/bff-platform/n8n/NiyatiWorkflow.json` (or your local path)
-3. Configure the webhook URL in the workflow
-
-#### Mock n8n (CI)
-
-For CI testing, a mock n8n service is available:
-
-```bash
-# Start with CI config (includes mock n8n)
-docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d
-```
-
-The mock service runs `scripts/mock-n8n.js` which returns canned responses.
-
-#### Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `N8N_WEBHOOK_URL` | `/webhook/chat` | n8n webhook endpoint |
-| `VITE_N8N_WEBHOOK_URL` | `/webhook/chat` | Frontend webhook URL |
-
----
-
-### 6. ngrok Tunnel
-
-ngrok exposes local services to the internet for webhook testing and mobile development.
-
-#### Setup
-
-```bash
-# Install ngrok
-brew install ngrok  # macOS
-
-# Add auth token
-ngrok config add-authtoken YOUR_TOKEN
-
-# Start tunnel for n8n
-ngrok http 5678
-```
-
-#### Configuration
-
-Create `ngrok.yml` for multiple tunnels:
-
-```yaml
-tunnels:
-  n8n:
-    proto: http
-    addr: 5678
-  ui:
-    proto: http
-    addr: 5173
-```
-
-Start all tunnels:
-```bash
-ngrok start --all --config=ngrok.yml
-```
-
-#### Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `NGROK_AUTH_TOKEN` | (empty) | ngrok authentication token |
-
----
-
-### 7. Backend Services
-
-#### bff-auth (Port 3001)
-
-Authentication service handling user registration, login, JWT tokens, and password reset.
-
-```bash
-# Start auth service
-docker compose up -d bff-auth
-
-# View logs
-docker compose logs -f bff-auth
-
-# Run tests
-cd apps/bff-auth && npm test
-```
-
-**API Endpoints:**
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/auth/register` | POST | Register new user |
-| `/api/v1/auth/login` | POST | Login user |
-| `/api/v1/auth/token` | POST | Refresh access token |
-| `/api/v1/auth/logout` | POST | Logout user |
-| `/api/v1/auth/me` | GET | Get current user profile |
-| `/api/v1/auth/request-password-reset` | POST | Request password reset |
-| `/api/v1/auth/reset-password` | POST | Reset password |
-| `/api/v1/telemetry/health` | GET | Health check |
-
-#### bff-platform (Port 3000)
-
-Business logic service for geocoding, astrology calculations, user profiles, and credits.
-
-```bash
-# Start platform service
-docker compose up -d bff-platform
-
-# View logs
-docker compose logs -f bff-platform
-
-# Run tests
-cd apps/bff-platform && npm test
-```
-
-**API Endpoints:**
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/users/identify` | POST | Identify user by phone |
-| `/api/v1/users/profile` | POST | Create/update profile |
-| `/api/v1/users/deduct-credits` | POST | Deduct user credits |
-| `/api/v1/users/add-credits` | POST | Add credits (payment) |
-| `/api/v1/users/config` | GET | Get app configuration |
-| `/api/v1/geocode` | POST | Geocode location |
-| `/api/v1/geocode/current-location` | GET | Get current location |
-| `/api/v1/astrology/compute` | POST | Calculate birth chart |
-| `/api/v1/feedback` | POST | Submit feedback |
-| `/api/v1/telemetry/health` | GET | Health check |
-
-#### commons
-
-Shared libraries used by both BFF services.
-
-```bash
-# Run commons tests
-cd packages/commons && npm test
-```
-
-#### worker
-
-Background job processor for email sending, payment reconciliation, and scheduled tasks.
-
-```bash
-# Start worker (production profile)
-docker compose --profile production up -d worker
-
-# View logs
-docker compose logs -f worker
-```
-
----
-
-### 8. Frontend UI (React)
-
-React single-page application with Vite, TailwindCSS, and PWA support.
-
-#### Setup
-
-```bash
-# Start UI service
-docker compose up -d ui-service
-
-# Or run locally for development
-cd apps/ui && npm install && npm run dev
-```
-
-#### Build
-
-```bash
-# Production build
-cd ui && npm run build
-
-# Preview build
-cd ui && npm run preview
-```
-
-#### Test
-
-```bash
-cd ui && npm test
-```
-
-#### Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `VITE_BFF_BASE_URL` | (empty) | API base URL |
-| `VITE_N8N_WEBHOOK_URL` | `/webhook/chat` | n8n webhook URL |
-| `VITE_DEBUG_MODE` | `false` | Enable debug mode |
-| `VITE_API_URL` | `/api` | API path prefix |
-
----
-
-## Environment Variables
-
-All environment variables are configured in the root `.env` file.
-
-### Core Settings
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `NODE_ENV` | `development` | Environment mode |
-| `BUILD_TARGET` | `development` | Docker build target |
-| `IMAGE_TAG` | `local` | Docker image tag |
-| `API_VERSION` | `v1` | API version prefix |
-
-### Port Configuration
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `BFF_PLATFORM_PORT` | `3000` | Platform service port |
-| `BFF_AUTH_PORT` | `3001` | Auth service port |
-| `UI_DEV_PORT` | `5173` | UI development port |
-| `UI_PROD_PORT` | `80` | UI production port |
-| `POSTGRES_PORT` | `5432` | PostgreSQL port |
-| `REDIS_PORT` | `6379` | Redis port |
-
-### Security
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ACCESS_TOKEN_SECRET` | (required) | JWT signing secret |
-| `REFRESH_TOKEN_TTL_MS` | `2592000000` | Refresh token TTL (30 days) |
-| `PASSWORD_RESET_TTL_MS` | `3600000` | Password reset TTL (1 hour) |
-
-### External APIs
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ASTRO_API_URL` | `https://json.freeastrologyapi.com` | Astrology API |
-| `ASTRO_API_KEY` | (required) | Astrology API key |
-| `GEOCODE_MAPS_KEY` | (required) | Geocode.maps.co API key |
-| `GEOCODE_CACHE_TTL` | `86400` | Geocode cache TTL (24h) |
-
-### Rate Limiting
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `RATE_LIMIT_WINDOW_MS` | `60000` | Rate limit window |
-| `RATE_LIMIT_MAX_REQUESTS` | `100` | Max requests per window |
-| `STRICT_RATE_LIMIT_MAX_REQUESTS` | `20` | Strict limit for sensitive endpoints |
-
-### CORS
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CORS_ALLOWED` | `http://localhost:5173` | Allowed origins |
-| `ALLOW_CROSS_SITE_COOKIES` | `false` | Allow cross-site cookies |
-
-### Logging
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `LOG_LEVEL` | `debug` | Log level (debug/info/warn/error) |
-| `LOG_PRETTY_PRINT` | `true` | Pretty print logs (dev only) |
-
----
-
-## Docker Commands Reference
-
-### Start Services
-
-| Command | Description |
-|---------|-------------|
-| `docker compose up -d` | Start all dev services |
-| `docker compose up -d --build` | Start with rebuild |
-| `docker compose up -d --build --force-recreate` | Fresh start |
-| `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d` | Start production |
-| `docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d` | Start for CI |
-
-### Stop Services
-
-| Command | Description |
-|---------|-------------|
-| `docker compose down` | Stop all services |
-| `docker compose down -v` | Stop and remove volumes |
-| `docker compose down --rmi all` | Stop and remove images |
-| `docker compose down -v --rmi all --remove-orphans` | Full cleanup |
-
-### Monitor Services
-
-| Command | Description |
-|---------|-------------|
-| `docker compose ps` | List running services |
-| `docker compose logs -f` | View all logs |
-| `docker compose logs -f bff-auth` | View specific service logs |
-
-### Single Service Operations
-
-| Command | Description |
-|---------|-------------|
-| `docker compose up -d postgres` | Start single service |
-| `docker compose stop bff-auth` | Stop single service |
-| `docker compose restart bff-platform` | Restart service |
-| `docker compose build --no-cache ui-service` | Rebuild service |
-
----
-
-## Scripts Reference
-
-### scripts/docker-setup.sh
-Initial setup script that creates environment files from examples.
-
-```bash
-./scripts/docker-setup.sh
-```
-
-### scripts/docker-dev.sh
-Development helper for common Docker operations.
-
-```bash
-./scripts/docker-dev.sh up       # Start dev services
-./scripts/docker-dev.sh down     # Stop services
-./scripts/docker-dev.sh logs     # View logs
-./scripts/docker-dev.sh build    # Rebuild all
-./scripts/docker-dev.sh clean    # Stop + remove volumes
-./scripts/docker-dev.sh health   # Check health
-./scripts/docker-dev.sh shell-bff # Shell into BFF container
-```
-
-### scripts/db.sh
-Database management operations.
-
-```bash
-./scripts/db.sh start    # Start PostgreSQL
-./scripts/db.sh stop     # Stop PostgreSQL
-./scripts/db.sh health   # Check health
-./scripts/db.sh psql     # Connect to shell
-./scripts/db.sh migrate  # Run migrations
-./scripts/db.sh seed     # Seed test data
-./scripts/db.sh backup   # Backup database
-./scripts/db.sh restore  # Restore from backup
-./scripts/db.sh reset    # Reset database
-```
-
-### scripts/smoke_test.sh
-Run smoke tests against local containers.
-
-```bash
-./scripts/smoke_test.sh
-```
-
-### scripts/ci-run-tests.sh
-CI test runner that handles Docker lifecycle and tests.
-
-```bash
-./scripts/ci-run-tests.sh
-```
-
-### scripts/deploy_niyati.sh
-Production deployment script.
-
-```bash
-./scripts/deploy_niyati.sh --prod --project-name=niyati-prod
-```
-
-#### Deploy script notes
-
-- The `deploy_niyati.sh` script supports the following useful flags:
-
-  - `--prod` — use production compose overrides (`docker-compose.prod.yml`)
-  - `--project-name=<name>` — set the Compose project name (`-p`) to ensure stable container naming across runs
-  - `--dry-run` — print the commands the script would run without executing them
-  - `--log-file=PATH` — append deploy output to `PATH`
-
-- Idempotent start sequence (what the script does when starting services):
-
-  1. `docker compose -p <project> down --remove-orphans` — removes any leftover or orphaned containers (prevents names like `niyati-caddy-1`).
-  2. `docker compose -p <project> up -d --build` — starts the stack with freshly built images.
-
-Example:
-
-```bash
-./scripts/deploy_niyati.sh --prod --project-name=niyati-prod --log-file=/tmp/deploy.log
-```
-
 
 ---
 
 ## Testing
 
-### Testing Philosophy: TDD/BDD is Mandatory
+### Test Strategy
 
-> **⚠️ Every code change MUST follow Test-Driven Development. No exceptions.**
+| Layer | Framework | Location | Command |
+|-------|-----------|----------|---------|
+| **bff-platform** unit | Jest | `apps/bff-platform/test/` | `cd apps/bff-platform && npm test` |
+| **bff-auth** unit | Jest | `apps/bff-auth/test/` | `cd apps/bff-auth && npm test` |
+| **UI** unit | Vitest | `apps/ui/src/**/__tests__/` | `cd apps/ui && npm test` |
+| **E2E** | Playwright | `e2e/tests/` | `cd e2e && npx playwright test` |
+| **Full CI** | All above | — | `./scripts/ci-run-tests.sh` |
 
-**The TDD Cycle:**
-1. **Write test first** — Define expected behavior BEFORE implementation
-2. **Run test (RED)** — Verify test fails for the right reason
-3. **Implement code (GREEN)** — Minimal code to pass the test
+### Running Tests
+
+```bash
+# === FULL CI (recommended before committing) ===
+./scripts/ci-run-tests.sh              # Backend + E2E in Docker
+./scripts/ci-run-tests.sh --skip-e2e   # Backend only (faster iteration)
+./scripts/ci-run-tests.sh --skip-backend  # E2E only
+./scripts/ci-run-tests.sh --no-cleanup    # Keep Docker stack after tests
+
+# === BACKEND UNIT TESTS ===
+cd apps/bff-platform && npm test                          # All platform tests
+cd apps/bff-platform && npm test -- users.test.js         # Single file
+cd apps/bff-platform && npm test -- --watch               # Watch mode
+cd apps/bff-platform && npm test -- --coverage            # With coverage
+
+cd apps/bff-auth && npm test                              # All auth tests
+
+# === UI UNIT TESTS ===
+cd apps/ui && npm test                                     # All UI tests
+cd apps/ui && npm test -- src/hooks/__tests__/useChat.profileSave.test.js  # Single file
+
+# === E2E TESTS ===
+cd e2e && npx playwright test                              # All E2E specs
+cd e2e && npx playwright test credits_threshold.spec.js    # Single spec
+cd e2e && npx playwright test --headed --debug             # Visual debug mode
+```
+
+### TDD Workflow (Mandatory)
+
+Every code change follows Red-Green-Refactor:
+
+1. **Write test first** — Define expected behavior before implementation
+2. **Run test (RED)** — Verify it fails for the right reason
+3. **Implement minimal code (GREEN)** — Just enough to pass
 4. **Refactor** — Clean up while keeping tests green
-5. **Run full CI** — `./scripts/ci-run-tests.sh` before considering done
+5. **Run full suite** — Ensure no regressions
+6. **Run CI** — `./scripts/ci-run-tests.sh` before considering done
 
-### Test Independence
+### Backend Test Helpers
 
-Tests can be executed through multiple paths and **must produce identical results**:
+Tests use `createTestApp` and `createMockDb` from `packages/commons/test/helpers.js`:
 
-| Execution Path | Command | Use Case |
-|----------------|---------|----------|
-| **CI Script** | `./scripts/ci-run-tests.sh` | Full integration, GitHub Actions |
-| **Deploy Script** | `./scripts/deploy_niyati.sh --action=test` | Pre-deploy validation |
-| **Standalone Backend** | `cd apps/bff-platform && npm test` | Development iteration |
-| **Standalone E2E** | `cd e2e && npx playwright test` | UI testing |
+```javascript
+const request = require('supertest');
+const { createTestApp, createMockDb, createMockCommons } = require('@test-helpers');
 
-### Backend Tests
+describe('My Feature', () => {
+  let app;
+  beforeEach(() => {
+    jest.resetModules();
+    jest.mock('@niyati/commons', () => createMockCommons());
+    const router = require('../lib/my-feature');
+    ({ app } = createTestApp('/api/v1/my-feature', router));
+  });
 
-```bash
-# All backend tests
-cd apps/bff-platform && npm test
-cd apps/bff-auth && npm test
-cd packages/commons && npm test
+  test('POST /action returns success', async () => {
+    const mockDb = createMockDb({ rows: [{ id: 1 }], rowCount: 1 });
+    app.set('db', mockDb);
+    const res = await request(app).post('/api/v1/my-feature/action').send({ input: 'test' });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.status).toBe('ok');
+  });
+});
 ```
 
-### Frontend Tests
+### E2E Test Files
 
-```bash
-cd apps/ui && npm test
-```
-
-### E2E Tests
-
-```bash
-# Ensure all services are running first
-docker compose up -d
-
-# Run E2E tests
-make e2e
-
-# Or manually
-cd e2e && npm test
-```
-
-### Integration Tests
-
-```bash
-# Run full integration suite
-./scripts/ci-run-tests.sh
-```
+| File | Scenario |
+|------|----------|
+| `complete_user_journey.spec.js` | Full new-user onboarding flow |
+| `returning_user.spec.js` | Returning user login + greeting |
+| `identify_chat.spec.js` | User identification + chat |
+| `profile_extraction.spec.js` | NLP profile field extraction |
+| `profile_lock.spec.js` | Profile immutability after save |
+| `profile_no_deduct.spec.js` | Profile queries don't cost credits |
+| `credits_threshold.spec.js` | Low-credit warnings + payment prompt |
+| `payment_flow.spec.js` | Payment QR + credit addition |
+| `classify_auth_failure_deduction.spec.js` | Classification + deduction |
+| `dashboard.spec.js` | Dashboard display |
+| `social_login.spec.js` | OAuth login flow |
 
 ---
 
-## Infrastructure Isolation
+## User Flow Specification
 
-**Design Principle**: Dev, CI, and Prod environments are completely isolated and can run simultaneously.
+### Phase 1: Authentication & User Identification
 
-### Resource Separation
+1. User navigates to the app → Caddy serves the React SPA
+2. Landing page shows: Country dropdown (default: INDIA), Phone number input, Consent checkbox
+3. "Begin Your Journey" button enabled only when all fields valid
+4. On submit → `POST /api/v1/users/identify` via bff-auth
+5. **New user**: `{ returning: false }` — user gets 10 free credits, starts profile collection
+6. **Returning user**: `{ returning: true, user: {...} }` — profile populated, personalized greeting
 
-| Resource | Dev | CI | Prod |
-|----------|-----|-----|------|
-| **Project Name** | `niyati` | `niyati-ci` | `niyati-prod` |
-| **Network** | `niyati_default` | `niyati-ci_default` | `niyati-prod_default` |
-| **Volumes** | `niyati_postgres-data` | `niyati-ci_postgres-data` | `niyati-prod_*` |
-| **Caddy Port** | 5173 | 6173 | 80/443 |
-| **BFF Platform Port** | 3000 | 4000 | 3000 (internal) |
-| **BFF Auth Port** | 3001 | 4001 | 3001 (internal) |
-| **Postgres Port** | 5432 | 56432 | 5432 |
-| **Redis Port** | 6379 | 7379 | 6379 (internal) |
+### Phase 2: Conversational Profile Collection (New Users)
 
-### Why Isolation Matters
+Required fields: **Name**, **Date of Birth**, **Time of Birth**, **Place of Birth**
 
-- Run CI tests while dev stack is running
-- Deploy to prod without affecting CI
-- Debug issues in complete isolation
-- No port conflicts or volume corruption
-- Tests are reproducible regardless of what else is running
+The app uses incremental NLP extraction — each user message is parsed for any available profile fields:
 
-### Script Idempotency
+- `POST /api/v1/profile/extract` — server-side NLP extracts name, DOB, TOB, POB from natural text
+- Extracted fields appear immediately in the profile sidebar
+- Follow-up prompts ask only for remaining missing fields
+- **No credits deducted** during profile collection
+- **User saved to DB only when ALL fields are present** — upserts into `users`, `user_profiles`, and `user_credits` tables
 
-All infrastructure scripts (`ci-run-tests.sh`, `deploy_niyati.sh`, `db.sh`) are idempotent:
-
-```bash
-# Safe to run multiple times - always produces same result
-./scripts/ci-run-tests.sh
-./scripts/ci-run-tests.sh  # Same outcome
-
-# Clean slate pattern used internally
-docker compose down -v         # Remove everything
-docker compose up -d --build   # Rebuild fresh
-./scripts/db.sh migrate        # Apply migrations from scratch
+Example interaction:
+```
+User: "I am Ankur Vatsa, born on 19 May 1979 at 09:30 am in New Delhi"
+→ All 4 fields extracted in one message
+→ Profile saved → PayQR shown for non-paid users
 ```
 
----
+### Phase 3: Payment & Credits
 
-## Production Deployment
+- New users start with **10 free credits**
+- After profile completion, PayQR (₹500 for 50 credits) is displayed
+- Payment is manual (UPI QR scan) — admin adds credits via `POST /api/v1/users/add-credits`
+- Credits are deducted server-side only — UI never performs authoritative charges
 
-### 1. Create Secrets
+### Phase 4: Astrology Chat
 
-```bash
-mkdir -p secrets
+- Messages go to n8n webhook → Ollama LLM generates response
+- Query classified server-side (`/chat/classify`) to determine billing
+- **Casual** (greetings): free | **Horoscope**: 2 credits | **Premium** (birth chart, remedies): 4 credits
+- Monthly credit reset: free credits restored on first login of each month
 
-# Generate secrets
-echo -n "$(openssl rand -base64 32)" > secrets/postgres_password.txt
-echo -n "$(openssl rand -hex 64)" > secrets/jwt_secret.txt
-echo -n "your-smtp-user" > secrets/smtp_user.txt
-echo -n "your-smtp-password" > secrets/smtp_password.txt
-echo -n "$(openssl rand -hex 32)" > secrets/worker_token.txt
+### Contraction Rule
 
-# Secure permissions
-chmod 600 secrets/*.txt
-```
-
-### 2. Run Migrations
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile migration run --rm migrate
-```
-
-### 3. Deploy
-
-```bash
-# Stop existing services
-docker compose -f docker-compose.yml -f docker-compose.prod.yml down
-
-# Build production images
-docker compose -f docker-compose.yml -f docker-compose.prod.yml build --no-cache
-
-# Start production services
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --force-recreate
-
-# Optional: Start with proxy and backup
-docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile proxy --profile backup up -d
-```
-
-### 4. Verify
-
-```bash
-curl http://localhost:3001/api/v1/telemetry/health
-curl http://localhost:3000/api/v1/telemetry/health
-```
-
-### Production Checklist
-
-- [ ] All secrets created and secured
-- [ ] Migrations applied
-- [ ] `NODE_ENV=production` set
-- [ ] `LOG_PRETTY_PRINT=false` set
-- [ ] CORS configured for production domain
-- [ ] SSL/TLS configured in Caddy
-- [ ] Health checks passing
-- [ ] Monitoring/alerting configured
+All AI/bot messages enforce a no-contraction policy:
+- "I am" not "I'm", "you are" not "you're", "do not" not "don't"
+- Applied server-side before sending to UI
 
 ---
 
 ## API Reference
 
-### Authentication Flow
+### bff-platform (port 3000)
 
-1. **Register/Login** → Receive access token (15min) + refresh token (30 days)
-2. **API Requests** → Send `Authorization: Bearer <token>` header
-3. **Token Refresh** → Call `/api/v1/auth/token` when access token expires
-4. **Logout** → Call `/api/v1/auth/logout` to revoke tokens
+All endpoints prefixed with `/api/v1/`.
 
-### Credits System
+#### Users (`/api/v1/users/`)
 
-- Free users: 10 credits/month, reset on 1st of month
-- Horoscope query: 2 credits
-- Premium query: 4 credits
-- Payment: ₹10 = 1 credit
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/users/identify` | Identify user, monthly credit reset |
+| POST | `/users/profile` | Create/update user profile (upserts users + user_profiles + user_credits) |
+| POST | `/users/sync` | Sync profile (internal, requires X-Service-Token) |
+| GET | `/users/lookup` | Lookup user by phone |
+| POST | `/users/deduct-credits` | Deduct credits (billing) |
+| POST | `/users/add-credits` | Add credits (payment confirmation) |
+| POST | `/users/can-ask` | Check if user can afford a query type |
+| GET | `/users/config` | Get app_config values |
 
-### Error Response Format
+#### Chat (`/api/v1/chat/`)
 
-```json
-{
-  "code": "INVALID_CREDENTIALS",
-  "message": "The credentials provided are invalid",
-  "details": {},
-  "requestId": "req_abc123"
-}
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/chat/classify` | Classify query type and billing cost |
+
+#### Profile (`/api/v1/profile/`)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/profile/extract` | NLP extraction of profile fields from text |
+
+#### Geocode (`/api/v1/geocode/`)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/geocode/current-location` | IP-based current location |
+| POST | `/geocode/search` | Location search |
+| POST | `/geocode/reverse` | Reverse geocode (lat/lon → address) |
+| POST | `/geocode/lookup` | Location lookup |
+| POST | `/geocode/structured` | Structured geocode query |
+| GET | `/geocode/proxy/*` | Proxy to geocode provider |
+
+#### Astrology (`/api/v1/astrology/`)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/astrology/compute` | Compute full birth chart |
+| POST | `/astrology/planets` | Planetary positions |
+| POST | `/astrology/horoscope-svg` | Generate horoscope SVG |
+| POST | `/astrology/navamsa` | Navamsa chart |
+| POST | `/astrology/divisional` | Divisional charts |
+| POST | `/astrology/geo-details` | Geo details for astrology |
+
+#### Telemetry (`/api/v1/telemetry/`)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/telemetry/health` | Health check |
+
+### bff-auth (port 3001)
+
+All endpoints prefixed with `/api/v1/`.
+
+#### Auth (`/api/v1/auth/`)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/auth/login` | Phone login (rate-limited) |
+| POST | `/auth/register` | Registration |
+| POST | `/auth/token` | Token exchange |
+| POST | `/auth/logout` | Logout |
+| GET | `/auth/me` | Get current user |
+| POST | `/auth/request-password-reset` | Password reset request (rate-limited) |
+| POST | `/auth/reset-password` | Reset password |
+| POST | `/auth/link` | Link OAuth account |
+| POST | `/auth/unlink` | Unlink OAuth account |
+| GET | `/auth/:provider` | OAuth redirect |
+| POST | `/auth/oauth/callback` | OAuth callback |
+
+#### Users (`/api/v1/users/`)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/users/identify` | Identify user by phone |
+| POST | `/users/profile` | Update user profile |
+
+#### Internal (`/api/v1/internal/`)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/internal/users/lookup` | Internal user lookup (X-Service-Token) |
+| GET | `/internal/users/:id` | Internal user fetch (X-Service-Token) |
+
+---
+
+## Credits & Billing
+
+### Credit Configuration (from `app_config` table)
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `credits_monthly_free` | 10 | Free credits per month |
+| `credits_horoscope_cost` | 2 | Cost for daily horoscope |
+| `credits_premium_cost` | 4 | Cost for birth chart / predictions / remedies |
+| `credits_low_threshold` | 4 | Show payment prompt when balance is below |
+| `payment_amount_inr` | 500 | Payment amount (INR) |
+
+### Billing Rules
+
+- **Server-side only** — UI displays balances but never performs authoritative deductions
+- **Idempotent** — Uses `reqId` to prevent double deductions on retry
+- **Monthly reset** — On first `/users/identify` call of each month, credits reset to `credits_monthly_free`
+- **Classification** — `POST /api/v1/chat/classify` returns `{ queryType, creditCost, isBillable }`
+
+### Query Types
+
+| Type | Examples | Cost |
+|------|----------|------|
+| `casual` | Greetings, profile info, "hello", "thanks" | 0 (free) |
+| `horoscope` | "my horoscope", "zodiac sign", "rashifal" | 2 credits |
+| `premium` | "birth chart", "predictions", "remedies", "kundli" | 4 credits |
+
+---
+
+## Database
+
+### Philosophy: Immutable, Idempotent, From Scratch
+
+> **Golden Rule**: The database schema and seed data must be reproducible from scratch at any time.
+
+| ❌ FORBIDDEN | ✅ Correct Approach |
+|-------------|---------------------|
+| `ALTER TABLE users ADD COLUMN x` | New migration with full table definition |
+| `UPDATE users SET x = 'value'` | `INSERT ... ON CONFLICT DO UPDATE` (upsert) |
+| `ALTER TABLE DROP COLUMN` | New migration file, rebuild schema |
+| Manual data fixes | Idempotent seed scripts |
+
+### Migration Files
+
+Located in `packages/migrations/`, naming: `YYYYMMDD_NN_description.up.sql`
+
+| File | Description |
+|------|-------------|
+| `20251217_01_baseline.up.sql` | Baseline schema (users, app_config, oauth_accounts, etc.) |
+| `20251217_02_baseline_seed.sql` | Seed data for app_config |
+| `20260102_01_add_charge_transactions.up.sql` | charge_transactions table |
+| `20260104_01_add_is_adult.up.sql` | is_adult field |
+| `20260107_01_seed_ci.up.sql` | CI-specific seed data |
+| `20260110_01_user_profiles_and_credits.up.sql` | user_profiles and user_credits tables |
+| `20260110_02_backfill_user_profiles_and_credits.up.sql` | Backfill data |
+
+### Tables
+
+| Table | Purpose |
+|-------|---------|
+| `users` | Core user record (phone, name, DOB, TOB, POB, credits, is_adult) |
+| `user_profiles` | Extended profile data (normalized fields) |
+| `user_credits` | Credit balance tracking |
+| `charge_transactions` | Billing audit trail |
+| `app_config` | Application configuration (key-value, cached 5 min) |
+| `oauth_accounts` | OAuth provider links |
+| `refresh_tokens` | JWT refresh tokens |
+| `password_resets` | Password reset requests |
+
+### Migration Patterns
+
+```sql
+-- ✅ Idempotent table creation
+CREATE TABLE IF NOT EXISTS users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  phone_number VARCHAR(20) UNIQUE NOT NULL,
+  credits INTEGER DEFAULT 10
+);
+
+-- ✅ Idempotent index
+CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone_number);
+
+-- ✅ Idempotent seed data
+INSERT INTO app_config (key, value)
+VALUES ('credits_monthly_free', '10')
+ON CONFLICT (key) DO NOTHING;
+
+-- ❌ FORBIDDEN
+ALTER TABLE users ADD COLUMN new_field VARCHAR(100);
+UPDATE users SET credits = 0 WHERE expired = true;
+```
+
+### Database Commands
+
+```bash
+./scripts/db.sh migrate   # Apply all migrations
+./scripts/db.sh seed       # Apply seed data
+./scripts/db.sh shell      # Connect to psql
+./scripts/db.sh health     # Check DB health
+./scripts/db.sh backup backup.sql   # Backup
+./scripts/db.sh restore backup.sql  # Restore
+./scripts/db.sh reset      # Reset (destructive!)
 ```
 
 ---
 
-## Specifications
+## Infrastructure & Configuration
 
-### Functional Specification
+### Docker Compose Layers
 
-Niyati is a conversational astrology assistant that delivers personalized horoscopes, birth-chart insights, and guidance through chat-based interactions.
+All compose files are in `infra/`:
 
-**Core Flows:**
-- **Sign Up/Sign In**: Email/password or OAuth authentication via bff-auth
-- **Profile Management**: User profiles with birth details for personalization
-- **Identify/Chat**: AI-powered chat with credit-based monetization
-- **Credits/Billing**: UPI/QR-based payments with manual reconciliation
+| Mode | Files | Command |
+|------|-------|---------|
+| **Development** | `docker-compose.yml` + `docker-compose.override.yml` | `./scripts/deploy_niyati.sh --env=dev --action=deploy` |
+| **Production** | `docker-compose.yml` + `docker-compose.prod.yml` | `./scripts/deploy_niyati.sh --env=prod --action=deploy` |
+| **CI** | `docker-compose.yml` + `docker-compose.ci.yml` | `./scripts/ci-run-tests.sh` (automatic) |
 
-**Key Behaviors:**
-- Returning users see personalized greetings based on location changes
-- Free users limited to "today" horoscope queries
-- Credits deducted only after successful bot response
-- QR payment prompt shown when credits < 6
+### Environment Isolation
 
-### Business Specification
+Dev, CI, and Prod are fully isolated — they can run simultaneously:
 
-**Monetization Model:**
-- Free monthly allowance: 10 credits/month
-- Horoscope cost: 2 credits
-- Premium cost: 4 credits
-- Payment: ₹500 minimum, 1 credit per ₹10
+| Resource | Dev | CI | Prod |
+|----------|-----|-----|------|
+| **Project** | `niyati` | `niyati-ci` | `niyati-prod` |
+| **Network** | `niyati_default` | `niyati-ci_default` | `niyati-prod_default` |
+| **Volumes** | `niyati_postgres-data` | `niyati-ci_postgres-data` | `niyati-prod_postgres-data-prod` |
+| **Containers** | `niyati-*-1` | `niyati-ci-*-1` | `niyati-*-prod` |
 
-**User Segments:**
-- Casual (Free): Daily horoscopes with monthly credit limit
-- Engaged (Paid): Premium analyses and detailed predictions
-- Power Users: Frequent queries with subscription bundles
+### Port Configuration
 
-### System Specification
+| Service | Dev | CI | Prod |
+|---------|-----|-----|------|
+| Caddy (UI) | 5173 | **6173** | 80/443 |
+| BFF Platform | 3000 | **4000** | 3000 |
+| BFF Auth | 3001 | **4001** | 3001 |
+| PostgreSQL | 5432 | **56432** | 5432 |
+| Redis | 6379 | **7379** | 6379 |
+| n8n / mock | 5678 | **6678** | 5678 |
 
-**Data Model:**
-- `users`: Profile, credits, payment history
-- `app_config`: Business parameters (credits, costs, thresholds)
-- `message_feedback`: User feedback (thumbs up/down)
+### Environment Files
 
-**Key Technical Details:**
-- Phone normalization: Queries use regex to strip non-digits
-- Monthly reset: Credits reset on identify if month changed
-- Atomic deductions: Single SQL UPDATE + RETURNING
-- Config caching: In-memory cache with TTL
+| File | Purpose |
+|------|---------|
+| `infra/.env` | Production environment (gitignored) |
+| `infra/.env.example` | Template |
+| `infra/.env.bff.auth` | bff-auth specific vars |
+| `infra/.env.bff.platform` | bff-platform specific vars |
+| `infra/.env.ui` | UI build-time vars |
+| `infra/secrets/` | Docker secrets directory (gitignored) |
+
+### Docker Secrets (Production)
+
+Services use `getSecret(envVar, fileEnvVar)` to read secrets from files:
+
+```javascript
+function getSecret(envVar, fileEnvVar) {
+  if (process.env[fileEnvVar]) {
+    return fs.readFileSync(process.env[fileEnvVar], 'utf8').trim();
+  }
+  return process.env[envVar];
+}
+```
+
+Secrets: `postgres_password`, `jwt_secret`, `access_token_secret`, `worker_token`, `service_token`
+
+---
+
+## Scripts Reference
+
+All automation lives in `scripts/`. Every script sources `scripts/lib/common.sh`.
+
+### Core Scripts
+
+| Script | Purpose | Usage |
+|--------|---------|-------|
+| `deploy_niyati.sh` | Deployment management | `./scripts/deploy_niyati.sh --env=prod --action=fresh -y` |
+| `ci-run-tests.sh` | Full CI test runner | `./scripts/ci-run-tests.sh [--skip-e2e] [--skip-backend] [--no-cleanup]` |
+| `db.sh` | Database management | `./scripts/db.sh migrate\|seed\|shell\|health\|backup\|restore\|reset` |
+| `docker-dev.sh` | Dev Docker helper | `./scripts/docker-dev.sh` |
+| `smoke_test.sh` | Health verification | `./scripts/smoke_test.sh` |
+
+### Utility Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `mock-n8n.js` | Mock n8n for CI (canned AI responses) |
+| `mock-webhook.js` | Mock webhook for testing |
+| `seed_test_data.js` | Seed test data |
+| `run_migrations.js` | Run SQL migrations programmatically |
+| `merge_coverage.sh` | Merge coverage reports |
+| `healthcheck-http.sh` | HTTP health check for Docker |
+| `wait-for-db.sh` | Wait for PostgreSQL readiness |
+| `entrypoint.sh` | Docker container entrypoint |
+
+### Shared Library (`scripts/lib/common.sh`)
+
+22 functions available to all scripts:
+
+| Category | Functions |
+|----------|-----------|
+| **Logging** | `log_info`, `log_warn`, `log_error`, `log_debug`, `log_step`, `log_success`, `log_fail`, `print_header` |
+| **Environment** | `find_project_root`, `load_env`, `load_project_env`, `ensure_env_files` |
+| **Docker** | `check_docker`, `get_compose_cmd`, `ensure_compose_only`, `wait_for_container`, `wait_for_postgres` |
+| **HTTP** | `check_url_with_retries`, `run_health_checks` |
+| **Utility** | `confirm_action`, `require_command`, `get_timestamp` |
+
+### Creating New Scripts
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lib/common.sh"
+PROJECT_ROOT="$(find_project_root "$SCRIPT_DIR")"
+cd "$PROJECT_ROOT"
+
+log_step "Starting..."
+# Your logic here
+```
 
 ---
 
 ## PWA Features
 
-The UI is a fully-featured Progressive Web App:
-
-### Features
-- **Installable**: Can be installed on device like native app
-- **Offline Support**: Works without internet, cached data available
-- **Automatic Updates**: Service worker detects and applies updates
-- **Network Status**: Offline indicator banner
-
-### Caching Strategy
-- Static assets: Cache-first
-- API requests: Network-first with 10s timeout
-- Images: Cache-first with LRU eviction
-- Navigation: Network-first with offline fallback
-
-### Service Worker
-
-Located at `apps/ui/public/sw.js`:
-- Precaches core assets
-- Handles navigation with preload
-- Manages cache size limits
-- Rotates caches on version change
-
----
-
-## Roadmap & TODOs
-
-### Immediate Priorities
-
-1. **Social Login**: Implement OAuth callbacks for Google & Instagram
-2. **RAG Integration**: Store chat history for personalized responses
-3. **Numerology**: Implement Pythagorean numerology calculator
-4. **Premium Features**: Kundali generation, advanced reports
-
-### Planned Improvements
-
-- Rate limiting by phone (free: 5/day, paid: 50/day)
-- Feedback mechanism (thumbs up/down)
-- Multi-language support (Hindi)
-- Analytics dashboards
-- Payment verification automation
-- Cloud deployment with Terraform/Pulumi
-
-### Technical Debt
-
-- TypeScript migration for type safety
-- OpenAPI/Swagger documentation
-- Database query optimization
-- Comprehensive test coverage
+The UI is a Progressive Web App:
+- **Installable** — Add to home screen prompt
+- **Offline detection** — Shows online/offline status
+- **Service worker** — Caches static assets
+- Hooks: `usePWA()`, `useOnlineStatus()`, `useServiceWorker()`
 
 ---
 
 ## Troubleshooting
 
-### Services Won't Start
+### Common Issues
+
+| Problem | Solution |
+|---------|----------|
+| `vitest: command not found` | Run `npm install` from project root — vitest is hoisted to root `node_modules/` |
+| CI ports in use | `lsof -i :6173 -i :4000 -i :4001` then `docker compose -p niyati-ci down -v --remove-orphans` |
+| DB migrations fail | Check `packages/migrations/` for syntax errors; run `./scripts/db.sh shell` to inspect |
+| n8n not responding | Ensure Ollama is running (`ollama serve`), n8n started (`n8n start`), and webhook URL configured |
+| CORS errors | Check `CORS_ALLOWED` in env matches the origin you're accessing from |
+| Container unhealthy | `docker logs <container-name>` to check startup errors |
+
+### Useful Commands
 
 ```bash
-# Check logs
-docker compose logs bff-auth
+# Check service status
+./scripts/deploy_niyati.sh --action=status
 
-# Clean restart
-docker compose down -v && docker compose up -d --build
+# View container logs
+docker logs -f niyati-bff-platform-prod
+
+# Database shell
+docker exec -it niyati-postgres-prod psql -U niyati -d niyati_prod
+
+# Check specific user
+docker exec -i niyati-postgres-prod psql -U niyati -d niyati_prod \
+  -c "SELECT id, phone_number, name, credits FROM users WHERE phone_number LIKE '%1234567890';"
+
+# Restart single service
+./scripts/deploy_niyati.sh --env=prod --action=restart --service=bff-platform
+
+# Full CI
+./scripts/ci-run-tests.sh
 ```
-
-### Database Issues
-
-```bash
-# Check status
-docker compose ps postgres
-
-# View logs
-docker compose logs postgres
-
-# Test connection
-docker compose exec postgres psql -U niyati -d niyati_dev -c "SELECT 1;"
-```
-
-### Port Conflicts
-
-```bash
-# Find what's using a port
-lsof -i :3000
-
-# Stop all environments
-docker compose down
-docker compose -f docker-compose.yml -f docker-compose.prod.yml down
-```
-
-### Stale Cache/Images
-
-```bash
-# Full cleanup
-docker compose down -v --rmi all --remove-orphans
-
-# Rebuild
-docker compose up -d --build --force-recreate
-```
-
-### Health Check Failures
-
-```bash
-# Check individual service health
-curl -v http://localhost:3001/api/v1/telemetry/health
-curl -v http://localhost:3000/api/v1/telemetry/health
-
-# Check container health status
-docker inspect --format='{{.State.Health.Status}}' niyati-bff-auth-1
-```
-
----
-
-## Technology Stack
-
-| Layer | Technologies |
-|-------|--------------|
-| **Frontend** | React 19, Vite 7, TailwindCSS 3, PWA |
-| **Backend** | Node.js 20, Express 4, PostgreSQL 15 |
-| **AI/Automation** | Ollama, Llama3.1, n8n |
-| **DevOps** | Docker, Docker Compose, Caddy |
-| **Testing** | Jest, Playwright, Vitest |
-
----
-
-**Built with ❤️ using React, Node.js, PostgreSQL, and Docker**
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-NLP.js uses a trainable NLU manager — you must provide intent utterances and train a model (that’s why you saw epoch logs during tests).
-For correctness and performance: train a small intent model (few intents + sample phrases), then persist it with manager.save() and load with manager.load() at startup so you don't retrain on every run.
-Alternatives: keep the current lightweight rule/regex heuristics (fast, no model) or combine rules + a small trained model for best accuracy.
-Would you like me to add model saving/loading (train once, commit the model) into nlpClassifier.js?

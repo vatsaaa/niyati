@@ -12,19 +12,15 @@
 const express = require('express');
 const router = express.Router();
 const { logger, sanitize, ErrorCodes } = require('@niyati/commons');
-// Optional NLP libraries (best-effort). We will try NLP first and fall back
-// to deterministic regex heuristics if NLP is unavailable or fails.
-let winkNLP = null;
-let winkModel = null;
-let nlp = null;
-let chrono = null;
+// reuse existing NLP.js classifier in the platform
+let nlpClassifier = null;
 try {
-  winkNLP = require('wink-nlp');
-  winkModel = require('wink-eng-lite-web-model');
-  nlp = winkNLP(winkModel);
+  nlpClassifier = require('./nlpClassifier');
 } catch (e) {
-  nlp = null;
+  nlpClassifier = null;
 }
+// Optional chrono-node for natural date/time parsing (best-effort).
+let chrono = null;
 try {
   chrono = require('chrono-node');
 } catch (e) {
@@ -99,12 +95,33 @@ function extractProfileFields(text) {
   if (!result.name) {
     const commaParts = trimmed.split(',').map(p => p.trim());
     if (commaParts.length >= 2) {
-      const firstPart = commaParts[0];
+      let firstPart = commaParts[0];
+      // Ignore common greetings or short salutations like "Hi Niyati"
+      if (/^(hi|hello|hey|dear)\b/i.test(firstPart)) {
+        // strip greeting and continue
+        firstPart = firstPart.replace(/^(hi|hello|hey|dear)[:,!\s]*/i, '').trim();
+      }
+      // Also strip leading polite phrases like "dear" or accidental salutations
+      firstPart = firstPart.replace(/^dear\s+/i, '').trim();
       const commaNameMatch = firstPart.match(/^([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})$/);
-      if (commaNameMatch && !/\d/.test(firstPart)) {
+      if (commaNameMatch && !/\d/.test(firstPart) && firstPart.length > 2) {
         result.name = commaNameMatch[1];
       }
     }
+  }
+
+  // Second-pass: prefer explicit "I am <Name>" or "my name is <Name>" mentions
+  // over short salutations captured by comma fallback (e.g., "Hi Niyati, I am Priya Sharma.")
+  if (trimmed && typeof trimmed === 'string') {
+    const explicitNameMatch = trimmed.match(/(?:my name is|i am|i'm)\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,3})/i);
+    if (explicitNameMatch && explicitNameMatch[1]) {
+      result.name = explicitNameMatch[1].trim();
+    }
+  }
+
+  // Clean common trailing artifacts from captured name (e.g., "Arun born in")
+  if (result.name && typeof result.name === 'string') {
+    result.name = result.name.replace(/\s+born\b[\s\S]*$/i, '').replace(/\s+and\s*$/i, '').trim();
   }
 
   // Date of birth patterns
@@ -179,8 +196,9 @@ function extractProfileFields(text) {
 }
 
 /**
- * Try NLP-based extraction first (best-effort). Returns null if NLP is unavailable
- * or produces no useful fields so the deterministic extractor can be used.
+ * Try chrono-based extraction for date/time (best-effort). 
+ * Returns null if chrono is unavailable or produces no useful fields.
+ * Name and place extraction are handled by the deterministic regex extractor.
  */
 function tryNlpExtract(text) {
   if (!text || typeof text !== 'string') return null;
@@ -195,70 +213,63 @@ function tryNlpExtract(text) {
         const p = parsed[0];
         if (p && p.start) {
           try {
+            // Use local date components to avoid timezone shifts when formatting
             const dt = p.start.date();
-            // If the parsed date looks like a full DOB (year present) capture it
-            const year = dt.getUTCFullYear();
+            const year = dt.getFullYear();
             if (year && year > 1900 && year <= 2100) {
-              out.dob = dt.toISOString().slice(0, 10);
+              const m = String(dt.getMonth() + 1).padStart(2, '0');
+              const d = String(dt.getDate()).padStart(2, '0');
+              out.dob = `${year}-${m}-${d}`;
             }
-            // If time components are present, include timeOfBirth (HH:MM[:SS])
-            const hh = dt.getUTCHours();
-            const mm = dt.getUTCMinutes();
+            // If time components are present, include timeOfBirth (HH:MM) in 24-hour local
+            const hh = dt.getHours();
+            const mm = dt.getMinutes();
             if (typeof hh === 'number' && typeof mm === 'number' && (hh !== 0 || mm !== 0)) {
               out.timeOfBirth = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
             }
-          } catch (e) {}
+          } catch (e) { /* ignore parsing errors */ }
         }
-      }
-    }
-
-    // wink-nlp for named-entity like extraction (person/place)
-    if (nlp) {
-      const doc = nlp.readDoc(text);
-      // Try to extract PERSON-like entities
-      try {
-        const ents = doc.entities().items ? doc.entities().items() : null;
-        if (ents && Array.isArray(ents)) {
-          for (const it of ents) {
-            try {
-              const type = (typeof it.type === 'function') ? it.type() : (it.type || '');
-              const val = (typeof it.out === 'function') ? it.out() : (it.text || '');
-              if (!val) continue;
-              if (!out.name && String(type).toUpperCase() === 'PERSON') out.name = val;
-              if (!out.placeOfBirth && (String(type).toUpperCase() === 'GPE' || String(type).toUpperCase() === 'LOC' || String(type).toUpperCase() === 'LOCATION')) {
-                out.placeOfBirth = val;
-              }
-            } catch (e) {
-              // ignore per-entity errors
-            }
-          }
-        } else {
-          // Fallback: use entity text array if available
-          try {
-            const entTexts = doc.entities().out();
-            if (Array.isArray(entTexts) && entTexts.length) {
-              // Heuristic: first multi-word capitalized entity -> name, last entity -> place
-              for (const et of entTexts) {
-                if (!out.name && /^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+$/.test(et)) {
-                  out.name = et;
-                  break;
-                }
-              }
-              if (!out.placeOfBirth && entTexts.length > 0) {
-                const candidate = entTexts[entTexts.length - 1];
-                if (/^[A-Z]/.test(candidate)) out.placeOfBirth = candidate;
-              }
-            }
-          } catch (e) {}
-        }
-      } catch (e) {
-        // ignore NLP extraction errors
       }
     }
 
     // If we found at least one field, return the object; otherwise signal null
-    if (out.name || out.dob || out.timeOfBirth || out.placeOfBirth) return out;
+    if (out.dob || out.timeOfBirth) return out;
     return null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Try NLP.js based extraction as higher-priority candidate source.
+ * Returns object with possible fields discovered by NLP (name/place/date/time).
+ */
+async function tryNlpJsExtract(text) {
+  if (!nlpClassifier || !text) return null;
+  try {
+    const result = await nlpClassifier.classifyMessage(text);
+    const out = {};
+    // node-nlp returns entities array with { entity, sourceText }
+    if (Array.isArray(result.entities) && result.entities.length) {
+      for (const e of result.entities) {
+        const ent = (e.entity || '').toLowerCase();
+        const val = e.sourceText || e.option || e.resolution || e.utteranceText || e.resolution || '';
+        if (!val) continue;
+        if (ent.includes('person') || ent === 'name') {
+          out.name = out.name || String(val).trim();
+        }
+        if (ent.includes('place') || ent.includes('city') || ent.includes('location') || ent === 'address') {
+          out.placeOfBirth = out.placeOfBirth || String(val).trim();
+        }
+        if (ent === 'datetime' || ent === 'date') {
+          // leave date/time parsing to chrono where possible
+          // but capture raw value as fallback
+          if (!out.dob && e.resolution && e.resolution.date) out.dob = e.resolution.date;
+          if (!out.timeOfBirth && e.resolution && e.resolution.time) out.timeOfBirth = e.resolution.time;
+        }
+      }
+    }
+    return Object.keys(out).length ? out : null;
   } catch (e) {
     return null;
   }
@@ -278,15 +289,24 @@ router.post('/extract', async (req, res) => {
     }
     
     const cleaned = sanitize(text);
+    // Handle explicit null/empty text as empty result
+    if (text === null || text === '') {
+      return res.sendSuccess({});
+    }
+
     // Prefer deterministic regex-based extraction first (preserves formats expected by clients/tests).
-    // Then merge any missing fields from the NLP-based extractor as a best-effort enhancement.
+    // Then attempt chrono and NLP.js as best-effort sources, but keep deterministic values as authoritative.
     const deterministic = extractProfileFields(cleaned) || {};
-    const nlpExtract = tryNlpExtract(cleaned) || {};
+    const nlpJs = (await tryNlpJsExtract(cleaned)) || {};
+    const chronoExtract = tryNlpExtract(cleaned) || {};
 
-    // Merge: keep deterministic values when present; fill missing ones from NLP output.
-    const merged = Object.assign({}, nlpExtract, deterministic);
+    // Merge strategy: NLP-first as primary extractor (if NLP provides values, they take precedence).
+    // Chrono supplements date/time, deterministic regex provides fallbacks for any missing fields.
+    // Use Object.assign with deterministic first, then chrono, then nlpJs so that NLP values override fallbacks.
+    const merged = Object.assign({}, deterministic, chronoExtract, nlpJs);
 
-    logger.debug({ msg: 'profile_extract', via: (Object.keys(deterministic).length ? 'deterministic' : (Object.keys(nlpExtract).length ? 'nlp' : 'none')), hasName: !!merged.name, hasDob: !!merged.dob });
+    const via = Object.keys(nlpJs).length ? 'nlp' : (Object.keys(chronoExtract).length ? 'chrono' : (Object.keys(deterministic).length ? 'deterministic' : 'none'));
+    logger.debug({ msg: 'profile_extract', via, hasName: !!merged.name, hasDob: !!merged.dob });
     return res.sendSuccess(merged);
   } catch (err) {
     logger.error({ msg: 'profile_extract_failed', err: err.stack });

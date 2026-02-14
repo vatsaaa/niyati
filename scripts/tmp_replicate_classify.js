@@ -1,4 +1,4 @@
-const qc = require('../apps/bff-platform/lib/queryClassifier');
+const qc = require('../apps/bff-platform/lib/nlpClassifier');
 
 const messages = [
   'Hi Niyati, I am Ankur Vatsa born in New Delhi on 19 May 1979 at 7:31 am',

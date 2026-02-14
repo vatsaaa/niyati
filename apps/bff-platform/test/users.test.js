@@ -108,7 +108,7 @@ describe('bff-platform users routes', () => {
         if (sql.trim().toUpperCase().includes('USER_CREDITS')) {
           return { rows: [{ user_id: 'uuid-1', credits: 10, total_paid_amount: 0 }], rowCount: 1 };
         }
-        return { rows: [], rowCount: 0 };
+        return { rows: [{ id: 'uuid-1', phone_number: params && params[0] }], rowCount: 1 };
       });
       app.set('db', fakeDb);
 
@@ -116,6 +116,40 @@ describe('bff-platform users routes', () => {
       expect(res.statusCode).toBe(200);
       expect(res.body.status).toBe('ok');
       expect(res.body.data.user).toHaveProperty('is_adult', true);
+    });
+
+    test('upserts into auth users table after profile + credits', async () => {
+      const queryCalls = [];
+      const fakeDb = createMockDb(async (sql, params) => {
+        queryCalls.push({ sql, params });
+        const s = sql.trim().toUpperCase();
+        if (s.includes('USER_PROFILES')) {
+          return { rows: [{ user_id: 'uuid-1', phone_number: '+919899162012', is_adult: true, name: 'Ankur', last_login_location: null }], rowCount: 1 };
+        }
+        if (s.includes('USER_CREDITS')) {
+          return { rows: [{ user_id: 'uuid-1', credits: 10, total_paid_amount: 0 }], rowCount: 1 };
+        }
+        // auth users upsert
+        return { rows: [{ id: 'uuid-1', phone_number: '+919899162012', name: 'Ankur' }], rowCount: 1 };
+      });
+      app.set('db', fakeDb);
+
+      const res = await request(app).post('/api/v1/users/profile').send({
+        phoneNumber: '+919899162012',
+        name: 'Ankur',
+        dateOfBirth: '1979-05-19',
+        timeOfBirth: '09:30',
+        placeOfBirth: 'New Delhi',
+        consentGiven: true
+      });
+      expect(res.statusCode).toBe(200);
+      // Should have at least 3 queries: user_profiles, user_credits, users
+      const usersInsert = queryCalls.find(c => {
+        const s = (c.sql || '').toUpperCase();
+        return s.includes('INSERT INTO USERS') && !s.includes('USER_PROFILES') && !s.includes('USER_CREDITS');
+      });
+      expect(usersInsert).toBeDefined();
+      expect(usersInsert.params[0]).toBe('+919899162012');
     });
   });
 

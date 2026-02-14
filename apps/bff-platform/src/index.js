@@ -139,7 +139,7 @@ const profileRouter = require('../lib/profileExtractor');
 apiRouter.use('/profile', profileRouter);
 
 // Import query classifier for billing classification and chat routes
-const { getQueryCreditCost, getQueryType, isCasualConversation } = require('../lib/queryClassifier');
+const { getQueryCreditCost, getQueryType, isCasualConversation } = require('../lib/nlpClassifier');
 const chatRouter = require('../lib/chat');
 
 // Mount chat router (authentication middleware applied earlier for /chat)

@@ -601,6 +601,36 @@ export function useChat(profile, updateProfile, addMessage, auth) {
       
       // Send confirmation message after profile is complete (from bff-platform, not n8n)
       if (profileJustCompleted && hasAllRequiredFields(currentProfile)) {
+        // Save profile to database BEFORE showing confirmation (user creation must happen now)
+        if (!currentProfile.consentGiven) {
+          updateProfile({ consentGiven: true });
+          currentProfile.consentGiven = true;
+        }
+        const profileAlreadySentOnComplete = hasProfileBeenSent();
+        if (!profileAlreadySentOnComplete) {
+          try { markProfileAsSent(); } catch (e) { /* ignore */ }
+          try {
+            await bffFetchWithRetry('/api/v1/users/profile', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                phoneNumber: auth.phoneNumber,
+                name: currentProfile.name,
+                dateOfBirth: currentProfile.birthDate,
+                timeOfBirth: currentProfile.timeOfBirth,
+                placeOfBirth: currentProfile.placeOfBirth,
+                consentGiven: true,
+                isPaid: !!currentProfile.isPaid,
+                last_login_location: currentProfile.currentLocation || ''
+              })
+            }, { retries: 2, baseDelayMs: 300 });
+            try { markProfileAsSent(); } catch (e) { /* ignore */ }
+          } catch (err) {
+            console.warn('Failed to save profile to database on completion:', err);
+            try { markProfileAsSent(); } catch (e) { /* ignore */ }
+          }
+        }
+
         const firstName = currentProfile.name ? currentProfile.name.split(' ')[0] : '';
         const currentLoc = currentProfile.currentLocation || 'your current location';
         const creditsAmount = currentProfile.credits ?? 10;
@@ -620,6 +650,18 @@ export function useChat(profile, updateProfile, addMessage, auth) {
           sender: 'bot',
           timestamp: new Date()
         });
+
+        // Show payment QR for non-paid users right after profile completion
+        if (!isPaidUser && !qrAlreadyShown) {
+          addMessage({
+            id: Date.now() + Math.random() + 1,
+            image: '/payment/PayQR.jpeg',
+            text: getPaymentQRMessage(config.payment_amount_inr, creditsFromPayment),
+            sender: 'bot',
+            timestamp: new Date()
+          });
+          markPaymentQRAsShown();
+        }
         
         setIsLoading(false);
         return;
@@ -671,7 +713,7 @@ export function useChat(profile, updateProfile, addMessage, auth) {
           // We still attempt the POST and mark again on failure as a fallback.
           try { markProfileAsSent(); } catch (e) { /* ignore */ }
           try {
-            await bffFetchWithRetry('/users/profile', {
+            await bffFetchWithRetry('/api/v1/users/profile', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({

@@ -33,17 +33,16 @@ describe('profileExtractor', () => {
     expect(res.timeOfBirth).toBe('02:30');
   });
 
-  it('falls back to regex when BFF fails', async () => {
-    // Mock BFF failure
+  it('returns empty result when BFF call throws (no client-side fallback)', async () => {
+    // Mock BFF failure — UI delegates all extraction to BFF, so fallback is empty
     bffFetchWithRetry.mockRejectedValueOnce(new Error('Network error'));
 
     const res = await extractProfileFields('My name is Alice and I was born on 1990-05-03 at 02:30');
-    // Fallback regex should extract basic patterns
-    expect(res.name || '').toMatch(/Alice/i);
-    expect(res.dob || '').toContain('1990');
+    // No client-side regex fallback per Lightweight UI principle
+    expect(res).toEqual({});
   });
 
-  it('falls back when BFF returns error status', async () => {
+  it('returns empty result when BFF returns error status', async () => {
     // Mock non-ok response
     bffFetchWithRetry.mockResolvedValueOnce({
       ok: false,
@@ -51,7 +50,7 @@ describe('profileExtractor', () => {
     });
 
     const res = await extractProfileFields('I am John Doe');
-    // Fallback should still work
-    expect(res.name || '').toMatch(/John/i);
+    // No client-side extraction — empty result on BFF failure
+    expect(res).toEqual({});
   });
 });
