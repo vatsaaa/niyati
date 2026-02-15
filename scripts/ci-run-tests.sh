@@ -191,7 +191,7 @@ check_and_liberate_port "$N8N_PORT" "Mock N8N"
 log_step "🔧 Ensuring lockfiles and test tool availability..."
 
 # Packages to ensure lockfiles for
-PKGS=("apps/ui" "apps/bff-platform" "apps/bff-auth" "packages/commons" "e2e")
+PKGS=("packages/auth-core" "apps/ui" "apps/bff-platform" "apps/bff-auth" "packages/commons" "e2e")
 for p in "${PKGS[@]}"; do
     if [[ -f "$p/package.json" ]]; then
         if [[ ! -f "$p/package-lock.json" && ! -f "$p/yarn.lock" ]]; then
@@ -206,7 +206,7 @@ for p in "${PKGS[@]}"; do
 done
 
 # Ensure local test runners can be installed (non-fatal) so later npm ci won't prompt.
-TEST_PKGS=("packages/commons" "apps/bff-platform" "apps/bff-auth" "e2e" "apps/ui")
+TEST_PKGS=("packages/auth-core" "packages/commons" "apps/bff-platform" "apps/bff-auth" "e2e" "apps/ui")
 for tp in "${TEST_PKGS[@]}"; do
     if [[ -f "$tp/package.json" ]]; then
         log_info "Running lightweight npm ci for $tp to ensure dev deps are resolvable"
