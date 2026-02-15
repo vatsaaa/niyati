@@ -61,8 +61,17 @@ router.post('/sync', async (req, res) => {
     const db = req.app.get('db');
     if (!db) return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Database not configured');
 
+    // Validate date of birth if provided
+    const { computeIsAdult, validateDateOfBirth } = require('@niyati/commons').dateUtils;
+    if (profile.dateOfBirth) {
+      const dobCheck = validateDateOfBirth(profile.dateOfBirth);
+      if (!dobCheck.valid) {
+        const errorCode = dobCheck.code === 'PROFILE_003' ? ErrorCodes.PROFILE_UNDERAGE : ErrorCodes.PROFILE_INVALID_DOB;
+        return res.sendError(errorCode, dobCheck.message);
+      }
+    }
+
     const normalizedLastLoginLocation = (profile.last_login_location === undefined || profile.last_login_location === null) ? null : String(profile.last_login_location);
-    const { computeIsAdult } = require('@niyati/commons').dateUtils;
 
     // Upsert into user_profiles (bff-platform owns profile data)
     const upsertProfileSql = `
@@ -273,7 +282,15 @@ router.post('/profile', authMiddleware, async (req, res) => {
     const db = req.app.get('db');
     if (!db) return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Database not configured');
 
-    const { computeIsAdult } = require('@niyati/commons').dateUtils;
+    // Validate date of birth if provided
+    const { computeIsAdult, validateDateOfBirth } = require('@niyati/commons').dateUtils;
+    if (profile.dateOfBirth) {
+      const dobCheck = validateDateOfBirth(profile.dateOfBirth);
+      if (!dobCheck.valid) {
+        const errorCode = dobCheck.code === 'PROFILE_003' ? ErrorCodes.PROFILE_UNDERAGE : ErrorCodes.PROFILE_INVALID_DOB;
+        return res.sendError(errorCode, dobCheck.message);
+      }
+    }
     const normalizedLastLoginLocation = (profile.last_login_location === undefined || profile.last_login_location === null) ? null : String(profile.last_login_location);
     
     const upsertProfileSql = `

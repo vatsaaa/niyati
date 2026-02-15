@@ -26,7 +26,7 @@ describe('Niyati App Flow Integration Tests', () => {
         },
         sanitize: v => v,
         ErrorCodes: responses.ErrorCodes,
-        config: {}, dateUtils: { computeIsAdult: jest.fn(() => true) }
+        config: {}, dateUtils: { computeIsAdult: jest.fn(() => true), validateDateOfBirth: jest.fn(() => ({ valid: true })) }
       };
     });
 
