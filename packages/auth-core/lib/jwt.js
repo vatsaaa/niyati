@@ -23,7 +23,7 @@ function createJwtProvider(config = {}) {
     issuer,
     audience,
     algorithm = 'HS256',
-    expiresIn: defaultExpiresIn = '15m'
+    expiresIn: defaultExpiresIn = '24h'
   } = config;
 
   /**

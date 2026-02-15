@@ -42,7 +42,7 @@ const jwtProvider = createJwtProvider({
   secret: process.env.ACCESS_TOKEN_SECRET,
   issuer: 'niyati-bff',
   audience: 'niyati-app',
-  expiresIn: process.env.ACCESS_TOKEN_EXPIRES || '15m',
+  expiresIn: process.env.ACCESS_TOKEN_EXPIRES || '24h',
 });
 
 const refreshTokenStore = createRefreshTokenStore({ tableName: 'refresh_tokens' });
