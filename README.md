@@ -1004,3 +1004,62 @@ Before a PR can be merged:
 | Check CI status | `gh pr checks fix/description` |
 | Merge PR | `gh pr merge fix/description --squash --delete-branch` |
 | Return to master | `git checkout master && git pull` |
+
+
+
+
+
+
+
+Used command "niyati % ./scripts/deploy_niyati.sh --env=prod --action=fresh -y --verbose" on my local laptop to deploy and run application niyati in production mode
+
+Launched "http://localhost/" and I can see landing page for the application
+
+Selected country = "INDIA"; entered phone number "9899162012" and checked the box for "I consent to sharing my birth information and agree to the Privacy Policy"
+
+"Begin Your Journey" button activated, clicked it.
+
+In back ground check the location from where the user is operating. Check if the phone number exists in database, if they are a paying user, last login location and their current credit balance.
+
+If the phone number exists, fetch user profile from database and it should be shown in the user profile section of the app.
+
+App's chat window shows:
+phone number in user profile section, "-" for all other fields and 10 free Credits
+
+If the phone number exists in database, then the user is a returning user. They should be greeted with a personalized message in chat box. The message should include user's name and location if they are available in database e.g., if the user is operating from a location that is different from last login location the app should greet them that the user is in a new location and how are they finding the new location. 
+The message should also include user's current credit balance. If the user is a paid user and has enough credits they can ask questions about their future, love life, career and more, additional credits are available. If the user is a non-paid user, then remind them that they can ask questions about what today holds for them but they need to pay for being able to ask questions about their future, love life, career and more, additional credits are available. And then show payment QR code as well.
+
+If the phone number does not exist in database, then the user is a new user and they should be asked to share their name, date of birth, time of birth and place of birth in natural language format.
+In chat box, message is "Hello and welcome! I am Niyati, here to help you discover your astrological destiny. To get started, could you please share your name, when you were born (date and time), and where you were born?"
+
+User sent message: "I am Ankur Vatsa, born on 19 May 1979 at 09:30 am in New Delhi"
+
+App displays all user info in app screen user profile section at the top. This means, user profile details were successfully extracted from user message. 
+
+As soon as all user profile details are knwon, the user should be created in database as a "non-paying" user.
+
+When new user's profile is completely discovered, create the birth chart for the user using astrology APIs which should be stored on disk and the path to the birth chart should be stored in database as well. A small thumbnail of the birth chart should should appear in the user profile section of the app. 
+
+For paid users, clicking on the thumbnail shows the full birth chart in a modal. For non-paid users, clicking on the thumbnail should show PayQR code and remind the user to pay if the wish to see the full birth chart.
+
+For returning users, birth chart should be fetched from disk and shown when paid user clicks on the thumbnail in user profile section of the app. If the user is a non-paying user, then when they click on the thumbnail, they should be shown payment QR code and reminded to pay if they wish to see the full birth chart.
+
+App: "Hi Ankur, I now know your name and birth details. I also see that you are in Mumbai, Maharashtra, India. You have 10 credits and you can ask questions about what today holds for you. For questions about your future, love life, career and more, additional credits are available."
+
+Expected: User should be shown payment QR code
+
+User: What is the date today and what does the day hold for me?
+
+Expected: User is asking about today and asks to reveal what could the user expect from today, hence free credits can be used even though the user is a non-paying user. 2 credits should be deducted from the free credits.
+
+Expected: App UI sends user message along with user profile details to bff-platform in a properly structured manner. This message should be forwarded to n8n URL as is.
+
+Message returned by n8n should be sent to bff-platform and it should be sent to app ui and displayed in the chat.
+
+At this stage, app should also display the payment QR code and remind the user that they should pay 500/- to be able to 
+
+Actual observations are as follows:
+
+App (shows 10 credits): Hi Ankur, I now know your name and birth details. I also see that you are in Mumbai, Maharashtra, India. You have 10 credits and you can ask questions about what today holds for you. For questions about your future, love life, career and more, additional credits are available.
+
+Ensure to follow all instructions in #file:copilot-instructions.md  and fix the code accordingly to meet the expected behavior as described above.

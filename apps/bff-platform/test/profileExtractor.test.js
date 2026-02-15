@@ -42,6 +42,15 @@ describe('extractProfileFields', () => {
     const out = extractProfileFields('My dob is 1999-12-31');
     expect(out.dob).toBe('1999-12-31');
   });
+
+  test('extracts all fields from "I am X, born on D at T in P" format', () => {
+    const msg = 'I am Ankur Vatsa, born on 19 May 1979 at 09:30 am in New Delhi';
+    const out = extractProfileFields(msg);
+    expect(out.name).toBe('Ankur Vatsa');
+    expect(out.dob).toBe('1979-05-19');
+    expect(out.timeOfBirth).toMatch(/9:30|09:30/i);
+    expect(out.placeOfBirth).toMatch(/New Delhi/i);
+  });
 });
 // Endpoint-level tests removed here to avoid duplication.
 // Coverage retained via:

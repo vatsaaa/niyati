@@ -78,9 +78,13 @@ services:
       - "${BFF_PLATFORM_PORT:-3000}"
     secrets:
       - postgres_password
+      - access_token_secret
+      - service_token
     environment:
       <<: *prod-env
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      ACCESS_TOKEN_SECRET_FILE: /run/secrets/access_token_secret
+      SERVICE_TOKEN_FILE: /run/secrets/service_token
       CORS_ALLOWED: ${CORS_ALLOWED:-http://localhost:5173,http://localhost}
       ALLOW_CROSS_SITE_COOKIES: ${ALLOW_CROSS_SITE_COOKIES:-false}
     restart: always
