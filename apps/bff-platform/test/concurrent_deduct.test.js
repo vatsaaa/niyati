@@ -26,31 +26,37 @@ describe('POST /users/deduct-credits - Concurrent Operations', () => {
     jest.restoreAllMocks();
   });
 
-  test('multiple parallel deductions result in credits floored at zero', async () => {
+  test('multiple parallel deductions: excess requests get insufficient_credits', async () => {
     let credits = 10;
-    let callCount = 0;
 
     const mockDb = createMockDb(async (sql, params) => {
-      callCount++;
-      if (sql.includes('UPDATE user_credits') && sql.includes('GREATEST(credits - $2, 0)')) {
-        // Simulate race condition by capturing credits value before update
-        const amount = params[1];
-        const creditsSnapshot = credits;
-        const newValue = Math.max(creditsSnapshot - amount, 0);
-        credits = newValue;
+      if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') {
+        return { rows: [], rowCount: 0 };
+      }
 
+      if (sql.includes('FOR UPDATE')) {
         return {
-          rows: [{ id: 'test-user-1', credits: newValue, total_paid_amount: 0 }],
+          rows: [{ id: 'test-user-1', credits, total_paid_amount: 0 }],
           rowCount: 1
         };
       }
+
+      if (sql.includes('UPDATE user_credits') && sql.includes('credits - $2')) {
+        const amount = params[1];
+        credits = credits - amount;
+        return {
+          rows: [{ id: 'test-user-1', credits, total_paid_amount: 0 }],
+          rowCount: 1
+        };
+      }
+
       return { rows: [], rowCount: 0 };
     });
 
     app.set('db', mockDb);
 
     // Send 8 parallel deductions of 2 credits each from starting balance of 10
-    // Expected: credits should floor at 0, not go negative
+    // Expected: 5 succeed (10→8→6→4→2→0), 3 rejected with insufficient_credits
     const promises = Array(8).fill(null).map(() =>
       request(app)
         .post('/api/v1/users/deduct-credits')
@@ -59,19 +65,15 @@ describe('POST /users/deduct-credits - Concurrent Operations', () => {
 
     const results = await Promise.all(promises);
 
-    // All requests should succeed
-    results.forEach(res => {
-      expect(res.statusCode).toBe(200);
-      expect(res.body.status).toBe('ok');
-    });
+    const successes = results.filter(r => r.statusCode === 200);
+    const insufficients = results.filter(r => r.statusCode === 402);
+
+    expect(successes.length).toBe(5);
+    expect(insufficients.length).toBe(3);
 
     // Final credits should be 0, not negative
-    const finalCredits = results[results.length - 1].body.data.credits;
-    expect(finalCredits).toBe(0);
-    expect(finalCredits).toBeGreaterThanOrEqual(0);
-
-    // Verify DB was called 8 times
-    expect(callCount).toBe(8);
+    expect(credits).toBe(0);
+    expect(credits).toBeGreaterThanOrEqual(0);
   });
 
   test('concurrent deductions with same idempotency key return cached result', async () => {
@@ -114,11 +116,19 @@ describe('POST /users/deduct-credits - Concurrent Operations', () => {
         return { rows: [{ id: tx.id }], rowCount: 1 };
       }
 
-      // Update user_credits
-      if (sql.includes('UPDATE user_credits') && sql.includes('GREATEST(credits - $2, 0)')) {
+      // Lock user_credits row
+      if (sql.includes('FOR UPDATE')) {
+        return {
+          rows: [{ id: 'user-1', credits, total_paid_amount: 0 }],
+          rowCount: 1
+        };
+      }
+
+      // Update user_credits (exact subtraction by user_id)
+      if (sql.includes('UPDATE user_credits') && sql.includes('credits - $2')) {
         updateCount++;
         const amount = params[1];
-        credits = Math.max(credits - amount, 0);
+        credits = credits - amount;
         return { rows: [{ id: 'user-1', credits, total_paid_amount: 0 }], rowCount: 1 };
       }
 
@@ -212,10 +222,18 @@ describe('POST /users/deduct-credits - Concurrent Operations', () => {
         return { rows: [{ id: tx.id }], rowCount: 1 };
       }
 
-      if (sql.includes('UPDATE user_credits') && sql.includes('GREATEST')) {
+      // Lock user_credits row
+      if (sql.includes('FOR UPDATE')) {
+        return {
+          rows: [{ id: 'user-1', credits, total_paid_amount: 0 }],
+          rowCount: 1
+        };
+      }
+
+      if (sql.includes('UPDATE user_credits') && sql.includes('credits - $2')) {
         updateCount++;
         const amount = params[1];
-        credits = Math.max(credits - amount, 0);
+        credits = credits - amount;
         return { rows: [{ id: 'user-1', credits, total_paid_amount: 0 }], rowCount: 1 };
       }
 
@@ -298,9 +316,17 @@ describe('POST /users/deduct-credits - Concurrent Operations', () => {
         return { rows: [{ id: tx.id }], rowCount: 1 };
       }
 
-      if (sql.includes('UPDATE user_credits') && sql.includes('GREATEST')) {
+      // Lock user_credits row
+      if (sql.includes('FOR UPDATE')) {
+        return {
+          rows: [{ id: 'user-1', credits, total_paid_amount: 0 }],
+          rowCount: 1
+        };
+      }
+
+      if (sql.includes('UPDATE user_credits') && sql.includes('credits - $2')) {
         const amount = params[1];
-        credits = Math.max(credits - amount, 0);
+        credits = credits - amount;
         return { rows: [{ id: 'user-1', credits, total_paid_amount: 0 }], rowCount: 1 };
       }
 
@@ -368,10 +394,17 @@ describe('POST /users/deduct-credits - Concurrent Operations', () => {
         return { rows: [{ id: `tx-${chargeTransactions.size}` }], rowCount: 1 };
       }
 
-      if (sql.includes('UPDATE user_credits') && sql.includes('GREATEST')) {
+      // Lock user_credits row
+      if (sql.includes('FOR UPDATE')) {
+        return {
+          rows: [{ id: 'user-1', credits, total_paid_amount: 0 }],
+          rowCount: 1
+        };
+      }
+
+      if (sql.includes('UPDATE user_credits') && sql.includes('credits - $2')) {
         const amount = params[1];
-        const oldCredits = credits;
-        credits = Math.max(credits - amount, 0);
+        credits = credits - amount;
         return { rows: [{ id: 'user-1', credits, total_paid_amount: 0 }], rowCount: 1 };
       }
 
@@ -391,6 +424,8 @@ describe('POST /users/deduct-credits - Concurrent Operations', () => {
     app.set('db', mockDb);
 
     // Send 10 parallel requests each deducting 2 credits from balance of 5
+    // Expected: 2 succeed (5→3→1), 8 rejected with insufficient_credits (1 < 2)
+    // Wait — 5/2 = 2 full deductions (5→3→1), then 1 < 2 so remaining 8 get 402
     const promises = Array(10).fill(null).map((_, i) =>
       request(app)
         .post('/api/v1/users/deduct-credits')
@@ -400,12 +435,15 @@ describe('POST /users/deduct-credits - Concurrent Operations', () => {
 
     const results = await Promise.all(promises);
 
-    results.forEach(res => {
-      expect(res.statusCode).toBe(200);
-    });
+    const successes = results.filter(r => r.statusCode === 200);
+    const insufficients = results.filter(r => r.statusCode === 402);
+
+    // Only 2 deductions fit: 5→3→1, then 1 < 2 = insufficient
+    expect(successes.length).toBe(2);
+    expect(insufficients.length).toBe(8);
 
     // Credits must never go negative
-    expect(credits).toBe(0);
+    expect(credits).toBe(1);
     expect(credits).toBeGreaterThanOrEqual(0);
   });
 
@@ -413,8 +451,6 @@ describe('POST /users/deduct-credits - Concurrent Operations', () => {
     let credits = 15;
     const chargeTransactions = new Map();
     let idempotentCount = 0;
-    let nonIdempotentCount = 0;
-    let inTransaction = false;
 
     const mockDb = createMockDb(async (sql, params) => {
       if (sql.includes('SELECT id, request_id') && sql.includes('charge_transactions')) {
@@ -425,13 +461,7 @@ describe('POST /users/deduct-credits - Concurrent Operations', () => {
         return { rows: [], rowCount: 0 };
       }
 
-      if (sql === 'BEGIN') {
-        inTransaction = true;
-        return { rows: [], rowCount: 0 };
-      }
-
-      if (sql === 'COMMIT') {
-        inTransaction = false;
+      if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') {
         return { rows: [], rowCount: 0 };
       }
 
@@ -448,13 +478,18 @@ describe('POST /users/deduct-credits - Concurrent Operations', () => {
         return { rows: [{ id: `tx-${chargeTransactions.size}` }], rowCount: 1 };
       }
 
-      // UPDATE user_credits - detect if idempotent or not based on transaction state
-      if (sql.includes('UPDATE user_credits') && sql.includes('GREATEST')) {
+      // Lock user_credits row
+      if (sql.includes('FOR UPDATE')) {
+        return {
+          rows: [{ id: 'user-1', credits, total_paid_amount: 0 }],
+          rowCount: 1
+        };
+      }
+
+      // UPDATE user_credits - both paths now go through executeDeduction (always in transaction)
+      if (sql.includes('UPDATE user_credits') && sql.includes('credits - $2')) {
         const amount = params[1];
-        credits = Math.max(credits - amount, 0);
-        
-        // If not in transaction, it's non-idempotent
-        if (!inTransaction) nonIdempotentCount++;
+        credits = credits - amount;
         
         return { rows: [{ id: 'user-1', credits, total_paid_amount: 0 }], rowCount: 1 };
       }
@@ -503,9 +538,9 @@ describe('POST /users/deduct-credits - Concurrent Operations', () => {
     // 15 - 10 = 5
     expect(credits).toBe(5);
 
-    // Verify both paths were used
-    expect(idempotentCount).toBe(3); // 3 idempotent transactions
-    expect(nonIdempotentCount).toBe(2); // 2 non-idempotent updates
+    // Verify both paths were used:
+    // idempotentCount tracks INSERT INTO charge_transactions (only for requests with idempotency key)
+    expect(idempotentCount).toBe(3); // 3 idempotent transactions inserted
   });
 });
 

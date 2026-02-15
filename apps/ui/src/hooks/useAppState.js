@@ -176,6 +176,52 @@ export const useMessages = () => {
     }];
   });
 
+  // Load chat history from server on mount (for returning users)
+  useEffect(() => {
+    let cancelled = false;
+    const phoneNumber = localStorage.getItem('niyati_phone_number');
+    if (!phoneNumber) return;
+
+    const loadHistory = async () => {
+      try {
+        const res = await fetch(`/api/v1/chat/history?phoneNumber=${encodeURIComponent(phoneNumber)}`);
+        if (!res.ok) return;
+        const json = await res.json();
+        if (!json || json.status !== 'ok' || !Array.isArray(json.data?.messages)) return;
+        if (cancelled) return;
+
+        const serverMsgs = json.data.messages
+          .reverse() // API returns DESC, we need ASC
+          .map(m => ({
+            id: m.message_id,
+            text: m.content,
+            sender: m.role === 'user' ? 'user' : 'bot',
+            timestamp: new Date(m.created_at)
+          }));
+
+        if (serverMsgs.length === 0) return;
+
+        // Merge: use server history as base, append any local-only messages
+        setMessages(prev => {
+          // If local has substantial content, prefer merging; otherwise replace
+          if (prev.length <= 1) return serverMsgs;
+          // Deduplicate by content+sender within a 2s window
+          const seen = new Set(serverMsgs.map(m => `${m.sender}:${m.text?.substring(0, 80)}`));
+          const localOnly = prev.filter(m => !seen.has(`${m.sender}:${m.text?.substring(0, 80)}`));
+          const merged = [...serverMsgs, ...localOnly];
+          localStorage.setItem('niyati_chat_history', JSON.stringify(merged));
+          return merged;
+        });
+      } catch (e) {
+        // Fail silently — local history is still available
+        console.warn('Failed to load chat history from server:', e);
+      }
+    };
+
+    loadHistory();
+    return () => { cancelled = true; };
+  }, []);
+
   const addMessage = (messageOrText, sender = 'user', isError = false) => {
     let newMessage;
     

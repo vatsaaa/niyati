@@ -460,6 +460,84 @@ router.get('/lookup', async (req, res) => {
   }
 });
 
+// Deadlock retry constants
+const MAX_DEADLOCK_RETRIES = 3;
+const DEADLOCK_BASE_DELAY_MS = 100;
+
+// Helper: execute credit deduction with FOR UPDATE row-level locking and deadlock retry.
+// Unifies both idempotent (reqId present) and non-idempotent paths.
+async function executeDeduction(db, phone, amount, reqId, retryCount = 0) {
+  try {
+    await db.query('BEGIN');
+
+    // Lock the user_credits row to prevent concurrent modifications
+    const lockSql = `
+      SELECT uc.user_id AS id, uc.credits, uc.total_paid_amount
+      FROM user_credits uc
+      JOIN user_profiles up ON uc.user_id = up.user_id
+      WHERE regexp_replace(up.phone_number, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g')
+      LIMIT 1
+      FOR UPDATE OF uc
+    `;
+    const lockResult = await db.query(lockSql, [phone]);
+
+    if (!lockResult || !lockResult.rows || lockResult.rows.length === 0) {
+      await db.query('ROLLBACK');
+      return { type: 'not_found' };
+    }
+
+    const user = lockResult.rows[0];
+
+    // Check sufficient credits BEFORE deducting
+    if (user.credits < amount) {
+      await db.query('ROLLBACK');
+      return { type: 'insufficient_credits', currentBalance: user.credits, requiredCredits: amount };
+    }
+
+    // Insert pending charge transaction (idempotent flow only)
+    if (reqId) {
+      await db.query(
+        `INSERT INTO charge_transactions (request_id, phone_number, amount, status, created_at) VALUES ($1, $2, $3, 'pending', now()) RETURNING id`,
+        [reqId, phone, amount]
+      );
+    }
+
+    // Deduct credits (exact subtraction — balance already verified)
+    const updateSql = `
+      UPDATE user_credits
+      SET credits = credits - $2, updated_at = now()
+      WHERE user_id = $1
+      RETURNING user_id AS id, credits, total_paid_amount
+    `;
+    const result = await db.query(updateSql, [user.id, amount]);
+    const updated = result.rows[0];
+
+    // Finalize charge transaction (idempotent flow only)
+    if (reqId) {
+      await db.query(
+        `UPDATE charge_transactions SET status = 'applied', credits_after = $2, updated_at = now() WHERE request_id = $1`,
+        [reqId, updated.credits]
+      );
+    }
+
+    await db.query('COMMIT');
+    return { type: 'success', credits: updated.credits, totalPaidAmount: updated.total_paid_amount, userId: updated.id };
+
+  } catch (err) {
+    try { await db.query('ROLLBACK'); } catch (_) { /* ignore rollback error */ }
+
+    // PostgreSQL deadlock detected (error code 40P01) — retry with exponential backoff
+    if (err.code === '40P01' && retryCount < MAX_DEADLOCK_RETRIES) {
+      const delay = DEADLOCK_BASE_DELAY_MS * Math.pow(2, retryCount);
+      logger.warn({ msg: 'deduct_credits_deadlock_retry', retryCount: retryCount + 1, delay, phone, amount });
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return executeDeduction(db, phone, amount, reqId, retryCount + 1);
+    }
+
+    throw err;
+  }
+}
+
 // POST /users/deduct-credits
 // Body: { phoneNumber: "+91-9899162012", amount: 2, queryType: "horoscope" | "premium" }
 // Headers: x-idempotency-key (required for idempotent deductions)
@@ -486,98 +564,43 @@ router.post('/deduct-credits', authMiddleware, async (req, res) => {
     const db = req.app.get('db');
     if (!db) return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Database not configured');
 
-    // Non-idempotent path: simple UPDATE (use with caution; prefer idempotency keys)
-    if (!incomingReqId) {
-      const sql = `
-        UPDATE user_credits 
-        SET credits = GREATEST(credits - $2, 0), updated_at = now()
-        WHERE user_id = (
-          SELECT user_id FROM user_profiles WHERE regexp_replace(phone_number, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g') LIMIT 1
-        )
-        RETURNING user_id AS id, credits, total_paid_amount
-      `;
-      const result = await db.query(sql, [phone, amount]);
-      
-      if (!result || !result.rows || result.rows.length === 0) {
-        logger.error({ msg: 'deduct_credits_user_not_found', phone, amount });
-        return res.sendError(ErrorCodes.NOT_FOUND, 'user_not_found');
+    // For idempotent flow, check if transaction was already processed
+    if (incomingReqId) {
+      const checkSql = `SELECT id, request_id, phone_number, amount, status, credits_after, created_at FROM charge_transactions WHERE request_id = $1 LIMIT 1`;
+      const existing = await db.query(checkSql, [incomingReqId]);
+
+      if (existing && existing.rows && existing.rows.length > 0) {
+        const tx = existing.rows[0];
+        logger.info({
+          msg: 'deduct_credits_idempotent_hit',
+          reqId: incomingReqId, phone, amount: tx.amount,
+          status: tx.status, creditsAfter: tx.credits_after,
+          originalTimestamp: tx.created_at
+        });
+        return res.sendSuccess({ credits: tx.credits_after, alreadyApplied: tx.status === 'applied' });
       }
-      
-      const user = result.rows[0];
-      logger.warn({ msg: 'credits_deducted_no_idempotency', phone, amount, creditsAfter: user.credits, user_id: user.id });
-      return res.sendSuccess({ credits: user.credits, totalPaidAmount: user.total_paid_amount });
     }
 
-    // Idempotent flow using charge_transactions table
-    // Check if transaction already exists
-    const checkSql = `SELECT id, request_id, phone_number, amount, status, credits_after, created_at FROM charge_transactions WHERE request_id = $1 LIMIT 1`;
-    const existing = await db.query(checkSql, [incomingReqId]);
-    
-    if (existing && existing.rows && existing.rows.length > 0) {
-      const tx = existing.rows[0];
-      logger.info({ 
-        msg: 'deduct_credits_idempotent_hit', 
-        reqId: incomingReqId, 
-        phone, 
-        amount: tx.amount,
-        status: tx.status,
-        creditsAfter: tx.credits_after,
-        originalTimestamp: tx.created_at
-      });
-      return res.sendSuccess({ credits: tx.credits_after, alreadyApplied: tx.status === 'applied' });
-    }
+    // Execute deduction with FOR UPDATE locking and deadlock retry
+    const result = await executeDeduction(db, phone, amount, incomingReqId || null);
 
-    // Start transaction: insert pending, deduct, update to applied
-    await db.query('BEGIN');
-    
-    try {
-      const insertSql = `INSERT INTO charge_transactions (request_id, phone_number, amount, status, created_at) VALUES ($1, $2, $3, 'pending', now()) RETURNING id`;
-      await db.query(insertSql, [incomingReqId, phone, amount]);
-
-      const updateSql = `
-        UPDATE user_credits 
-        SET credits = GREATEST(credits - $2, 0), updated_at = now()
-        WHERE user_id = (
-          SELECT user_id FROM user_profiles WHERE regexp_replace(phone_number, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g') LIMIT 1
-        )
-        RETURNING user_id AS id, credits, total_paid_amount
-      `;
-      const result = await db.query(updateSql, [phone, amount]);
-      
-      if (!result || !result.rows || result.rows.length === 0) {
-        await db.query('ROLLBACK');
-        logger.error({ msg: 'deduct_credits_user_not_found_in_tx', phone, amount, reqId: incomingReqId });
+    switch (result.type) {
+      case 'not_found':
+        logger.error({ msg: 'deduct_credits_user_not_found', phone, amount, reqId: incomingReqId });
         return res.sendError(ErrorCodes.NOT_FOUND, 'user_not_found');
-      }
-      
-      const user = result.rows[0];
 
-      const finalizeSql = `UPDATE charge_transactions SET status = 'applied', credits_after = $2, updated_at = now() WHERE request_id = $1`;
-      await db.query(finalizeSql, [incomingReqId, user.credits]);
-      
-      await db.query('COMMIT');
+      case 'insufficient_credits':
+        logger.warn({ msg: 'deduct_credits_insufficient', phone, amount, currentBalance: result.currentBalance, reqId: incomingReqId });
+        return res.sendError(ErrorCodes.INSUFFICIENT_CREDITS, 'insufficient_credits', {
+          details: { currentBalance: result.currentBalance, requiredCredits: result.requiredCredits }
+        });
 
-      logger.info({ 
-        msg: 'deduct_credits_applied_idempotent', 
-        reqId: incomingReqId, 
-        phone, 
-        amount, 
-        creditsAfter: user.credits,
-        user_id: user.id
-      });
-      return res.sendSuccess({ credits: user.credits, totalPaidAmount: user.total_paid_amount });
-      
-    } catch (err) {
-      await db.query('ROLLBACK');
-      logger.error({ 
-        msg: 'deduct_credits_transaction_failed', 
-        err: err && err.message, 
-        stack: err && err.stack,
-        phone, 
-        amount, 
-        reqId: incomingReqId 
-      });
-      return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'deduct_credits_failed');
+      case 'success':
+        logger.info({
+          msg: incomingReqId ? 'deduct_credits_applied_idempotent' : 'credits_deducted_no_idempotency',
+          reqId: incomingReqId, phone, amount, creditsAfter: result.credits, user_id: result.userId
+        });
+        return res.sendSuccess({ credits: result.credits, totalPaidAmount: result.totalPaidAmount });
     }
   } catch (err) {
     logger.error(sanitize({ msg: 'users.deduct-credits.error', err: err && err.message, stack: err && err.stack }));
@@ -649,13 +672,14 @@ router.post('/can-ask', async (req, res) => {
 });
 
 // POST /users/add-credits
-// Body: { phoneNumber: "+91-9899162012", amount: 500 } (amount in INR)
+// Body: { phoneNumber, amount (INR), packageId? } — supports both flat amount and package-based top-up
 // Adds credits after payment verification
 // Requires authentication (Bearer token)
 router.post('/add-credits', authMiddleware, async (req, res) => {
   try {
     const phone = (req.body.phoneNumber || '').trim();
-    const amountINR = parseInt(req.body.amount, 10) || 0;
+    const packageId = (req.body.packageId || '').trim() || null;
+    let amountINR = parseInt(req.body.amount, 10) || 0;
 
     if (!phone) {
       return res.sendError(ErrorCodes.MISSING_REQUIRED_FIELD, 'missing_phone_number');
@@ -665,8 +689,22 @@ router.post('/add-credits', authMiddleware, async (req, res) => {
     if (!db) return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Database not configured');
 
     const appConfig = await getAppConfig(db);
-    const creditsPerTenINR = parseInt(appConfig.credits_per_10_inr, 10) || 1;
-    const creditsToAdd = Math.floor(amountINR / 10) * creditsPerTenINR;
+    let creditsToAdd = 0;
+
+    // If a packageId is provided, resolve credits from the package definition
+    if (packageId) {
+      const packages = getTopupPackages(appConfig);
+      const pkg = packages.find(p => p.id === packageId);
+      if (!pkg) {
+        return res.sendError(ErrorCodes.BAD_REQUEST, 'invalid_package');
+      }
+      creditsToAdd = pkg.credits;
+      amountINR = amountINR || pkg.amountINR;
+    } else {
+      // Legacy flat-amount path
+      const creditsPerTenINR = parseInt(appConfig.credits_per_10_inr, 10) || 1;
+      creditsToAdd = Math.floor(amountINR / 10) * creditsPerTenINR;
+    }
 
     if (creditsToAdd <= 0) {
       return res.sendError(ErrorCodes.BAD_REQUEST, 'invalid_amount');
@@ -684,6 +722,7 @@ router.post('/add-credits', authMiddleware, async (req, res) => {
           last_payment_verified = TRUE, 
           upi_id = $4, 
           upi_txn_id = $5, 
+          credit_expires_at = now() + interval '6 months',
           updated_at = now()
       WHERE user_id = (
         SELECT user_id FROM user_profiles WHERE regexp_replace(phone_number, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g') LIMIT 1
@@ -900,6 +939,28 @@ router.delete('/profile', authMiddleware, async (req, res) => {
   }
 });
 
+// Default top-up packages (overridden by app_config keys topup_package_*)
+const DEFAULT_TOPUP_PACKAGES = [
+  { id: 'small',  credits: 10, amountINR: 100, label: '10 credits' },
+  { id: 'medium', credits: 25, amountINR: 250, label: '25 credits' },
+  { id: 'large',  credits: 50, amountINR: 500, label: '50 credits' }
+];
+
+function getTopupPackages(appConfig) {
+  // Allow overriding via app_config: topup_package_small = "10,100", topup_package_medium = "25,250", etc.
+  const packages = DEFAULT_TOPUP_PACKAGES.map(pkg => {
+    const configVal = appConfig[`topup_package_${pkg.id}`];
+    if (configVal && typeof configVal === 'string') {
+      const [credits, amountINR] = configVal.split(',').map(v => parseInt(v.trim(), 10));
+      if (credits > 0 && amountINR > 0) {
+        return { ...pkg, credits, amountINR, label: `${credits} credits` };
+      }
+    }
+    return pkg;
+  });
+  return packages;
+}
+
 // GET /users/config
 // Returns configurable credits settings for the UI
 router.get('/config', async (req, res) => {
@@ -908,13 +969,15 @@ router.get('/config', async (req, res) => {
     if (!db) return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Database not configured');
 
     const appConfig = await getAppConfig(db);
+    const topupPackages = getTopupPackages(appConfig);
 
     return res.sendSuccess({
       credits_monthly_free: parseInt(appConfig.credits_monthly_free, 10) || 10,
       credits_horoscope_cost: parseInt(appConfig.credits_horoscope_cost, 10) || 2,
       credits_premium_cost: parseInt(appConfig.credits_premium_cost, 10) || 4,
       credits_low_threshold: parseInt(appConfig.credits_low_threshold, 10) || 4,
-      payment_amount_inr: parseInt(appConfig.payment_amount_inr, 10) || 500
+      payment_amount_inr: parseInt(appConfig.payment_amount_inr, 10) || 500,
+      topup_packages: topupPackages
     });
   } catch (err) {
     logger.error(sanitize({ msg: 'users.config.error', err: err && err.message }));
@@ -923,3 +986,5 @@ router.get('/config', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.executeDeduction = executeDeduction;
+module.exports.getTopupPackages = getTopupPackages;
