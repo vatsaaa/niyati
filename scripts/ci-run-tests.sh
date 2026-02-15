@@ -301,7 +301,7 @@ $COMPOSE_CMD -p "$PROJECT_NAME" exec -T postgres psql -U "$POSTGRES_USER" -d "$P
 -- Uses phone numbers from the E2E test specs
 DELETE FROM user_profiles WHERE phone_number IN ('+1-9992223333', '+919999999999', '+919876543210', '+14155551234');
 DELETE FROM users WHERE phone_number IN ('+1-9992223333', '+919999999999', '+919876543210', '+14155551234');
-DELETE FROM charge_transactions WHERE user_phone IN ('+1-9992223333', '+919999999999', '+919876543210', '+14155551234');
+DELETE FROM charge_transactions WHERE phone_number IN ('+1-9992223333', '+919999999999', '+919876543210', '+14155551234');
 EOF
 log_info "Database cleaned for E2E tests"
 
@@ -334,7 +334,8 @@ BACKEND_EXIT=0
 if [[ "$SKIP_BACKEND" -eq 0 ]]; then
     log_step "🧪 Running backend tests..."
 
-    # Install commons
+    # Install shared packages (auth-core must come before commons which depends on it)
+    npm install --prefix packages/auth-core --prefer-offline --no-audit --silent
     npm ci --prefix packages/commons --prefer-offline --no-audit --silent
 
     # bff-platform tests (run package test script so coverage flag in package.json is respected)
