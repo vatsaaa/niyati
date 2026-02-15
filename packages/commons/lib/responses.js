@@ -52,7 +52,31 @@ const ErrorCodes = {
   // Business logic errors
   NO_RESULTS: 'NO_RESULTS',
   CONFLICT: 'CONFLICT',
-  AMBIGUOUS_RESULTS: 'AMBIGUOUS_RESULTS'
+  AMBIGUOUS_RESULTS: 'AMBIGUOUS_RESULTS',
+
+  // Domain-specific: Authentication
+  AUTH_INVALID_PHONE: 'AUTH_001',
+  AUTH_SESSION_EXPIRED: 'AUTH_002',
+
+  // Domain-specific: Profile
+  PROFILE_MISSING_FIELDS: 'PROFILE_001',
+  PROFILE_INVALID_DOB: 'PROFILE_002',
+  PROFILE_UNDERAGE: 'PROFILE_003',
+
+  // Domain-specific: Credits
+  INSUFFICIENT_CREDITS: 'CREDIT_001',
+  CREDIT_DEDUCTION_FAILED: 'CREDIT_002',
+
+  // Domain-specific: Payments
+  PAYMENT_INVALID_UPI: 'PAYMENT_001',
+  PAYMENT_INVALID_TXN_ID: 'PAYMENT_002',
+  PAYMENT_VERIFICATION_TIMEOUT: 'PAYMENT_003',
+  PAYMENT_AMOUNT_MISMATCH: 'PAYMENT_004',
+  PAYMENT_DUPLICATE_TXN: 'PAYMENT_005',
+
+  // Domain-specific: AI
+  AI_RESPONSE_TIMEOUT: 'AI_001',
+  AI_SERVICE_UNAVAILABLE: 'AI_002'
 };
 
 // HTTP status code mapping
@@ -75,7 +99,23 @@ const ErrorStatusCodes = {
   [ErrorCodes.NO_RESULTS]: 404,
   [ErrorCodes.AMBIGUOUS_RESULTS]: 200 // Still successful, just needs disambiguation
   ,
-  [ErrorCodes.CONFLICT]: 409
+  [ErrorCodes.CONFLICT]: 409,
+
+  // Domain-specific codes
+  [ErrorCodes.AUTH_INVALID_PHONE]: 400,
+  [ErrorCodes.AUTH_SESSION_EXPIRED]: 401,
+  [ErrorCodes.PROFILE_MISSING_FIELDS]: 400,
+  [ErrorCodes.PROFILE_INVALID_DOB]: 400,
+  [ErrorCodes.PROFILE_UNDERAGE]: 403,
+  [ErrorCodes.INSUFFICIENT_CREDITS]: 402,
+  [ErrorCodes.CREDIT_DEDUCTION_FAILED]: 500,
+  [ErrorCodes.PAYMENT_INVALID_UPI]: 400,
+  [ErrorCodes.PAYMENT_INVALID_TXN_ID]: 400,
+  [ErrorCodes.PAYMENT_VERIFICATION_TIMEOUT]: 504,
+  [ErrorCodes.PAYMENT_AMOUNT_MISMATCH]: 400,
+  [ErrorCodes.PAYMENT_DUPLICATE_TXN]: 409,
+  [ErrorCodes.AI_RESPONSE_TIMEOUT]: 504,
+  [ErrorCodes.AI_SERVICE_UNAVAILABLE]: 503
 };
 
 // Note: prefer using canonical ErrorCodes constants throughout the codebase.

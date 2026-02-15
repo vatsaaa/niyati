@@ -36,11 +36,13 @@ describe('bff-platform chat routes', () => {
             expect(res1.statusCode).toBe(200);
             expect(res1.body.data.queryType).toBe('horoscope');
             expect(res1.body.data.creditCost).toBe(2);
+            expect(res1.body.data.isPremium).toBe(false);
 
             const res2 = await request(app).post('/api/v1/chat/classify').send({ message: 'When will I get married?' });
             expect(res2.statusCode).toBe(200);
             expect(res2.body.data.queryType).toBe('premium');
             expect(res2.body.data.creditCost).toBe(4);
+            expect(res2.body.data.isPremium).toBe(true);
         });
 
         test('should be accessible without auth and return expected shape', async () => {
@@ -56,6 +58,7 @@ describe('bff-platform chat routes', () => {
             expect(res.body.data).toHaveProperty('queryType');
             expect(res.body.data).toHaveProperty('creditCost');
             expect(res.body.data).toHaveProperty('isBillable');
+            expect(res.body.data).toHaveProperty('isPremium');
             expect(res.body.data).toHaveProperty('isFutureQuery');
         });
 
