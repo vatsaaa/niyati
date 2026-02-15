@@ -248,37 +248,94 @@ describe('bff-platform users routes', () => {
   });
 
   describe('Credits Management', () => {
-    test('POST /deduct-credits reduces credits when sufficient', async () => {
-      const fakeDb = {
+    // Helper: create a mock DB that simulates the transactional deduct flow
+    // (BEGIN → SELECT FOR UPDATE → UPDATE → COMMIT)
+    function createDeductMockDb(currentCredits, totalPaid = 0) {
+      return {
         async query(sql, params) {
-          if (sql.includes('UPDATE user_credits') && sql.includes('GREATEST')) {
-            const amt = params[1];
-            return { rows: [{ id: 1, credits: 5 - amt, total_paid_amount: 0 }], rowCount: 1 };
+          if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return {};
+          // FOR UPDATE lock query
+          if (sql.includes('FOR UPDATE')) {
+            if (currentCredits === null) return { rows: [], rowCount: 0 }; // user not found
+            return { rows: [{ id: 'user-1', credits: currentCredits, total_paid_amount: totalPaid }], rowCount: 1 };
           }
+          // Deduction UPDATE
+          if (sql.includes('UPDATE user_credits') && sql.includes('credits - $2')) {
+            const amt = params[1];
+            return { rows: [{ id: 'user-1', credits: currentCredits - amt, total_paid_amount: totalPaid }], rowCount: 1 };
+          }
+          // charge_transactions insert/update (idempotent flow)
+          if (sql.includes('charge_transactions')) return { rows: [{ id: 1 }], rowCount: 1 };
           return { rows: [], rowCount: 0 };
         }
       };
-      app.set('db', fakeDb);
+    }
 
+    test('POST /deduct-credits reduces credits when sufficient', async () => {
+      app.set('db', createDeductMockDb(5));
       const res = await request(app).post('/api/v1/users/deduct-credits').send({ phoneNumber: '+911234', amount: 2 });
       expect(res.statusCode).toBe(200);
       expect(res.body.data).toHaveProperty('credits', 3);
     });
 
-    test('POST /deduct-credits floors at zero when insufficient credits', async () => {
+    test('POST /deduct-credits returns INSUFFICIENT_CREDITS (402) when balance too low', async () => {
+      app.set('db', createDeductMockDb(1));
+      const res = await request(app).post('/api/v1/users/deduct-credits').send({ phoneNumber: '+91999', amount: 4 });
+      expect(res.statusCode).toBe(402);
+      expect(res.body.error.code).toBe('CREDIT_001');
+      expect(res.body.error.details).toEqual({ currentBalance: 1, requiredCredits: 4 });
+    });
+
+    test('POST /deduct-credits returns NOT_FOUND when user does not exist', async () => {
+      app.set('db', createDeductMockDb(null));
+      const res = await request(app).post('/api/v1/users/deduct-credits').send({ phoneNumber: '+91000', amount: 2 });
+      expect(res.statusCode).toBe(404);
+    });
+
+    test('POST /deduct-credits idempotent: returns cached result on duplicate reqId', async () => {
       const fakeDb = {
         async query(sql, params) {
-          if (sql.includes('UPDATE user_credits') && sql.includes('GREATEST')) {
-            return { rows: [{ id: 2, credits: 0, total_paid_amount: 0 }], rowCount: 1 };
+          if (sql.includes('charge_transactions WHERE request_id')) {
+            return { rows: [{ id: 10, request_id: 'req-1', phone_number: '+91', amount: 2, status: 'applied', credits_after: 8, created_at: new Date() }], rowCount: 1 };
           }
           return { rows: [], rowCount: 0 };
         }
       };
       app.set('db', fakeDb);
-
-      const res = await request(app).post('/api/v1/users/deduct-credits').send({ phoneNumber: '+91999', amount: 4 });
+      const res = await request(app)
+        .post('/api/v1/users/deduct-credits')
+        .set('x-idempotency-key', 'req-1')
+        .send({ phoneNumber: '+91123', amount: 2 });
       expect(res.statusCode).toBe(200);
-      expect(res.body.data).toHaveProperty('credits', 0);
+      expect(res.body.data.credits).toBe(8);
+      expect(res.body.data.alreadyApplied).toBe(true);
+    });
+
+    test('POST /deduct-credits retries on PostgreSQL deadlock (40P01)', async () => {
+      let callCount = 0;
+      const fakeDb = {
+        async query(sql, params) {
+          if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return {};
+          if (sql.includes('FOR UPDATE')) {
+            callCount++;
+            if (callCount === 1) {
+              const err = new Error('deadlock detected');
+              err.code = '40P01';
+              throw err;
+            }
+            return { rows: [{ id: 'user-1', credits: 10, total_paid_amount: 0 }], rowCount: 1 };
+          }
+          if (sql.includes('credits - $2')) {
+            return { rows: [{ id: 'user-1', credits: 8, total_paid_amount: 0 }], rowCount: 1 };
+          }
+          return { rows: [], rowCount: 0 };
+        }
+      };
+      app.set('db', fakeDb);
+      const res = await request(app).post('/api/v1/users/deduct-credits').send({ phoneNumber: '+91111', amount: 2 });
+      expect(res.statusCode).toBe(200);
+      expect(res.body.data.credits).toBe(8);
+      expect(callCount).toBe(2); // first attempt + 1 retry
     });
 
     test('POST /add-credits adds credits and updates total_paid_amount', async () => {
@@ -301,6 +358,32 @@ describe('bff-platform users routes', () => {
       expect(res.body.data.totalPaidAmount).toBe(500);
     });
 
+    test('POST /add-credits accepts packageId and uses package credits', async () => {
+      const fakeDb = {
+        async query(sql, params) {
+          if (sql && sql.toUpperCase().startsWith('SELECT KEY')) return { rows: [], rowCount: 0 };
+          if (sql.includes('UPDATE user_credits') && sql.includes('credits = credits +')) {
+            const creditsAdded = params[1];
+            const amountINR = params[2];
+            return { rows: [{ user_id: 'user-4', credits: creditsAdded, total_paid_amount: amountINR, is_paid: true, last_payment_amount: amountINR, last_payment_verified: true, upi_id: null, upi_txn_id: null }], rowCount: 1 };
+          }
+          return { rows: [], rowCount: 0 };
+        }
+      };
+      app.set('db', fakeDb);
+
+      const res = await request(app).post('/api/v1/users/add-credits').send({ phoneNumber: '+91988', packageId: 'medium' });
+      expect(res.statusCode).toBe(200);
+      expect(res.body.data.creditsAdded).toBe(25);
+    });
+
+    test('POST /add-credits rejects invalid packageId', async () => {
+      const fakeDb = { async query(sql, params) { return { rows: [], rowCount: 0 }; } };
+      app.set('db', fakeDb);
+      const res = await request(app).post('/api/v1/users/add-credits').send({ phoneNumber: '+91111', packageId: 'nonexistent' });
+      expect(res.statusCode).toBe(400);
+    });
+
     test('POST /add-credits rejects small amounts (<10 INR)', async () => {
       const fakeDb = { async query(sql, params) { return { rows: [], rowCount: 0 }; } };
       app.set('db', fakeDb);
@@ -310,10 +393,10 @@ describe('bff-platform users routes', () => {
   });
 
   describe('GET /config', () => {
-    test('returns configurable settings', async () => {
+    test('returns configurable settings including topup_packages', async () => {
       const fakeDb = {
         async query(sql) {
-          if (sql.includes('SELECT KEY')) {
+          if (sql.includes('SELECT KEY') || sql.includes('SELECT key')) {
             return {
               rows: [
                 { key: 'credits_monthly_free', value: '10' },
@@ -334,6 +417,13 @@ describe('bff-platform users routes', () => {
       expect(res.statusCode).toBe(200);
       expect(res.body.data.credits_monthly_free).toBe(10);
       expect(res.body.data.credits_horoscope_cost).toBe(2);
+      // Should include topup_packages array
+      expect(res.body.data.topup_packages).toBeDefined();
+      expect(Array.isArray(res.body.data.topup_packages)).toBe(true);
+      expect(res.body.data.topup_packages.length).toBe(3);
+      expect(res.body.data.topup_packages[0]).toHaveProperty('id', 'small');
+      expect(res.body.data.topup_packages[1]).toHaveProperty('id', 'medium');
+      expect(res.body.data.topup_packages[2]).toHaveProperty('id', 'large');
     });
   });
 });

@@ -127,6 +127,51 @@ async function start() {
         });
         // Log response from webhook (N8N)
         try { logger.debug({ msg: 'N8N', response: res && res.data ? (typeof res.data === 'string' ? res.data : JSON.stringify(res.data)) : `status:${res.status}` }); } catch (e) { }
+      } else if (type === 'credit_expiration') {
+        // Expire paid credits that have passed their credit_expires_at date
+        // Resets credits to the monthly free allowance for expired accounts
+        const dbUrl = process.env.DATABASE_URL || 'postgresql://postgres:postgres@postgres:5432/niyati';
+        const { Client } = require('pg');
+        const dbClient = new Client({ connectionString: dbUrl });
+        try {
+          await dbClient.connect();
+          const expireResult = await dbClient.query(`
+            UPDATE user_credits
+            SET credits = LEAST(credits, 10),
+                credit_expires_at = NULL,
+                is_paid = FALSE,
+                updated_at = now()
+            WHERE credit_expires_at IS NOT NULL
+              AND credit_expires_at < now()
+            RETURNING user_id, credits
+          `);
+          const count = expireResult.rowCount || 0;
+          logger.info({ msg: 'credit_expiration_completed', expiredCount: count });
+        } finally {
+          await dbClient.end().catch(() => {});
+        }
+      } else if (type === 'monthly_credit_reset') {
+        // Reset free credits for all non-paid users whose last reset was in a previous month
+        const dbUrl = process.env.DATABASE_URL || 'postgresql://postgres:postgres@postgres:5432/niyati';
+        const { Client } = require('pg');
+        const dbClient = new Client({ connectionString: dbUrl });
+        try {
+          await dbClient.connect();
+          const resetResult = await dbClient.query(`
+            UPDATE user_credits
+            SET credits = GREATEST(credits, 10),
+                credits_last_reset = now(),
+                updated_at = now()
+            WHERE is_paid = FALSE
+              AND (credits_last_reset IS NULL
+                   OR date_trunc('month', credits_last_reset) < date_trunc('month', now()))
+            RETURNING user_id, credits
+          `);
+          const count = resetResult.rowCount || 0;
+          logger.info({ msg: 'monthly_credit_reset_completed', resetCount: count });
+        } finally {
+          await dbClient.end().catch(() => {});
+        }
       } else {
         logger.warn({ msg: 'Unknown job type', type });
         // Don't retry unknown job types

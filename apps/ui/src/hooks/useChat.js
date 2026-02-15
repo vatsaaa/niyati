@@ -21,6 +21,16 @@ function hasProfileBeenSent() {
   }
 }
 
+// Persist a chat message to the server (fire-and-forget, best-effort)
+function persistChatMessage(phoneNumber, role, content, queryType, creditCost) {
+  if (!phoneNumber || !content) return;
+  fetch('/api/v1/chat/message', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phoneNumber, role, content, queryType: queryType || null, creditCost: creditCost || 0 })
+  }).catch(() => { /* best-effort — don't block chat flow */ });
+}
+
 function markProfileAsSent() {
   try {
     localStorage.setItem('niyati_profile_sent', 'true');
@@ -157,6 +167,7 @@ function getLowCreditsWarning(credits) {
 
 // Deduct credits after successful response
 // Supports idempotency by passing a requestId which will be sent as `x-idempotency-key`
+// Returns { credits, error? } — error is set when server returns INSUFFICIENT_CREDITS (CREDIT_001)
 async function deductCredits(phoneNumber, amount, requestId = null, isClarifying = false) {
   try {
     const headers = { 'Content-Type': 'application/json' };
@@ -169,10 +180,38 @@ async function deductCredits(phoneNumber, amount, requestId = null, isClarifying
     });
     if (response.ok) {
       const data = await response.json();
-      return data.data?.credits ?? null;
+      return { credits: data.data?.credits ?? null };
+    }
+    // Handle INSUFFICIENT_CREDITS (HTTP 402)
+    if (response.status === 402) {
+      try {
+        const errData = await response.json();
+        const details = errData?.error?.details || {};
+        return { credits: null, error: 'insufficient_credits', currentBalance: details.currentBalance, requiredCredits: details.requiredCredits };
+      } catch (_) {
+        return { credits: null, error: 'insufficient_credits' };
+      }
     }
   } catch (e) {
     console.warn('Failed to deduct credits:', e);
+  }
+  return { credits: null };
+}
+
+// Add credits via a top-up package or flat amount
+async function addCreditsToAccount(phoneNumber, packageId, amountINR) {
+  try {
+    const response = await fetch('/api/v1/users/add-credits', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phoneNumber, packageId: packageId || undefined, amount: amountINR || undefined })
+    });
+    if (response.ok) {
+      const data = await response.json();
+      return data.data || null;
+    }
+  } catch (e) {
+    console.warn('Failed to add credits:', e);
   }
   return null;
 }
@@ -237,6 +276,8 @@ export function useChat(profile, updateProfile, addMessage, auth) {
   const lastClassificationRef = useRef(null);
   // Track pending disambiguation when geocode returns multiple candidates
   const pendingDisambiguationRef = useRef(null);
+  // Track blocked premium query for auto-resume after payment/top-up (Phase 7+8)
+  const pendingPremiumQueryRef = useRef(null);
 
   const handleSend = async (inputText, setInputText) => {
     // Enhanced input validation
@@ -266,6 +307,8 @@ export function useChat(profile, updateProfile, addMessage, auth) {
       timestamp: new Date(),
     };
     addMessage(userMessage);
+    // Persist user message to server (fire-and-forget)
+    persistChatMessage(auth?.phoneNumber, 'user', sanitizedInput);
     setInputText('');
     setIsLoading(true);
 
@@ -553,23 +596,28 @@ export function useChat(profile, updateProfile, addMessage, auth) {
       
       // Check if user has enough credits (ONLY for non-casual messages)
       if (!isCasualMessage && userCredits < queryCost && hasAllRequiredFields(currentProfile)) {
+        // Store the blocked query for auto-resume after top-up (Phase 7+8)
+        pendingPremiumQueryRef.current = { text: inputText, classification, queryCost };
         addMessage({
           id: Date.now() + Math.random(),
           text: getExhaustedCreditsMessage(userCredits, queryCost),
           sender: 'bot',
           timestamp: new Date()
         });
-        // Show payment QR if not shown
-        if (!qrAlreadyShown) {
-          addMessage({
-            id: Date.now() + Math.random() + 1,
-            image: '/payment/PayQR.jpeg',
-            text: getPaymentQRMessage(config.payment_amount_inr, creditsFromPayment),
-            sender: 'bot',
-            timestamp: new Date()
-          });
-          markPaymentQRAsShown();
-        }
+        // Show top-up packages
+        const topupPackages = config.topup_packages || [
+          { id: 'small', credits: 10, amountINR: 100, label: '10 credits' },
+          { id: 'medium', credits: 25, amountINR: 250, label: '25 credits' },
+          { id: 'large', credits: 50, amountINR: 500, label: '50 credits' }
+        ];
+        const packageLines = topupPackages.map(p => `• ${p.label} — ₹${p.amountINR}`).join('\n');
+        addMessage({
+          id: Date.now() + Math.random() + 1,
+          text: `Choose a top-up package:\n${packageLines}\n\nReply with a package name (small, medium, or large) to add credits.`,
+          sender: 'bot',
+          timestamp: new Date(),
+          topupPackages
+        });
         setIsLoading(false);
         return;
       }
@@ -914,6 +962,8 @@ export function useChat(profile, updateProfile, addMessage, auth) {
         sender: 'bot',
         timestamp: new Date()
       });
+      // Persist bot response to server (fire-and-forget)
+      persistChatMessage(auth?.phoneNumber, 'assistant', botResponseText, queryType, queryCost);
       
       // Deduct credits after successful response
       // auth.phoneNumber is already formatted as "+91-1234567890"
@@ -944,15 +994,26 @@ export function useChat(profile, updateProfile, addMessage, auth) {
       const persistedPhone = (() => { try { return localStorage.getItem('niyati_phone_number'); } catch (e) { return null; } })();
       const isReturningNow = (currentProfile.user_verified && (currentProfile.user_verified.id || currentProfile.user_verified.phoneNumber)) || !!persistedPhone;
       if (phoneNumber && (hasAllRequiredFields(latestProfile) || isReturningNow) && !skipCreditDeduction) {
-        const newCredits = await deductCredits(phoneNumber, queryCost, webhookReqId, !!needsClarificationFlag);
-        console.log('[useChat] Credit deduction result:', { newCredits, previousCredits: latestProfile.credits });
-        if (newCredits !== null) {
-          updateProfile({ credits: newCredits });
+        const deductResult = await deductCredits(phoneNumber, queryCost, webhookReqId, !!needsClarificationFlag);
+        console.log('[useChat] Credit deduction result:', { deductResult, previousCredits: latestProfile.credits });
+        if (deductResult.error === 'insufficient_credits') {
+          // Server confirmed insufficient credits — store pending query for auto-resume
+          pendingPremiumQueryRef.current = { text: inputText, classification, queryCost };
+          addMessage({
+            id: Date.now() + Math.random(),
+            text: getExhaustedCreditsMessage(deductResult.currentBalance ?? 0, deductResult.requiredCredits ?? queryCost),
+            sender: 'bot',
+            timestamp: new Date()
+          });
+        } else if (deductResult.credits !== null) {
+          updateProfile({ credits: deductResult.credits });
+          // Clear any pending premium query on successful deduction
+          pendingPremiumQueryRef.current = null;
           // Notify user of credit deduction: show low-credit when strictly below threshold
-          if (newCredits < config.credits_low_threshold) {
+          if (deductResult.credits < config.credits_low_threshold) {
             addMessage({
               id: Date.now() + Math.random(),
-              text: `⚠️ Low credits: You have ${newCredits} credits remaining.`,
+              text: `⚠️ Low credits: You have ${deductResult.credits} credits remaining.`,
               sender: 'bot',
               timestamp: new Date()
             });
@@ -997,8 +1058,52 @@ export function useChat(profile, updateProfile, addMessage, auth) {
     }
   };
 
-  return { handleSend, isLoading };
+  // Handle top-up package purchase and auto-resume blocked query (Phase 7+8)
+  const handleTopUp = async (packageId) => {
+    const phoneNumber = auth?.phoneNumber || null;
+    if (!phoneNumber || !packageId) return null;
+
+    const result = await addCreditsToAccount(phoneNumber, packageId);
+    if (!result) {
+      addMessage({
+        id: Date.now() + Math.random(),
+        text: 'Sorry, the top-up failed. Please try again.',
+        sender: 'bot',
+        timestamp: new Date()
+      });
+      return null;
+    }
+
+    updateProfile({ credits: result.credits, isPaid: true, totalPaidAmount: result.totalPaidAmount });
+    addMessage({
+      id: Date.now() + Math.random(),
+      text: `✅ ${result.creditsAdded} credits added! Your new balance is ${result.credits} credits.`,
+      sender: 'bot',
+      timestamp: new Date()
+    });
+
+    // Auto-resume the blocked premium query if one exists
+    if (pendingPremiumQueryRef.current) {
+      const pending = pendingPremiumQueryRef.current;
+      pendingPremiumQueryRef.current = null;
+      addMessage({
+        id: Date.now() + Math.random(),
+        text: `Resuming your question: "${pending.text.substring(0, 80)}${pending.text.length > 80 ? '...' : ''}"`,
+        sender: 'bot',
+        timestamp: new Date()
+      });
+      // Re-send the blocked message through the normal flow
+      // Use setTimeout to ensure state updates have propagated
+      setTimeout(() => {
+        handleSend(pending.text, () => {});
+      }, 100);
+    }
+
+    return result;
+  };
+
+  return { handleSend, isLoading, handleTopUp, pendingPremiumQueryRef };
 }
 
 // Export helper functions for testing
-export { classifyQuery, getCreditsConfig };
+export { classifyQuery, getCreditsConfig, addCreditsToAccount };

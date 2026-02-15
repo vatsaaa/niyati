@@ -187,3 +187,50 @@ router.post('/horoscope-svg', async (req, res) => {
 
 
 module.exports = router;
+
+/**
+ * Compute astrological metadata (sunSign, moonSign, ascendant, currentDasha)
+ * for a user profile. This is a lightweight helper used by the chat BFF route
+ * to enrich the n8n payload. Returns null fields on failure (best-effort).
+ *
+ * @param {object} userMeta - { birthDate, timeOfBirth, placeOfBirth, lat, lon }
+ * @returns {Promise<object>} { sunSign, moonSign, ascendant, currentDasha }
+ */
+async function computeAstroMetadata(userMeta) {
+  const empty = { sunSign: null, moonSign: null, ascendant: null, currentDasha: null };
+  if (!userMeta || !userMeta.birthDate) return empty;
+
+  try {
+    const profile = {
+      dob: userMeta.birthDate,
+      timeOfBirth: userMeta.timeOfBirth || null,
+      placeOfBirth: {
+        lat: parseFloat(userMeta.lat) || 0,
+        lng: parseFloat(userMeta.lon) || 0
+      },
+      name: userMeta.name || null
+    };
+
+    const result = await astrologyService.compute(profile);
+    const d = (result && result.data) || {};
+    // Attempt to extract currentDasha from raw provider response
+    let currentDasha = null;
+    try {
+      const raw = d.raw || {};
+      const dashaData = raw.output || raw;
+      currentDasha = dashaData.currentDasha || dashaData.current_dasha || dashaData.mahadasha || null;
+    } catch (e) { /* best effort */ }
+
+    return {
+      sunSign: d.sun || null,
+      moonSign: d.moon || null,
+      ascendant: d.ascendant || null,
+      currentDasha
+    };
+  } catch (err) {
+    logger.warn({ msg: 'computeAstroMetadata_failed', err: err && err.message });
+    return empty;
+  }
+}
+
+module.exports.computeAstroMetadata = computeAstroMetadata;

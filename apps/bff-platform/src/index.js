@@ -182,8 +182,9 @@ const profileRouter = require('../lib/profileExtractor');
 apiRouter.use('/profile', profileRouter);
 
 // Import query classifier for billing classification and chat routes
-const { getQueryCreditCost, getQueryType, isCasualConversation } = require('../lib/nlpClassifier');
+const { getQueryCreditCost, getQueryType, isCasualConversation, getSubIntent } = require('../lib/nlpClassifier');
 const chatRouter = require('../lib/chat');
+const { computeAstroMetadata } = require('../lib/astrology');
 
 // Mount chat router (authentication middleware applied earlier for /chat)
 apiRouter.use('/chat', chatRouter);
@@ -308,6 +309,22 @@ apiRouter.post('/chat', chatLimiter || noop, chatAuthMiddleware, async (req, res
     }
 
     // Build canonical payload for n8n using structured metadata.user
+    // Enrich with astrological metadata when birth details are available
+    let astroMeta = { sunSign: null, moonSign: null, ascendant: null, currentDasha: null };
+    if (normalizedDob && mdUser.placeOfBirth) {
+      try {
+        astroMeta = await computeAstroMetadata({
+          birthDate: normalizedDob,
+          timeOfBirth: normalizedTob,
+          lat: mdUser.placeOfBirth?.lat || mdUser.placeOfBirth?.latitude || mdUser.lat,
+          lon: mdUser.placeOfBirth?.lng || mdUser.placeOfBirth?.lon || mdUser.placeOfBirth?.longitude || mdUser.lon,
+          name: userName
+        });
+      } catch (e) {
+        logger.warn({ msg: 'astro_metadata_failed', err: e && e.message });
+      }
+    }
+
     const canonical = {
       message: message,
       sessionId: sessionId,
@@ -325,7 +342,8 @@ apiRouter.post('/chat', chatLimiter || noop, chatAuthMiddleware, async (req, res
           locale: mdUser.locale || null,
           timezone: mdUser.timezone || null,
           location: mdUser.location || null,
-          preferences: mdUser.preferences || null
+          preferences: mdUser.preferences || null,
+          astrology: astroMeta
         },
         session: {
           id: sessionId,

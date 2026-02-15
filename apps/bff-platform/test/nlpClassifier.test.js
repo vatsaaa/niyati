@@ -10,7 +10,9 @@ const {
   classify,
   isAstrologyRelated,
   getInsufficientCreditsMessage,
-  getExhaustedCreditsMessage
+  getExhaustedCreditsMessage,
+  getSubIntent,
+  SUB_INTENT_CREDIT_COST
 } = require('../lib/nlpClassifier');
 
 describe('nlpClassifier (NLP.js-based)', () => {
@@ -183,6 +185,65 @@ describe('nlpClassifier (NLP.js-based)', () => {
       const msg = getExhaustedCreditsMessage();
       expect(typeof msg).toBe('string');
       expect(msg.toLowerCase()).toContain('credit');
+    });
+  });
+
+  describe('getSubIntent (granular sub-intents)', () => {
+    test('returns casual sub-intent for greetings', async () => {
+      const result = await getSubIntent('Hello there');
+      expect(result).toMatch(/^casual/);
+    });
+
+    test('returns horoscope sub-intent for horoscope queries', async () => {
+      const result = await getSubIntent('What is my weekly horoscope?');
+      expect(result).toMatch(/^horoscope/);
+    });
+
+    test('returns premium sub-intent for birth chart', async () => {
+      const result = await getSubIntent('Show me my detailed birth chart');
+      expect(result).toMatch(/^premium/);
+    });
+
+    test('returns prediction or premium sub-intent for marriage', async () => {
+      const result = await getSubIntent('When will I get married?');
+      expect(result).toMatch(/prediction|premium\.relationship/);
+    });
+  });
+
+  describe('SUB_INTENT_CREDIT_COST map', () => {
+    test('casual.greeting costs 0 credits', () => {
+      expect(SUB_INTENT_CREDIT_COST['casual.greeting']).toBe(0);
+    });
+
+    test('horoscope.today uses config-based cost', () => {
+      expect(SUB_INTENT_CREDIT_COST['horoscope.today']).toBe('horoscope');
+    });
+
+    test('prediction.marriage costs 3 credits', () => {
+      expect(SUB_INTENT_CREDIT_COST['prediction.marriage']).toBe(3);
+    });
+
+    test('premium.chart costs 4 credits', () => {
+      expect(SUB_INTENT_CREDIT_COST['premium.chart']).toBe(4);
+    });
+
+    test('premium.remedy costs 6 credits', () => {
+      expect(SUB_INTENT_CREDIT_COST['premium.remedy']).toBe(6);
+    });
+  });
+
+  describe('getQueryCreditCost (variable costs)', () => {
+    const config = { credits_horoscope_cost: 2, credits_premium_cost: 4 };
+
+    test('career prediction costs more than basic horoscope', async () => {
+      const horoscopeCost = await getQueryCreditCost('What is my horoscope today?', config);
+      const careerCost = await getQueryCreditCost('Will I get a promotion this year?', config);
+      expect(careerCost).toBeGreaterThanOrEqual(horoscopeCost);
+    });
+
+    test('remedy queries cost the most', async () => {
+      const remedyCost = await getQueryCreditCost('Which gemstone should I wear?', config);
+      expect(remedyCost).toBeGreaterThanOrEqual(4);
     });
   });
 });
