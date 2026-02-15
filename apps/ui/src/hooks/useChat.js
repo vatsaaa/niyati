@@ -519,6 +519,11 @@ export function useChat(profile, updateProfile, addMessage, auth) {
             timezone: up.timezone || null,
             location: up.location || null
           },
+          session: {
+            currentDate: new Date().toISOString().slice(0, 10),
+            currentDay: new Date().toLocaleDateString('en-US', { weekday: 'long' }),
+            currentTime: new Date().toTimeString().slice(0, 5)
+          },
           source: 'ui'
         };
 

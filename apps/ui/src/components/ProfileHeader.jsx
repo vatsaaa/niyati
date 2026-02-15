@@ -1,5 +1,6 @@
 import React from 'react';
 import { Trash2, Coins } from 'lucide-react';
+import BirthChartThumbnail from './BirthChartThumbnail';
 
 const ProfileHeader = ({ 
   profile, 
@@ -16,6 +17,7 @@ const ProfileHeader = ({
   return (
     <div className="flex items-center justify-between p-3 sm:p-4 bg-slate-900/90 border-b border-slate-700 rounded-t-2xl">
       <div className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0">
+        <BirthChartThumbnail profile={profile} />
         <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-gradient-to-tr from-purple-600 to-amber-500 flex items-center justify-center shadow-md flex-shrink-0">
           <span className="text-white font-bold text-base sm:text-lg">
             {profile.name ? profile.name.charAt(0).toUpperCase() : '?'}
