@@ -25,9 +25,7 @@
     "nodemailer": "^6.9.4",
     "pg": "^8.11.1",
     "pino": "^8.17.0",
-    "pino-pretty": "^10.3.1",
-    "wink-eng-lite-web-model": "^1.6.0",
-    "wink-nlp": "^2.3.0"
+    "pino-pretty": "^10.3.1"
   },
   "devDependencies": {
     "jest": "^29.7.0",

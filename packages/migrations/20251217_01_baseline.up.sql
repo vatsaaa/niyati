@@ -14,7 +14,7 @@ DROP TABLE IF EXISTS users CASCADE;
 DROP EXTENSION IF EXISTS pgcrypto CASCADE;
 
 -- Ensure pgcrypto is available for gen_random_uuid()
-CREATE EXTENSION pgcrypto;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 CREATE TABLE users (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -107,7 +107,7 @@ CREATE TABLE password_resets (
 );
 
 -- Application configuration settings
-CREATE TABLE app_config (
+CREATE TABLE IF NOT EXISTS app_config (
   key VARCHAR(255) PRIMARY KEY,
   value TEXT NOT NULL,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
@@ -124,8 +124,8 @@ INSERT INTO app_config (key, value) VALUES
   ('payment_amount_inr', '500')
 ON CONFLICT (key) DO NOTHING;
 
-CREATE UNIQUE INDEX idx_password_resets_token_hash ON password_resets(token_hash);
-CREATE INDEX idx_password_resets_user_id ON password_resets(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_password_resets_token_hash ON password_resets(token_hash);
+CREATE INDEX IF NOT EXISTS idx_password_resets_user_id ON password_resets(user_id);
 
 COMMIT;
 

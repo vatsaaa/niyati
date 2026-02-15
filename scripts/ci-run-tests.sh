@@ -191,7 +191,7 @@ check_and_liberate_port "$N8N_PORT" "Mock N8N"
 log_step "🔧 Ensuring lockfiles and test tool availability..."
 
 # Packages to ensure lockfiles for
-PKGS=("apps/ui" "apps/bff-platform" "apps/bff-auth" "packages/commons" "e2e")
+PKGS=("packages/auth-core" "apps/ui" "apps/bff-platform" "apps/bff-auth" "packages/commons" "e2e")
 for p in "${PKGS[@]}"; do
     if [[ -f "$p/package.json" ]]; then
         if [[ ! -f "$p/package-lock.json" && ! -f "$p/yarn.lock" ]]; then
@@ -206,7 +206,7 @@ for p in "${PKGS[@]}"; do
 done
 
 # Ensure local test runners can be installed (non-fatal) so later npm ci won't prompt.
-TEST_PKGS=("packages/commons" "apps/bff-platform" "apps/bff-auth" "e2e" "apps/ui")
+TEST_PKGS=("packages/auth-core" "packages/commons" "apps/bff-platform" "apps/bff-auth" "e2e" "apps/ui")
 for tp in "${TEST_PKGS[@]}"; do
     if [[ -f "$tp/package.json" ]]; then
         log_info "Running lightweight npm ci for $tp to ensure dev deps are resolvable"
@@ -301,7 +301,7 @@ $COMPOSE_CMD -p "$PROJECT_NAME" exec -T postgres psql -U "$POSTGRES_USER" -d "$P
 -- Uses phone numbers from the E2E test specs
 DELETE FROM user_profiles WHERE phone_number IN ('+1-9992223333', '+919999999999', '+919876543210', '+14155551234');
 DELETE FROM users WHERE phone_number IN ('+1-9992223333', '+919999999999', '+919876543210', '+14155551234');
-DELETE FROM charge_transactions WHERE user_phone IN ('+1-9992223333', '+919999999999', '+919876543210', '+14155551234');
+DELETE FROM charge_transactions WHERE phone_number IN ('+1-9992223333', '+919999999999', '+919876543210', '+14155551234');
 EOF
 log_info "Database cleaned for E2E tests"
 
@@ -334,13 +334,13 @@ BACKEND_EXIT=0
 if [[ "$SKIP_BACKEND" -eq 0 ]]; then
     log_step "🧪 Running backend tests..."
 
-    # Install commons
-    npm ci --prefix packages/commons --prefer-offline --no-audit --silent
+    # Install all workspace packages from root (resolves file: cross-references like auth-core → commons)
+    npm install --prefer-offline --no-audit --silent
 
     # bff-platform tests (run package test script so coverage flag in package.json is respected)
     log_info "Testing bff-platform..."
     cd apps/bff-platform
-    npm ci --include=dev --prefer-offline --no-audit --silent
+    npm install --include=dev --prefer-offline --no-audit --silent
     NODE_ENV=test npm test --silent || BACKEND_EXIT=1
     # collect coverage artifact if produced
     if [[ -d "coverage" ]]; then
@@ -353,7 +353,7 @@ if [[ "$SKIP_BACKEND" -eq 0 ]]; then
     if [[ "$BACKEND_EXIT" -eq 0 ]]; then
         log_info "Testing bff-auth..."
         cd apps/bff-auth
-        npm ci --include=dev --prefer-offline --no-audit --silent
+        npm install --include=dev --prefer-offline --no-audit --silent
         NODE_ENV=test npm test --silent || BACKEND_EXIT=1
         if [[ -d "coverage" ]]; then
             mkdir -p "$ARTIFACTS_COVERAGE_DIR/bff-auth"

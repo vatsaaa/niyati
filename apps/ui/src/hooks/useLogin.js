@@ -40,6 +40,12 @@ export function useLogin(auth, profile, updateProfile, addMessage, clearMessages
       localStorage.setItem('niyati_x_request_id', createUUIDv4());
       // Store config for useChat to access
       localStorage.setItem('niyati_credits_config', JSON.stringify(config));
+      // Clear stale profile-sent flag from previous sessions so the first chat
+      // message in this session always includes the full profile text and metadata.
+      // Without this, a stale flag from a prior session (where n8n's conversation
+      // memory may have been cleared by a restart) would cause the profile text
+      // to be omitted, making the LLM ask for birth details again.
+      localStorage.removeItem('niyati_profile_sent');
     } catch (e) {
       // ignore
     }

@@ -399,28 +399,36 @@ export function useChat(profile, updateProfile, addMessage, auth) {
         const metadata = {
           reqId: reqId || 'unknown',
           user: {
-            id: up.user_id || up.userId || null,
-            name: up.user_name || up.name || null,
-            phoneNumber: up.user_phoneNumber || up.phoneNumber || auth?.phoneNumber || null,
-            birthDate: up.user_dob || up.dateOfBirth || null,
-            timeOfBirth: up.user_timeOfBirth || up.timeOfBirth || null,
-            placeOfBirth: up.user_placeOfBirth || up.placeOfBirth || null,
-            currentLocation: up.user_currentLocation || up.currentLocation || null,
-            age: up.user_age ?? up.age ?? null,
-            isAdult: typeof up.user_isAdult === 'boolean' ? up.user_isAdult : (typeof up.isAdult === 'boolean' ? up.isAdult : null),
-            credits: up.user_credits ?? up.credits ?? null,
-            isPaid: (up.user_totalPaidAmount ?? up.totalPaidAmount ?? 0) > 0,
-            preferences: up.user_preferences || up.preferences || null,
-            locale: up.user_locale || up.locale || null,
-            timezone: up.user_timezone || up.timezone || null,
-            location: up.user_location || up.location || null
+            id: up.user_verified?.id || null,
+            name: up.name || null,
+            phoneNumber: up.phoneNumber || auth?.phoneNumber || null,
+            birthDate: up.birthDate || null,
+            timeOfBirth: up.timeOfBirth || null,
+            placeOfBirth: up.placeOfBirth || null,
+            currentLocation: up.currentLocation || null,
+            age: up.age ?? null,
+            isAdult: typeof up.isAdult === 'boolean' ? up.isAdult : null,
+            credits: up.credits ?? null,
+            isPaid: (up.totalPaidAmount ?? 0) > 0,
+            preferences: up.preferences || null,
+            locale: up.locale || null,
+            timezone: up.timezone || null,
+            location: up.location || null
           },
           source: 'ui'
         };
 
         try {
-          // Log outgoing user message to webhook
-          try { console.log('USER', message.substring(0, 500)); } catch (e) { /* ignore logging errors */ }
+          const webhookPayload = {
+              message: message,
+              sessionId: auth.phoneNumber || 'unknown',
+              metadata: metadata
+          };
+          // Always log the full payload sent to n8n for debugging
+          try {
+            console.log('USER', message.substring(0, 500));
+            console.log('[n8n payload]', JSON.stringify(webhookPayload, null, 2));
+          } catch (e) { /* ignore logging errors */ }
           const response = await fetch(webhookUrl, {
                 method: 'POST',
                 headers: {
@@ -428,11 +436,7 @@ export function useChat(profile, updateProfile, addMessage, auth) {
                     'x-request-id': reqId || 'unknown',
                     'ngrok-skip-browser-warning': 'true'
                 },
-                body: JSON.stringify({
-                    message: message,
-                    sessionId: auth.phoneNumber || 'unknown',
-                    metadata: metadata
-                }),
+                body: JSON.stringify(webhookPayload),
                 signal: controller.signal
             });
             clearTimeout(timeoutId);
@@ -601,6 +605,36 @@ export function useChat(profile, updateProfile, addMessage, auth) {
       
       // Send confirmation message after profile is complete (from bff-platform, not n8n)
       if (profileJustCompleted && hasAllRequiredFields(currentProfile)) {
+        // Save profile to database BEFORE showing confirmation (user creation must happen now)
+        if (!currentProfile.consentGiven) {
+          updateProfile({ consentGiven: true });
+          currentProfile.consentGiven = true;
+        }
+        const profileAlreadySentOnComplete = hasProfileBeenSent();
+        if (!profileAlreadySentOnComplete) {
+          try { markProfileAsSent(); } catch (e) { /* ignore */ }
+          try {
+            await bffFetchWithRetry('/api/v1/users/profile', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                phoneNumber: auth.phoneNumber,
+                name: currentProfile.name,
+                dateOfBirth: currentProfile.birthDate,
+                timeOfBirth: currentProfile.timeOfBirth,
+                placeOfBirth: currentProfile.placeOfBirth,
+                consentGiven: true,
+                isPaid: !!currentProfile.isPaid,
+                last_login_location: currentProfile.currentLocation || ''
+              })
+            }, { retries: 2, baseDelayMs: 300 });
+            try { markProfileAsSent(); } catch (e) { /* ignore */ }
+          } catch (err) {
+            console.warn('Failed to save profile to database on completion:', err);
+            try { markProfileAsSent(); } catch (e) { /* ignore */ }
+          }
+        }
+
         const firstName = currentProfile.name ? currentProfile.name.split(' ')[0] : '';
         const currentLoc = currentProfile.currentLocation || 'your current location';
         const creditsAmount = currentProfile.credits ?? 10;
@@ -620,6 +654,18 @@ export function useChat(profile, updateProfile, addMessage, auth) {
           sender: 'bot',
           timestamp: new Date()
         });
+
+        // Show payment QR for non-paid users right after profile completion
+        if (!isPaidUser && !qrAlreadyShown) {
+          addMessage({
+            id: Date.now() + Math.random() + 1,
+            image: '/payment/PayQR.jpeg',
+            text: getPaymentQRMessage(config.payment_amount_inr, creditsFromPayment),
+            sender: 'bot',
+            timestamp: new Date()
+          });
+          markPaymentQRAsShown();
+        }
         
         setIsLoading(false);
         return;
@@ -671,7 +717,7 @@ export function useChat(profile, updateProfile, addMessage, auth) {
           // We still attempt the POST and mark again on failure as a fallback.
           try { markProfileAsSent(); } catch (e) { /* ignore */ }
           try {
-            await bffFetchWithRetry('/users/profile', {
+            await bffFetchWithRetry('/api/v1/users/profile', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({

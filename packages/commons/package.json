@@ -8,6 +8,7 @@
     "test": "jest --config jest.config.cjs --runInBand"
   },
   "dependencies": {
+    "@niyati/auth-core": "file:../auth-core",
     "axios": "^1.5.0",
     "bcryptjs": "^2.4.3",
     "express-rate-limit": "^7.1.5",

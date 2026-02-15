@@ -5,11 +5,38 @@ const cors = require('cors');
 const helmet = require('helmet');
 const compression = require('compression');
 const dotenv = require('dotenv');
+const fs = require('fs');
 
 // Load .env only for non-test environments to avoid overriding Jest's NODE_ENV
 if (process.env.NODE_ENV !== 'test') {
   dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 }
+
+// =============================================================================
+// Docker Secrets Support - Must run BEFORE any module that validates auth config
+// =============================================================================
+// Read secrets from _FILE env vars (Docker secrets pattern) and set the actual
+// env vars so that downstream modules can use them.
+function loadSecretFromFile(envVar, fileEnvVar) {
+  const filePath = process.env[fileEnvVar];
+  if (filePath && fs.existsSync(filePath)) {
+    try {
+      const value = fs.readFileSync(filePath, 'utf8').trim();
+      process.env[envVar] = value;
+      console.log(`[secrets] Loaded ${envVar} from ${fileEnvVar}`);
+    } catch (e) {
+      console.error(`[secrets] Failed to read ${fileEnvVar}:`, e.message);
+    }
+  }
+}
+
+// Load all secrets before importing modules that validate them
+loadSecretFromFile('ACCESS_TOKEN_SECRET', 'ACCESS_TOKEN_SECRET_FILE');
+loadSecretFromFile('SERVICE_TOKEN', 'SERVICE_TOKEN_FILE');
+
+// =============================================================================
+// Now safe to import modules that validate auth config
+// =============================================================================
 
 // Use shared commons from the `@niyati/commons` package
 const commons = require('@niyati/commons');
@@ -48,7 +75,6 @@ app.use(compression());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: false }));
 
-const fs = require('fs');
 const { Pool } = require('pg');
 
 // Database initialization (optional)
@@ -139,7 +165,7 @@ const profileRouter = require('../lib/profileExtractor');
 apiRouter.use('/profile', profileRouter);
 
 // Import query classifier for billing classification and chat routes
-const { getQueryCreditCost, getQueryType, isCasualConversation } = require('../lib/queryClassifier');
+const { getQueryCreditCost, getQueryType, isCasualConversation } = require('../lib/nlpClassifier');
 const chatRouter = require('../lib/chat');
 
 // Mount chat router (authentication middleware applied earlier for /chat)

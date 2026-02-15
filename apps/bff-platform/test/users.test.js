@@ -18,7 +18,9 @@ describe('bff-platform users routes', () => {
         sanitize: v => v,
         ErrorCodes: responses.ErrorCodes,
         config: {},
-        dateUtils: { computeIsAdult: jest.fn(() => true) }
+        dateUtils: { computeIsAdult: jest.fn(() => true) },
+        // Passthrough auth middleware for business-logic tests
+        authenticateOrReject: (req, res, next) => next()
       };
     });
 
@@ -30,6 +32,21 @@ describe('bff-platform users routes', () => {
   afterEach(() => jest.restoreAllMocks());
 
   describe('POST /identify', () => {
+    test('uses BFF_AUTH_URL when BFF_AUTH_BASE not set', async () => {
+      delete process.env.BFF_AUTH_BASE;
+      process.env.BFF_AUTH_URL = 'http://bff-auth:4001';
+      const fakeDb = { async query(sql, params) { return { rows: [], rowCount: 0 }; } };
+      const getMock = jest.fn().mockResolvedValueOnce({ data: { status: 'ok', data: { user: null } } });
+      require('axios').get = getMock;
+      app.set('db', fakeDb);
+      await request(app).post('/api/v1/users/identify').send({ phoneNumber: '+1234' });
+      expect(getMock).toHaveBeenCalledWith(
+        expect.stringContaining('http://bff-auth:4001/api/v1/internal/users/lookup'),
+        expect.any(Object)
+      );
+      delete process.env.BFF_AUTH_URL;
+    });
+
     test('returns returning false when user not found', async () => {
       const fakeDb = { async query(sql, params) { return { rows: [], rowCount: 0 }; } };
       // mock bff-auth lookup to return no user (avoid network call)
@@ -108,7 +125,7 @@ describe('bff-platform users routes', () => {
         if (sql.trim().toUpperCase().includes('USER_CREDITS')) {
           return { rows: [{ user_id: 'uuid-1', credits: 10, total_paid_amount: 0 }], rowCount: 1 };
         }
-        return { rows: [], rowCount: 0 };
+        return { rows: [{ id: 'uuid-1', phone_number: params && params[0] }], rowCount: 1 };
       });
       app.set('db', fakeDb);
 
@@ -116,6 +133,40 @@ describe('bff-platform users routes', () => {
       expect(res.statusCode).toBe(200);
       expect(res.body.status).toBe('ok');
       expect(res.body.data.user).toHaveProperty('is_adult', true);
+    });
+
+    test('upserts into auth users table after profile + credits', async () => {
+      const queryCalls = [];
+      const fakeDb = createMockDb(async (sql, params) => {
+        queryCalls.push({ sql, params });
+        const s = sql.trim().toUpperCase();
+        if (s.includes('USER_PROFILES')) {
+          return { rows: [{ user_id: 'uuid-1', phone_number: '+919899162012', is_adult: true, name: 'Ankur', last_login_location: null }], rowCount: 1 };
+        }
+        if (s.includes('USER_CREDITS')) {
+          return { rows: [{ user_id: 'uuid-1', credits: 10, total_paid_amount: 0 }], rowCount: 1 };
+        }
+        // auth users upsert
+        return { rows: [{ id: 'uuid-1', phone_number: '+919899162012', name: 'Ankur' }], rowCount: 1 };
+      });
+      app.set('db', fakeDb);
+
+      const res = await request(app).post('/api/v1/users/profile').send({
+        phoneNumber: '+919899162012',
+        name: 'Ankur',
+        dateOfBirth: '1979-05-19',
+        timeOfBirth: '09:30',
+        placeOfBirth: 'New Delhi',
+        consentGiven: true
+      });
+      expect(res.statusCode).toBe(200);
+      // Should have at least 3 queries: user_profiles, user_credits, users
+      const usersInsert = queryCalls.find(c => {
+        const s = (c.sql || '').toUpperCase();
+        return s.includes('INSERT INTO USERS') && !s.includes('USER_PROFILES') && !s.includes('USER_CREDITS');
+      });
+      expect(usersInsert).toBeDefined();
+      expect(usersInsert.params[0]).toBe('+919899162012');
     });
   });
 
@@ -284,5 +335,78 @@ describe('bff-platform users routes', () => {
       expect(res.body.data.credits_monthly_free).toBe(10);
       expect(res.body.data.credits_horoscope_cost).toBe(2);
     });
+  });
+});
+
+// --- Authentication enforcement tests ---
+// These tests verify that sensitive routes reject unauthenticated requests
+// by using a REJECTING mock for authenticateOrReject.
+describe('bff-platform users auth enforcement', () => {
+  let app;
+
+  beforeEach(() => {
+    jest.resetModules();
+    process.env.SERVICE_TOKEN = '';
+
+    jest.mock('@niyati/commons', () => {
+      const responses = require('@niyati/commons/lib/responses');
+      return {
+        logger: { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn(), fatal: jest.fn(), trace: jest.fn() },
+        sanitize: v => v,
+        ErrorCodes: responses.ErrorCodes,
+        config: {},
+        dateUtils: { computeIsAdult: jest.fn(() => true) },
+        // Rejecting auth middleware — returns 401 for unauthenticated requests
+        authenticateOrReject: (req, res, next) => {
+          const auth = req.headers.authorization || '';
+          if (auth.startsWith('Bearer ')) return next();
+          return res.sendError(responses.ErrorCodes.UNAUTHORIZED, 'authentication_required');
+        }
+      };
+    });
+
+    const router = require('../lib/users');
+    const { app: testApp } = createTestApp('/api/v1/users', router);
+    app = testApp;
+  });
+
+  afterEach(() => jest.restoreAllMocks());
+
+  test('POST /deduct-credits returns 401 without auth token', async () => {
+    const res = await request(app)
+      .post('/api/v1/users/deduct-credits')
+      .send({ phoneNumber: '+911234567890', amount: 2 });
+    expect(res.statusCode).toBe(401);
+    expect(res.body.status).toBe('error');
+  });
+
+  test('POST /add-credits returns 401 without auth token', async () => {
+    const res = await request(app)
+      .post('/api/v1/users/add-credits')
+      .send({ phoneNumber: '+911234567890', amount: 50, paymentRef: 'ref-1' });
+    expect(res.statusCode).toBe(401);
+    expect(res.body.status).toBe('error');
+  });
+
+  test('POST /profile returns 401 without auth token', async () => {
+    const res = await request(app)
+      .post('/api/v1/users/profile')
+      .send({ phoneNumber: '+911234567890', name: 'Test' });
+    expect(res.statusCode).toBe(401);
+    expect(res.body.status).toBe('error');
+  });
+
+  test('GET /config remains accessible without auth', async () => {
+    const fakeDb = { async query() { return { rows: [{ key: 'credits_monthly_free', value: '10' }] }; } };
+    app.set('db', fakeDb);
+    const res = await request(app).get('/api/v1/users/config');
+    expect(res.statusCode).toBe(200);
+  });
+
+  test('GET /lookup remains accessible without auth (service-to-service)', async () => {
+    const fakeDb = { async query() { return { rows: [], rowCount: 0 }; } };
+    app.set('db', fakeDb);
+    const res = await request(app).get('/api/v1/users/lookup').query({ phoneNumber: '+911234567890' });
+    expect(res.statusCode).toBe(200);
   });
 });

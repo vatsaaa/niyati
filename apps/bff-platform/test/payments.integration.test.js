@@ -6,6 +6,16 @@ describe('bff-platform payments endpoints', () => {
 
   beforeEach(() => {
     jest.resetModules();
+
+    // Mock authenticateOrReject as passthrough so business-logic tests aren't blocked
+    jest.mock('@niyati/commons', () => {
+      const actual = jest.requireActual('@niyati/commons');
+      return {
+        ...actual,
+        authenticateOrReject: (req, res, next) => next()
+      };
+    });
+
     const router = require('../lib/users');
     app = express();
     app.use(express.json());

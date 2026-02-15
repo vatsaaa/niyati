@@ -18,7 +18,7 @@
     "preview:staging": "vite preview --mode staging",
     "format": "prettier --write 'src/**/*.{js,jsx,css}'",
     "format:check": "prettier --check 'src/**/*.{js,jsx,css}'",
-    "test": "vitest --run --environment jsdom",
+    "test": "npx vitest --run --environment jsdom",
     "check-size": "node ./scripts/check-size.cjs",
     "type-check": "echo 'No TypeScript configured' && exit 0",
     "audit:security": "npm audit --audit-level=moderate",

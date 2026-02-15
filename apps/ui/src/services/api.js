@@ -1,8 +1,10 @@
 import { buildApiUrl, RETRY_CONFIG } from '../config';
 import { getSessionReqId } from '../utils/uuid';
+import { getAccessToken } from './authToken';
 
 /**
- * A wrapper for the Fetch API that automatically adds the versioned API prefix and a session-level request ID.
+ * A wrapper for the Fetch API that automatically adds the versioned API prefix,
+ * a session-level request ID, and the Bearer token (if available).
  * @param {string} pathOrUrl - The API path (e.g., '/users/profile') or a full URL.
  * @param {object} options - Standard Fetch API options.
  * @returns {Promise<Response>} The Fetch Response object.
@@ -26,6 +28,12 @@ export async function bffFetch(pathOrUrl, options = {}) {
   const reqId = getSessionReqId();
   const headers = new Headers(options.headers || {});
   headers.set('x-request-id', reqId);
+  
+  // Attach Bearer token if available (issued by POST /users/identify)
+  const token = getAccessToken();
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
   
   // Add default timeout if not specified
   const controller = new AbortController();

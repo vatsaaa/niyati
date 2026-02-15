@@ -5,6 +5,10 @@ function RC(codeName) { const r = _responses(); return r && r.ErrorCodes && r.Er
 const router = express.Router();
 const axios = require('axios');
 
+// JWT issuance for phone-based identification
+const { auth: commonAuth } = require('@niyati/commons');
+const { createAccessToken } = commonAuth;
+
 // Helper to validate phone number (basic)
 function isValidPhone(phone) {
     // Allow +[1-9] followed by digits, spaces, hyphens
@@ -106,6 +110,41 @@ router.post('/profile', async (req, res) => {
             // Server-side log indicating we forwarded profile to platform (NIYATI)
             try { console.log('NIYATI', `Forwarded profile for ${phoneNumber} to bff-platform`); } catch (e) { }
 
+            // Create (or upsert) auth identity in local users table so /internal/users/lookup works
+            const db = req.app.get('db');
+            if (db) {
+                try {
+                    const upsertAuthSql = `
+                        INSERT INTO users (phone_number, name, date_of_birth, time_of_birth, place_of_birth, lat, lon, timezone, consent_given, consent_date, created_at, updated_at)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CASE WHEN $9 THEN now() ELSE NULL END, now(), now())
+                        ON CONFLICT (phone_number) DO UPDATE SET
+                            name = COALESCE(EXCLUDED.name, users.name),
+                            date_of_birth = COALESCE(EXCLUDED.date_of_birth, users.date_of_birth),
+                            time_of_birth = COALESCE(EXCLUDED.time_of_birth, users.time_of_birth),
+                            place_of_birth = COALESCE(EXCLUDED.place_of_birth, users.place_of_birth),
+                            lat = COALESCE(EXCLUDED.lat, users.lat),
+                            lon = COALESCE(EXCLUDED.lon, users.lon),
+                            timezone = COALESCE(EXCLUDED.timezone, users.timezone),
+                            consent_given = COALESCE(EXCLUDED.consent_given, users.consent_given),
+                            updated_at = now()
+                        RETURNING id, phone_number, name
+                    `;
+                    await db.query(upsertAuthSql, [
+                        phoneNumber,
+                        name || null,
+                        dateOfBirth || null,
+                        timeOfBirth || null,
+                        placeOfBirth || null,
+                        lat ? parseFloat(lat) : null,
+                        lon ? parseFloat(lon) : null,
+                        timezone || null,
+                        !!consentGiven
+                    ]);
+                } catch (dbErr) {
+                    console.warn('Failed to upsert auth users row:', dbErr && dbErr.message ? dbErr.message : dbErr);
+                }
+            }
+
             // Expect standardized response from bff-platform
             if (resp && resp.data && resp.data.status === 'ok') {
                 return res.sendSuccess({ ...resp.data.data, created: true });
@@ -144,9 +183,13 @@ router.post('/identify', async (req, res) => {
             if (resp && resp.data && resp.data.status === 'ok') {
                 const user = resp.data.data ? resp.data.data.user : null;
                 if (user) {
-                    return res.sendSuccess({ returning: true, user });
+                    // Issue access token for authenticated session
+                    const access_token = createAccessToken({ sub: user.id || user.user_id, phone: phoneNumber });
+                    return res.sendSuccess({ returning: true, user, access_token });
                 }
-                return res.sendSuccess({ returning: false });
+                // New user: issue token keyed on phone (no DB record yet)
+                const access_token = createAccessToken({ sub: phoneNumber, phone: phoneNumber });
+                return res.sendSuccess({ returning: false, access_token });
             }
 
             return res.sendError(RC('PROVIDER_ERROR'), 'lookup_failed');

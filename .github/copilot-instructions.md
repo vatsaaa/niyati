@@ -13,26 +13,67 @@ AI-powered astrology platform. BFF architecture, JavaScript only.
 
 ## Architecture & Data Flow
 
-Browser (React) → Caddy (proxy) → bff-platform/bff-auth → PostgreSQL
-                                         ↓
-                                    n8n (AI agent) ← Ollama (LLM)
-                                          
+```
+Browser (React/Vite) → Caddy (reverse proxy) → bff-platform / bff-auth → PostgreSQL
+                                                       ↓
+                                                  n8n (AI agent) ← Ollama (LLM)
+
 Worker ← Redis (queue) — handles async jobs (email, etc.)
 ```
 
 - **Pattern**: BFF-first. UI is a thin renderer — all business logic, billing, and validation happens server-side.
 - **Frontend**: React + Vite (ES modules: `import`/`export`)
 - **Backend**: Node.js + Express (CommonJS: `require`/`module.exports`)
-- **n8n**: Runs locally on port 5678 (NOT containerized). Handles AI orchestration, conversation memory, LLM prompt control.
+- **n8n**: Runs locally on port 5678 (NOT containerized in dev/prod). Handles AI orchestration, conversation memory, LLM prompt control.
+
+### Authentication Flow
+
+**bff-auth is the authentication module.** It issues JWT access tokens on `POST /users/identify`.
+
+1. UI calls `POST /api/v1/users/identify` (→ bff-auth) with phone number
+2. bff-auth looks up user, returns `{ returning, user?, access_token }` — JWT signed with `ACCESS_TOKEN_SECRET`
+3. UI stores token in `sessionStorage` + memory (`services/authToken.js`)
+4. `bffFetch()` automatically attaches `Authorization: Bearer <token>` on all subsequent API calls
+5. bff-platform validates token via `authenticateOrReject` middleware (→ calls `POST /auth/validate` on bff-auth)
+6. Sensitive routes (deduct-credits, add-credits, profile, profile/extract) reject unauthenticated requests with 401
+
+**Protected routes** (require `Authorization: Bearer <token>`):
+- `POST /users/deduct-credits` — credit deduction
+- `POST /users/add-credits` — credit addition
+- `POST /users/profile` — profile save/update
+- `POST /profile/extract` — NLP profile field extraction
+- `POST /chat` — chat messages (via bff-platform)
+
+**Public routes** (no auth required):
+- `POST /users/identify` — user lookup + token issuance (via bff-auth)
+- `GET /users/config` — app configuration
+- `POST /chat/classify` — query classification (lightweight, no side effects)
+- `GET /geocode/*` — geocoding
+- `GET /telemetry/health` — health check
+- `POST /users/sync` — service-to-service (X-Service-Token)
+- `GET /users/lookup` — service-to-service
+
+### Caddy Routing (order matters)
+
+| Path | Destination | Notes |
+|------|-------------|-------|
+| `/api/v1/users/deduct-credits` | **bff-platform:3000** | Explicit override |
+| `/api/v1/users/add-credits` | **bff-platform:3000** | Explicit override |
+| `/api/v1/users/*` | **bff-auth:3001** | identify, profile, etc. |
+| `/api/v1/auth/*` | **bff-auth:3001** | Login, OAuth, tokens |
+| `/webhook/*` | **n8n:5678** | AI webhook (host.docker.internal) |
+| `/api/*` | **bff-platform:3000** | All other APIs (chat, geocode, astrology, profile, telemetry) |
+| `/*` | Static `/srv` | React SPA with try_files fallback |
+
+> **Key**: Both bff-platform and bff-auth define `/users/profile` and `/users/identify`. Through Caddy, only the bff-auth versions are hit for identify. The bff-platform `/users/profile` is reached directly by the UI for profile saves via the `/api/*` catch-all.
 
 ### BFF-First Philosophy
 
 UI NEVER performs authoritative actions:
-- **Billing**: Only BFF/n8n decrements credits after validating `isBillable`. UI shows optimistic updates but waits for server confirmation.
-- **Validation**: BFF normalizes inputs (ISO dates, sanitization) and computes derived fields (`age`, `ageConfirmed`).
+- **Billing**: Only BFF decrements credits after validating `isBillable`. UI shows optimistic updates but waits for server confirmation.
+- **Validation**: BFF normalizes inputs (ISO dates, sanitization) and computes derived fields (`age`, `isAdult`).
 - **Charges**: Must be idempotent (use `reqId`) to prevent double deductions on retry.
-
-Flow: `UI → n8n webhook (AI response) → UI calls BFF /chat/classify → UI calls BFF /deduct-credits → BFF deducts`
+- **Profile extraction**: Server-side NLP via `POST /api/v1/profile/extract` — no NLP libraries in UI.
 
 ### Lightweight UI Principles
 
@@ -40,59 +81,77 @@ UI is a **thin rendering layer** — no heavy processing, NLP, or business logic
 
 | ❌ Avoid in UI | ✅ Do in BFF |
 |----------------|---------------|
-| NLP/text classification (winkNLP) | Query classification via `/chat/classify` |
+| NLP/text classification | Query classification via `/chat/classify` |
 | Credit calculations | `/users/deduct-credits` returns balance |
 | Date parsing/normalization | BFF normalizes to ISO format |
 | Complex validation | BFF validates and returns errors |
 | Direct DB queries | All data through BFF endpoints |
+| Profile field extraction | `/profile/extract` in bff-platform |
 
-**Why**: Smaller bundle size, faster load times, single source of truth for business logic, easier testing.
-
-**Pattern**: UI calls BFF → BFF processes → UI renders result. If you're tempted to add a new npm dependency to UI for processing, consider if it belongs in bff-platform instead.
+**`bffFetch` convention**: The UI's `bffFetch()` calls `buildApiUrl(path)` which prepends the API version prefix. Always pass **short paths** like `/users/profile`, NOT `/api/v1/users/profile` (which would double-prefix).
 
 ## Key Directories
 
 | Purpose | Location |
 |---------|----------|
-| BFF routes | [apps/bff-platform/lib/](apps/bff-platform/lib/), [apps/bff-auth/lib/](apps/bff-auth/lib/) |
+| BFF platform routes | [apps/bff-platform/lib/](apps/bff-platform/lib/) — users, chat, geocode, astrology, profileExtractor |
+| BFF auth routes | [apps/bff-auth/lib/](apps/bff-auth/lib/) — auth, users, internal, oauth |
+| BFF platform entry | [apps/bff-platform/src/index.js](apps/bff-platform/src/index.js) |
+| BFF auth entry | [apps/bff-auth/src/index.js](apps/bff-auth/src/index.js) |
 | Shared utilities | [packages/commons/](packages/commons/) — logger, sanitize, ErrorCodes, responses |
 | Test helpers | [packages/commons/test/helpers.js](packages/commons/test/helpers.js) — `createTestApp`, `createMockDb` |
-| Frontend hooks | [apps/ui/src/hooks/](apps/ui/src/hooks/), services in [apps/ui/src/services/api.js](apps/ui/src/services/api.js) |
+| Frontend hooks | [apps/ui/src/hooks/](apps/ui/src/hooks/) — useChat, useLogin, useAppState, usePWA |
+| Frontend API client | [apps/ui/src/services/api.js](apps/ui/src/services/api.js) — bffFetch, bffFetchWithRetry |
 | Migrations | [packages/migrations/](packages/migrations/) (format: `YYYYMMDD_XX_desc.up.sql`) |
-| E2E tests | [e2e/tests/](e2e/tests/) — Playwright browser tests |
-| **Automation Scripts** | [scripts/](scripts/) — **all** automation lives here |
-| GitHub Workflows | [.github/workflows/](.github/workflows/) — thin wrappers calling scripts |
+| E2E tests | [e2e/tests/](e2e/tests/) — 11 Playwright spec files |
+| **Automation Scripts** | [scripts/](scripts/) — **all** CI/CD logic lives here, NOT in GitHub YAML |
+| Infrastructure | [infra/](infra/) — Compose files, Caddyfile, env files, secrets |
+| GitHub Workflows | [.github/workflows/](.github/workflows/) — thin wrappers calling scripts/ |
 
-## Project Structure Overview
+## Project Structure
 
 ```
 niyati/
 ├── .github/
 │   ├── workflows/          # GitHub Actions (thin wrappers)
-│   │   ├── ci.yml          # Main CI → calls scripts/ci-run-tests.sh
-│   │   ├── ui-deploy.yml   # UI deployment to S3/CloudFront
-│   │   └── security.yml    # Security scanning
 │   └── copilot-instructions.md
 ├── apps/
-│   ├── bff-platform/       # Main BFF service
-│   ├── bff-auth/           # Auth service
-│   ├── ui/                 # React frontend
-│   └── worker/             # Background jobs
+│   ├── bff-platform/       # Main BFF service (port 3000)
+│   │   ├── lib/            # Route handlers
+│   │   ├── services/       # External service integrations
+│   │   ├── src/index.js    # Express app entry
+│   │   └── test/           # Jest tests
+│   ├── bff-auth/           # Auth service (port 3001)
+│   │   ├── lib/            # Route handlers
+│   │   ├── src/index.js    # Express app entry
+│   │   └── test/           # Jest tests
+│   ├── ui/                 # React + Vite frontend
+│   │   ├── src/hooks/      # useChat, useLogin, useAppState, usePWA
+│   │   ├── src/services/   # API client
+│   │   ├── src/utils/      # Utilities (profile, date normalization)
+│   │   └── test/           # Vitest tests
+│   ├── n8n/                # n8n workflow definition
+│   └── worker/             # Background job processor
 ├── packages/
-│   ├── commons/            # Shared utilities
-│   └── migrations/         # SQL migrations
-├── infra/               # Infrastructure & config
-├── e2e/                    # Playwright E2E tests
+│   ├── commons/            # Shared libraries
+│   └── migrations/         # SQL migrations (7 files)
+├── infra/                  # ALL infrastructure config
+│   ├── docker-compose.yml          # Base services
+│   ├── docker-compose.override.yml # Dev (hot reload, local ports)
+│   ├── docker-compose.prod.yml     # Prod (secrets, HTTPS, fixed names)
+│   ├── docker-compose.ci.yml       # CI (different ports, mock n8n)
+│   ├── Caddyfile                   # Production proxy config
+│   ├── Caddyfile.dev               # Dev proxy config
+│   ├── .env                        # Prod env (gitignored)
+│   ├── .env.example                # Template
+│   └── secrets/                    # Docker secrets (gitignored)
+├── e2e/                    # Playwright E2E tests (11 specs)
 ├── scripts/                # All automation scripts
-│   ├── lib/common.sh       # Shared bash library
+│   ├── lib/common.sh       # Shared bash library (22 functions)
 │   ├── ci-run-tests.sh     # CI test runner
-│   ├── deploy_niyati.sh    # Deployment script
+│   ├── deploy_niyati.sh    # Deployment script (9 actions)
 │   └── ...
-├── docker-compose.yml      # Base Docker config
-├── docker-compose.ci.yml   # CI overlay (different ports, mock n8n)
-├── docker-compose.prod.yml # Production overlay
-├── .env.ci                 # CI environment variables
-└── Caddyfile               # Caddy reverse proxy config
+└── README.md
 ```
 
 ## Database Philosophy: Immutable, Idempotent, From Scratch
@@ -141,11 +200,24 @@ docker compose up -d postgres # Start clean
 ./scripts/db.sh seed          # Apply idempotent seed data
 ```
 
+### Tables (8 total)
+
+| Table | Purpose |
+|-------|---------|
+| `users` | Core user record (phone, name, DOB, credits, is_adult) |
+| `user_profiles` | Extended profile (normalized fields from NLP extraction) |
+| `user_credits` | Credit balance tracking |
+| `charge_transactions` | Billing audit trail |
+| `app_config` | Application config (key-value, cached 5 min in BFF) |
+| `oauth_accounts` | OAuth provider links |
+| `refresh_tokens` | JWT refresh tokens |
+| `password_resets` | Password reset requests |
+
 ## Integration Points
 
 ### n8n Workflow (AI Orchestration)
 - Receives chat messages via webhook, executes AI agent with Ollama LLM, returns `{output}`
-- Workflow definition: [apps/bff-platform/n8n/NiyatiWorkflow.json](apps/bff-platform/n8n/NiyatiWorkflow.json)
+- Workflow definition: [apps/n8n/NiyatiWorkflow.json](apps/n8n/NiyatiWorkflow.json)
 - **CI uses mock**: [scripts/mock-n8n.js](scripts/mock-n8n.js) — simple HTTP server returning canned responses
 
 ### Worker Service (Background Jobs)
@@ -165,20 +237,12 @@ function getSecret(envVar, fileEnvVar) {
   }
   return process.env[envVar];
 }
-
-const WORKER_TOKEN = getSecret('WORKER_TOKEN', 'WORKER_TOKEN_FILE');
 ```
 
 - **Dev**: Set `WORKER_TOKEN=xxx` in `.env`
 - **Prod**: Mount secret file, set `WORKER_TOKEN_FILE=/run/secrets/worker_token`
-- Secrets location: [secrets/](secrets/) (gitignored in prod)
 
 ### Credits System
-
-**Schema** ([packages/migrations/20251217_01_baseline.up.sql](packages/migrations/20251217_01_baseline.up.sql)):
-- `credits`: Current balance (default: 10)
-- `credits_last_reset`: Monthly reset timestamp
-- `total_paid_amount`: Lifetime INR paid
 
 **Configuration** (from `app_config` table, cached 5 min):
 | Key | Default | Description |
@@ -189,27 +253,23 @@ const WORKER_TOKEN = getSecret('WORKER_TOKEN', 'WORKER_TOKEN_FILE');
 | `credits_low_threshold` | 4 | Show payment prompt when below |
 | `payment_amount_inr` | 500 | Payment amount (INR) |
 
-**Billing Flow** (see [apps/ui/src/hooks/useChat.js](apps/ui/src/hooks/useChat.js), [apps/bff-platform/lib/queryClassifier.js](apps/bff-platform/lib/queryClassifier.js)):
+**Billing Flow**:
 1. UI sends message directly to n8n webhook, receives AI response
 2. UI calls `POST /api/v1/chat/classify` with `{message}` → BFF returns `{queryType, creditCost, isBillable}`
 3. If `isBillable`, UI calls `POST /api/v1/users/deduct-credits` with `{phoneNumber, amount: creditCost}`
 4. **BFF** deducts credits from DB, returns updated balance
 5. UI displays server-confirmed balance
 
-**Query Classification** (server-side in [apps/bff-platform/lib/queryClassifier.js](apps/bff-platform/lib/queryClassifier.js)):
-- `isHoroscopeQuery()`: horoscope, zodiac, rashifal → `credits_horoscope_cost` (2)
-- `isPremiumAstrologyQuery()`: birth chart, predictions, remedies → `credits_premium_cost` (4)
+**Query Classification** (server-side in [apps/bff-platform/lib/nlpClassifier.js](apps/bff-platform/lib/nlpClassifier.js)):
+- `isHoroscopeQuery()`: horoscope, zodiac, rashifal → 2 credits
+- `isPremiumAstrologyQuery()`: birth chart, predictions, remedies → 4 credits
 - `isCasualConversation()`: greetings, profile info → no charge
-
-**Classification Endpoint**: `POST /api/v1/chat/classify`
-- Request: `{ message: string }`
-- Response: `{ queryType: 'casual'|'horoscope'|'premium', creditCost: number, isBillable: boolean, config }`
 
 **Monthly Reset**: Checked in `/users/identify` — if `credits_last_reset` is from a previous month, reset to `credits_monthly_free`.
 
 ## Backend Route Pattern
 
-All BFF routes follow this structure ([apps/bff-platform/lib/users.js](apps/bff-platform/lib/users.js)):
+All BFF routes follow this structure:
 
 ```javascript
 const { logger, sanitize, ErrorCodes } = require('@niyati/commons');
@@ -234,14 +294,15 @@ router.post('/action', async (req, res) => {
 
 ## Frontend Hook Pattern
 
-All hooks use `bffFetchWithRetry` ([apps/ui/src/hooks/useChat.js](apps/ui/src/hooks/useChat.js)):
+All hooks use `bffFetchWithRetry` or `bffFetch`:
 
 ```javascript
 import { bffFetchWithRetry } from '../services/api';
 
 export function useMyFeature() {
   const performAction = async (payload) => {
-    const res = await bffFetchWithRetry('/api/v1/resource/action', {
+    // Use SHORT paths — bffFetch prepends /api/v1 automatically
+    const res = await bffFetchWithRetry('/resource/action', {
       method: 'POST', body: JSON.stringify(payload)
     });
     return res.data;
@@ -249,6 +310,8 @@ export function useMyFeature() {
   return { performAction };
 }
 ```
+
+> **Important**: `bffFetch('/users/profile', ...)` is correct. `bffFetch('/api/v1/users/profile', ...)` is WRONG (double-prefixes to `/api/v1/api/v1/users/profile`).
 
 ## Testing
 
@@ -267,18 +330,14 @@ describe('My Feature', () => {
 
   beforeEach(() => {
     jest.resetModules();
-    // Mock commons to isolate from real logger/config
     jest.mock('@niyati/commons', () => createMockCommons());
-    
     const router = require('../lib/my-feature');
-    // createTestApp mounts router with attachResponseHelpers middleware
     ({ app } = createTestApp('/api/v1/my-feature', router));
   });
 
   afterEach(() => jest.restoreAllMocks());
 
   test('POST /action returns success', async () => {
-    // createMockDb accepts static result or custom handler function
     const mockDb = createMockDb({ rows: [{ id: 1 }], rowCount: 1 });
     app.set('db', mockDb);
     
@@ -292,7 +351,6 @@ describe('My Feature', () => {
   });
 
   test('POST /action with custom DB handler', async () => {
-    // Handler function for complex query logic
     const mockDb = createMockDb(async (sql, params) => {
       if (sql.includes('INSERT')) return { rows: [{ id: 99 }], rowCount: 1 };
       return { rows: [], rowCount: 0 };
@@ -305,9 +363,20 @@ describe('My Feature', () => {
 });
 ```
 
+### UI Unit Tests (Vitest)
+
+Location: `apps/ui/src/**/__tests__/`
+
+```bash
+cd apps/ui && npm test                    # All UI tests (uses npx vitest)
+cd apps/ui && npm test -- <file>          # Specific test file
+```
+
+> **Note**: vitest is hoisted to root `node_modules/` by npm workspaces. The `test` script uses `npx vitest` to find it regardless of hoisting.
+
 ### E2E Tests (Playwright)
 
-Location: [e2e/tests/](e2e/tests/)
+Location: [e2e/tests/](e2e/tests/) — 11 spec files
 
 E2E tests run against the full stack with route interception for deterministic behavior:
 
@@ -315,7 +384,6 @@ E2E tests run against the full stack with route interception for deterministic b
 const { test, expect } = require('@playwright/test');
 
 test('user flow with stubbed API', async ({ page, baseURL }) => {
-  // Stub API responses for deterministic tests
   await page.route('**/api/v1/users/identify', route => {
     route.fulfill({
       status: 200,
@@ -324,14 +392,6 @@ test('user flow with stubbed API', async ({ page, baseURL }) => {
         status: 'ok',
         data: { returning: true, user: { id: 1, credits: 10 } }
       })
-    });
-  });
-
-  // Stub n8n webhook (always stub external services)
-  await page.route('**/webhook/**', route => {
-    route.fulfill({
-      status: 200,
-      body: JSON.stringify({ output: "Today's horoscope..." })
     });
   });
 
@@ -368,335 +428,66 @@ When implementing features or fixing bugs, AI agents MUST:
 
 **Never skip tests**. If asked to "just fix it quickly", still write the test first.
 
-### Backend (Jest)
-
-```bash
-# Run specific test file in watch mode while developing
-cd apps/bff-platform && npm test -- --watch queryClassifier.test.js
-
-# Run all backend tests
-cd apps/bff-platform && npm test
-cd apps/bff-auth && npm test
-
-# Check coverage (should maintain or improve)
-cd apps/bff-platform && npm test -- --coverage
-```
-
-**Test file naming**: `<module>.test.js` in `test/` directory.
-
-**Coverage requirement**: New code should maintain or improve coverage.
-
-### E2E (Playwright - BDD style)
-
-E2E tests describe user behavior scenarios:
-
-```javascript
-test('user sees payment prompt when credits are low', async ({ page }) => {
-  // Given: user has low credits
-  await stubIdentifyResponse(page, { credits: 2 });
-  
-  // When: user sends a premium query
-  await page.goto('/');
-  await page.fill('[data-testid=chat-input]', 'My birth chart');
-  await page.click('[data-testid=send-button]');
-  
-  // Then: payment prompt appears
-  await expect(page.locator('[data-testid=payment-prompt]')).toBeVisible();
-});
-```
-
-```bash
-# Run E2E tests
-cd e2e && npx playwright test
-
-# Run specific test file
-cd e2e && npx playwright test credits_threshold.spec.js
-
-# Debug mode with browser visible
-cd e2e && npx playwright test --headed --debug
-```
-
 ### When Adding New Features (TDD Checklist)
 
 | Change Type | Step 1: Write Test | Step 2: Implement | Step 3: Verify |
 |-------------|-------------------|-------------------|----------------|
 | **New BFF endpoint** | Add test in `apps/bff-*/test/` using `createTestApp`/`createMockDb` | Implement route in `lib/` | Run `npm test` |
 | **New UI hook** | Add unit test or E2E spec | Implement hook | Run E2E tests |
-| **Query classification** | Add test case in `queryClassifier.test.js` | Update classifier | Run `npm test` |
+| **Query classification** | Add test case in `nlpClassifier.test.js` | Update classifier | Run `npm test` |
 | **Bug fix** | Write failing test that reproduces bug | Fix the code | Verify test passes |
 | **Any change** | — | — | Run `./scripts/ci-run-tests.sh` |
-
-**Workflow for Bug Fixes:**
-```bash
-# 1. Write test that reproduces the bug (should FAIL)
-cd apps/bff-platform && npm test -- queryClassifier.test.js
-
-# 2. Implement fix
-# ... edit code ...
-
-# 3. Verify test now passes
-cd apps/bff-platform && npm test -- queryClassifier.test.js
-
-# 4. Run full CI before committing
-./scripts/ci-run-tests.sh
-```
 
 ## CI/CD Architecture
 
 > **Design Principle**: All CI/CD logic lives in bash scripts ([scripts/](scripts/)), NOT in GitHub workflow YAML. Workflows are thin wrappers that call scripts. This enables local reproducibility and easier debugging.
 
-### Script Organization
-
-```
-scripts/
-├── lib/
-│   └── common.sh           # Shared library (MUST source in all scripts)
-├── ci-run-tests.sh         # Full CI: backend + E2E tests
-├── deploy_niyati.sh        # Comprehensive deployment script
-├── docker-dev.sh           # Development Docker helper
-├── db.sh                   # Database management
-├── smoke_test.sh           # Health verification
-├── mock-n8n.js             # Mock n8n for CI (canned responses)
-└── mock-webhook.js         # Mock webhook for testing
-```
-
-### Shared Library ([scripts/lib/common.sh](scripts/lib/common.sh))
-
-Every script MUST source the common library:
-
-```bash
-#!/usr/bin/env bash
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/lib/common.sh"  # Or ../lib/common.sh if in subdirectory
-
-PROJECT_ROOT="$(find_project_root "$SCRIPT_DIR")"
-cd "$PROJECT_ROOT"
-```
-
-**Available Functions**:
-| Category | Functions |
-|----------|-----------|
-| Logging | `log_info`, `log_warn`, `log_error`, `log_debug`, `log_step`, `log_success`, `log_fail`, `print_header` |
-| Environment | `find_project_root`, `load_env`, `load_project_env`, `ensure_env_files` |
-| Docker | `check_docker`, `get_compose_cmd`, `wait_for_container`, `wait_for_postgres` |
-| HTTP | `check_url_with_retries`, `run_health_checks` |
-| Utility | `confirm_action`, `require_command`, `get_timestamp` |
-
 ### CI Test Runner ([scripts/ci-run-tests.sh](scripts/ci-run-tests.sh))
 
-**Purpose**: Idempotent CI script that runs all tests in a clean Docker environment.
-
 ```bash
-# Full CI suite (default)
-./scripts/ci-run-tests.sh
-
-# Skip E2E tests (faster, backend only)
-./scripts/ci-run-tests.sh --skip-e2e
-
-# Skip backend tests (E2E only)
-./scripts/ci-run-tests.sh --skip-backend
-
-# Keep stack running for debugging
-./scripts/ci-run-tests.sh --no-cleanup
+./scripts/ci-run-tests.sh                # Full CI (backend + E2E)
+./scripts/ci-run-tests.sh --skip-e2e     # Backend only (faster)
+./scripts/ci-run-tests.sh --skip-backend # E2E only
+./scripts/ci-run-tests.sh --no-cleanup   # Keep stack running for debugging
+./scripts/ci-run-tests.sh --verbose      # Detailed output
 ```
 
 **What it does** (in order):
-1. Sources `.env.ci` for CI-specific ports
-2. Tears down any existing CI stack (`docker compose down -v`) — **clean slate**
-3. Builds and starts CI stack with mock n8n
-4. Waits for all services to be healthy
-5. Applies database migrations from scratch (idempotent)
-6. Applies seed data (idempotent `ON CONFLICT DO NOTHING`)
-7. Runs backend Jest tests (`bff-platform`, `bff-auth`)
-8. Runs E2E Playwright tests
-9. Cleans up on exit (success or failure) via trap
+1. Check/liberate CI ports (4000, 4001, 6173, 56432, 7379, 6678)
+2. Bootstrap: ensure lockfiles, `npm ci` for test packages
+3. Tear down existing CI stack (`docker compose down -v`) — clean slate
+4. Build and start CI stack with mock n8n
+5. Wait for all services to be healthy
+6. Apply database migrations from scratch
+7. Clean database for fresh E2E state
+8. Run backend Jest tests (bff-platform, bff-auth)
+9. Run E2E Playwright tests with `REAL=1`
+10. Merge coverage reports
+11. Cleanup on exit (success or failure) via trap
 
-**Key Features**:
-- **Idempotent**: Safe to run multiple times, always starts fresh
-- **Clean database**: Volumes destroyed, schema rebuilt from migrations
-- **Cleanup trap**: Always cleans up, even on Ctrl+C or failure
-- **Separate ports**: CI uses different ports to avoid conflicts with dev
-- **Mock n8n**: Uses [scripts/mock-n8n.js](scripts/mock-n8n.js) for deterministic AI responses
-- **No shared state**: Each run is completely independent
-
-### Test Independence Principles
-
-Tests can be executed through multiple paths:
-
-| Execution Path | Command | Use Case |
-|----------------|---------|----------|
-| **CI Script** | `./scripts/ci-run-tests.sh` | Full integration, GitHub Actions |
-| **Deploy Script** | `./scripts/deploy_niyati.sh --env=dev --action=test` | Pre-deploy validation |
-| **Standalone Backend** | `cd apps/bff-platform && npm test` | Development iteration |
-| **Standalone E2E** | `cd e2e && npx playwright test` | UI testing against running stack |
-
-**All paths must produce the same results** because:
-- Tests don't depend on execution order
-- Each test suite manages its own setup/teardown
-- Database is always rebuilt from scratch in CI
-- External services are mocked consistently
+**Compose command**: `docker compose --env-file infra/.env -f infra/docker-compose.yml -f infra/docker-compose.ci.yml`
+**Project name**: `niyati-ci`
 
 ### Deployment Script ([scripts/deploy_niyati.sh](scripts/deploy_niyati.sh))
 
-**Purpose**: Comprehensive deployment tool with safety features.
+9 actions: `deploy`, `fresh`, `restart`, `rebuild`, `migrate`, `status`, `verify`, `stop`, `clean`
 
-```bash
-# Development deployment
-./scripts/deploy_niyati.sh --env=dev --action=deploy
-
-# Production deployment
-./scripts/deploy_niyati.sh --env=prod --action=deploy
-
-# Restart specific service
-./scripts/deploy_niyati.sh --env=prod --action=restart --service=bff-platform
-
-# Fresh start (clean everything, rebuild)
-./scripts/deploy_niyati.sh --env=dev --action=fresh
-
-# Show status
-./scripts/deploy_niyati.sh --action=status
-```
-
-**Actions**:
-| Action | Description |
-|--------|-------------|
-| `deploy` | Full deployment: build, migrate, start (default) |
-| `restart` | Restart services (use `--service=<name>` for specific) |
-| `stop` | Stop all services |
-| `rebuild` | Force rebuild (no-cache) then start |
-| `clean` | Stop and remove containers, volumes, networks |
-| `fresh` | Complete clean slate: remove everything, rebuild, deploy |
-| `migrate` | Run database migrations only |
-| `status` | Show status of all services |
-
-**Options**:
-| Option | Description |
-|--------|-------------|
-| `--env=dev\|prod` | Target environment |
-| `--service=<name>` | Target specific service (for restart) |
-| `--dry-run` | Print commands without executing |
-| `--verbose` | Detailed output |
-| `-y, --yes` | Non-interactive (auto-confirm) |
-| `--skip-checks` | Skip pre-deploy validation |
-| `--skip-health` | Skip post-deploy health verification |
-| `--deep` | Deep clean (remove images, build cache) |
+See [README.md](../README.md#deployment) for full usage.
 
 ### GitHub Workflows
 
 Workflows are **thin wrappers** that call scripts:
 
-**[.github/workflows/ci.yml](.github/workflows/ci.yml)** — Main CI:
-```yaml
-- name: Run Full Integration Suite
-  run: ./scripts/ci-run-tests.sh
-```
-
-**[.github/workflows/ui-deploy.yml](.github/workflows/ui-deploy.yml)** — UI Deployment:
-- Builds UI with Vite
-- Deploys to S3 + CloudFront via OIDC
-- Requires secrets: `AWS_ROLE_ARN`, `AWS_REGION`, `UI_S3_BUCKET`, `CLOUDFRONT_DISTRIBUTION_ID`
-
-**[.github/workflows/security.yml](.github/workflows/security.yml)** — Security scanning
+- **[ci.yml](.github/workflows/ci.yml)** — Main CI: `./scripts/ci-run-tests.sh`
+- **[ui-deploy.yml](.github/workflows/ui-deploy.yml)** — UI to S3 + CloudFront via OIDC
+- **[security.yml](.github/workflows/security.yml)** — Security scanning
 
 ### Protected Branches
 
-- **PR Only:** Direct pushes to `master` are forbidden; all changes must be submitted via a pull request.
-- **Required Checks:** Merge only after all required CI checks pass (backend Jest + E2E run via `./scripts/ci/ci-run-tests.sh`).
-- **Merge Strategy:** Prefer "Squash and merge" for feature PRs; use "Rebase and merge" for small fixups; use a merge commit for release PRs.
-- **Reviewers & Approvals:** Require at least one approving reviewer; include maintainer/team review for release or sensitive changes.
-- **Local Verification:** Run `./scripts/ci/ci-run-tests.sh` locally before opening a PR; `--skip-e2e` is acceptable for fast iteration.
-- **Hotfixes:** For emergency fixes, create a `hotfix/` branch, tag maintainers, and include CI artifacts; maintainers may fast-track after approvals.
-- **CI Flakes & Evidence:** If CI fails intermittently, re-run and attach Playwright traces/logs to the PR for triage.
-- **Conflict Resolution:** Rebase onto `master` or resolve conflicts locally before merging.
-
-### Docker Compose Architecture
-
-**Layered Configuration**:
-```bash
-# Development (default)
-docker compose up -d
-# Uses: docker-compose.yml + docker-compose.override.yml
-
-# Production
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
-
-# CI
-docker compose --env-file .env.ci -f docker-compose.yml -f docker-compose.ci.yml up -d
-```
-
-**File Purposes**:
-| File | Purpose |
-|------|---------|
-| `docker-compose.yml` | Base services (postgres, redis, bffs, ui, caddy) |
-| `docker-compose.override.yml` | Dev defaults (volumes, hot reload) |
-| `docker-compose.prod.yml` | Production (fixed container names, health checks) |
-| `docker-compose.ci.yml` | CI (different ports, mock n8n service) |
-| `.env.ci` | CI environment variables |
-
-### Infrastructure Isolation
-
-**Design Principle**: Dev, CI, and Prod environments are completely isolated — they can run simultaneously without conflicts.
-
-| Resource Type | Dev | CI | Prod |
-|---------------|-----|-----|------|
-| **Project Name** | `niyati` | `niyati-ci` | `niyati-prod` |
-| **Network** | `niyati_default` | `niyati-ci_default` | `niyati-prod_default` |
-| **Volumes** | `niyati_postgres-data` | `niyati-ci_postgres-data` | `niyati-prod_postgres-data-prod` |
-| **Containers** | `niyati-*-1` | `niyati-ci-*-1` | `niyati-*-prod` |
-
-**Why Isolation Matters**:
-- Run CI tests while dev stack is running
-- Deploy to prod without affecting CI
-- Debug issues in isolation
-- No port conflicts or volume corruption
-
-### Port Configuration
-
-CI uses separate ports to allow running alongside dev:
-
-| Service | Dev/Prod | CI | Notes |
-|---------|----------|-----|-------|
-| Caddy (UI) | 5173 | **6173** | Browser access |
-| BFF Platform | 3000 | **4000** | Internal port |
-| BFF Auth | 3001 | **4001** | Internal port |
-| PostgreSQL | 5432 | **56432** | External for seeding |
-| Redis | 6379 | **7379** | External for debugging |
-| n8n/mock | 5678 | **6678** | Mock in CI |
-
-### Mock Services
-
-**[scripts/mock-n8n.js](scripts/mock-n8n.js)**:
-- Simple HTTP server that returns canned AI responses
-- Used in CI instead of real n8n + Ollama
-- Returns: `{ output: "Hello — I see your profile. Here's today's horoscope: You will feel a gentle clarity today.\n" }`
-
-### Adding New Scripts
-
-1. Create script in `scripts/`:
-```bash
-#!/usr/bin/env bash
-# =============================================================================
-# Script Name
-# =============================================================================
-# Description of what this script does
-#
-# Usage: ./scripts/my-script.sh [OPTIONS]
-# =============================================================================
-
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/lib/common.sh"
-
-PROJECT_ROOT="$(find_project_root "$SCRIPT_DIR")"
-cd "$PROJECT_ROOT"
-
-# Your script logic here
-log_step "Starting..."
-```
-
-2. Make executable: `chmod +x scripts/my-script.sh`
-3. Add to [scripts/README.md](scripts/README.md) documentation
+- **PR Only**: Direct pushes to `master` are forbidden
+- **Required Checks**: All CI checks must pass before merge
+- **Merge Strategy**: Squash and merge for features, rebase for fixups
+- **Local Verification**: Run `./scripts/ci-run-tests.sh` before opening a PR
 
 ## Commands
 
@@ -707,19 +498,21 @@ log_step "Starting..."
 | **Run full CI** | `./scripts/ci-run-tests.sh` |
 | CI (backend only) | `./scripts/ci-run-tests.sh --skip-e2e` |
 | CI (keep stack) | `./scripts/ci-run-tests.sh --no-cleanup` |
-| **Deploy dev** | `./scripts/deploy_niyati.sh --env=dev --action=deploy` |
 | **Deploy prod** | `./scripts/deploy_niyati.sh --env=prod --action=deploy` |
-| Fresh start | `./scripts/deploy_niyati.sh --env=dev --action=fresh` |
-| Status check | `./scripts/deploy_niyati.sh --action=status` |
-| Clean up | `./scripts/deploy_niyati.sh --action=clean --yes` |
+| **Fresh prod** | `./scripts/deploy_niyati.sh --env=prod --action=fresh -y --verbose` |
+| Status | `./scripts/deploy_niyati.sh --action=status` |
+| Verify | `./scripts/deploy_niyati.sh --env=prod --action=verify --quick` |
+| Stop | `./scripts/deploy_niyati.sh --env=prod --action=stop` |
+| Clean | `./scripts/deploy_niyati.sh --env=prod --action=clean -y` |
+| Restart one | `./scripts/deploy_niyati.sh --env=prod --action=restart --service=bff-platform` |
 
 ### Development Commands
 
 | Task | Command |
 |------|---------|
-| Dev stack | `docker compose up -d` |
-| Dev logs | `docker compose logs -f` |
-| Start dev UI | `cd ui && npm run dev` |
+| Dev stack | `./scripts/deploy_niyati.sh --env=dev --action=deploy` |
+| Dev fresh | `./scripts/deploy_niyati.sh --env=dev --action=fresh -y` |
+| Dev logs | `docker logs -f niyati-bff-platform-1` |
 | Mock n8n | `node scripts/mock-n8n.js` |
 | DB shell | `./scripts/db.sh shell` |
 | Run migrations | `./scripts/db.sh migrate` |
@@ -728,12 +521,14 @@ log_step "Starting..."
 
 | Task | Command |
 |------|---------|
-| Backend tests (platform) | `cd apps/bff-platform && npm test` |
-| Backend tests (auth) | `cd apps/bff-auth && npm test` |
-| Single test file | `cd apps/bff-platform && npm test -- queryClassifier.test.js` |
+| Backend (platform) | `cd apps/bff-platform && npm test` |
+| Backend (auth) | `cd apps/bff-auth && npm test` |
+| Single test file | `cd apps/bff-platform && npm test -- users.test.js` |
 | Watch mode | `cd apps/bff-platform && npm test -- --watch` |
 | Coverage | `cd apps/bff-platform && npm test -- --coverage` |
-| E2E tests | `cd e2e && npx playwright test` |
+| UI tests | `cd apps/ui && npm test` |
+| UI single file | `cd apps/ui && npm test -- src/hooks/__tests__/useChat.profileSave.test.js` |
+| E2E all | `cd e2e && npx playwright test` |
 | E2E specific | `cd e2e && npx playwright test credits_threshold.spec.js` |
 | E2E debug | `cd e2e && npx playwright test --headed --debug` |
 
@@ -743,9 +538,10 @@ log_step "Starting..."
 |------|---------|
 | Check CI ports | `lsof -i :6173 -i :4000 -i :4001` |
 | Kill stuck CI | `docker compose -p niyati-ci down -v --remove-orphans` |
-| View container logs | `docker compose logs <service>` |
-| Restart service | `docker compose restart <service>` |
-| Check health | `curl http://localhost:5173/api/v1/telemetry/health` |
+| View logs | `docker logs -f niyati-bff-platform-prod` |
+| Restart service | `./scripts/deploy_niyati.sh --env=prod --action=restart --service=<name>` |
+| Health check | `curl http://localhost:5173/api/v1/telemetry/health` |
+| DB query | `docker exec -i niyati-postgres-prod psql -U niyati -d niyati_prod -c "SELECT ..."` |
 
 ## Critical Rules
 
@@ -762,13 +558,12 @@ log_step "Starting..."
 - **STRICTLY FORBIDDEN** — `UPDATE` and `ALTER` statements
 - **Schema changes** — Create new migration file, rebuild from scratch
 - **Data fixes** — Use `INSERT ... ON CONFLICT` or create new table
-- **Why**: Ensures reproducibility, simplifies rollbacks, eliminates state drift
 
 ### 3. Infrastructure: Isolated Environments
 - **Non-overlapping resources** — Dev, CI, and Prod use different ports, networks, volumes
 - **Idempotent scripts** — Safe to run multiple times, always produce same result
 - **Clean starts** — `docker compose down -v` before `up` in CI/deploy
-- **Named resources** — Use project prefixes (`niyati-dev-`, `niyati-ci-`, `niyati-prod-`)
+- **All compose files in `infra/`** — NOT at project root
 
 ### 4. Tests: Independent and Reproducible
 - **Multiple execution paths** — Tests run via CI scripts, deploy scripts, or standalone
@@ -782,50 +577,39 @@ log_step "Starting..."
 - **CI/CD logic** — Lives in [scripts/](scripts/), NOT in GitHub workflow YAML
 - **Billing** — Server-side only. UI displays but never performs authoritative charges
 - **Scripts** — All bash scripts MUST source `scripts/lib/common.sh` for consistency
+- **UI API calls** — Use short paths (`/users/profile`), NOT full paths (`/api/v1/users/profile`)
 
 ## Environment Configs
 
 ### Docker Compose Modes
 
-| Mode | Command | Compose Files |
-|------|---------|---------------|
-| **Development** | `docker compose up -d` | `docker-compose.yml` + `docker-compose.override.yml` |
-| **Production** | `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d` | `docker-compose.yml` + `docker-compose.prod.yml` |
-| **CI** | `./scripts/ci-run-tests.sh` (auto) | `docker-compose.yml` + `docker-compose.ci.yml` + `.env.ci` |
+| Mode | Compose Files | Command |
+|------|---------------|---------|
+| **Development** | `infra/docker-compose.yml` + `infra/docker-compose.override.yml` | `./scripts/deploy_niyati.sh --env=dev --action=deploy` |
+| **Production** | `infra/docker-compose.yml` + `infra/docker-compose.prod.yml` | `./scripts/deploy_niyati.sh --env=prod --action=deploy` |
+| **CI** | `infra/docker-compose.yml` + `infra/docker-compose.ci.yml` | `./scripts/ci-run-tests.sh` (automatic) |
 
-### Port Configuration (CI vs Dev/Prod)
-
-CI uses separate ports to avoid conflicts when running alongside dev environment:
+### Port Configuration
 
 | Service | Dev/Prod | CI | Notes |
 |---------|----------|-----|-------|
 | Caddy (UI) | 5173 | **6173** | External browser access |
-| BFF Platform | 3000 | **4000** | Internal container port |
-| BFF Auth | 3001 | **4001** | Internal container port |
-| Postgres | 5432 | **56432** | External for test seeding |
+| BFF Platform | 3000 | **4000** | Container port |
+| BFF Auth | 3001 | **4001** | Container port |
+| Postgres | 5432 | **56432** | External for seeding |
 | Redis | 6379 | **7379** | External for debugging |
 | n8n/mock | 5678 | **6678** | External for debugging |
 
-### Key Environment Files
+### Environment Files
 
 | File | Purpose |
 |------|---------|
-| `.env` | Development environment (gitignored) |
-| `.env.ci` | CI-specific ports and mock config |
-| `.env.example` | Template for `.env` |
-| `secrets/` | Docker secrets (gitignored in prod) |
-
-### Running CI Locally
-
-```bash
-# Full CI suite (recommended)
-./scripts/ci-run-tests.sh
-
-# Manual Docker compose with CI config
-docker compose --env-file .env.ci -f docker-compose.yml -f docker-compose.ci.yml up -d
-```
-
-**Important**: When `bff-auth` calls `bff-platform` internally, it uses `BFF_PLATFORM_BASE` environment variable. In CI, this is set to `http://bff-platform:4000/api/v1` to match the CI port.
+| `infra/.env` | Production environment (gitignored) |
+| `infra/.env.example` | Template for .env |
+| `infra/.env.bff.auth` | bff-auth specific vars |
+| `infra/.env.bff.platform` | bff-platform specific vars |
+| `infra/.env.ui` | UI build-time vars |
+| `infra/secrets/` | Docker secrets (gitignored) |
 
 ## For AI Agents: Quick Start
 
@@ -837,3 +621,67 @@ When you need to make changes to Niyati:
 4. **Run tests**: `npm test` for unit tests
 5. **Run full CI**: `./scripts/ci-run-tests.sh` before considering done
 6. **Document**: Update this file if you change architecture or add new patterns
+
+### Key Gotchas
+
+- **Caddy routing**: `/api/v1/users/*` → bff-auth, EXCEPT `deduct-credits` and `add-credits` → bff-platform
+- **bffFetch paths**: Use `/users/profile` NOT `/api/v1/users/profile` (buildApiUrl adds the prefix)
+- **bffFetch auth**: Automatically attaches `Authorization: Bearer` from `authToken.js` — no manual header needed
+- **vitest**: Hoisted to root `node_modules/`; UI uses `npx vitest` in its test script
+- **Compose files**: All in `infra/`, not at project root
+- **Env files**: All in `infra/`, not at project root
+- **Both BFFs share the same Postgres DB** — bff-platform can write to auth tables directly
+- **authenticateOrReject middleware**: Applied to sensitive bff-platform routes. In test mocks, include `authenticateOrReject: (req, res, next) => next()` for passthrough
+
+## Git Workflow (Protected master)
+
+`master` is protected — direct pushes are forbidden. All changes go through Pull Requests.
+
+### For AI Agents: Commit and Push Flow
+
+```bash
+# 1. Create feature branch (NOT on master)
+git checkout -b fix/my-feature-description
+
+# 2. Check what changed
+git status --short
+git diff --stat HEAD
+
+# 3. SECURITY CHECK: scan for leaked secrets (only docs references OK)
+git diff HEAD -- . ':!package-lock.json' | grep -iE "(password|secret|token|api.key|private.key)" | grep "^+"
+
+# 4. Verify .gitignore covers sensitive files
+git ls-files --cached -- 'infra/.env' 'infra/secrets/'
+
+# 5. Stage and commit (Conventional Commits format)
+git add -A
+git commit -m "fix: brief description
+
+- Detail 1
+- Detail 2"
+
+# 6. Push feature branch
+git push origin fix/my-feature-description
+
+# 7. Create PR using gh-CLI (write body to temp file to avoid escaping issues)
+gh pr create \
+  --base master \
+  --head fix/my-feature-description \
+  --title "fix: brief description" \
+  --body-file /tmp/pr-body.md
+
+# 8. Check CI status
+gh pr checks fix/my-feature-description
+
+# 9. After CI passes, merge
+gh pr merge fix/my-feature-description --squash --delete-branch
+
+# 10. Clean up: return to master
+git checkout master && git pull
+```
+
+### Required Checks
+
+- **Full Stack Tests** CI job must pass before merge
+- Run `./scripts/ci-run-tests.sh` locally before opening PRs
+- Never push directly to `master`

@@ -3,6 +3,9 @@ WORKDIR /app
 RUN apk add --no-cache dumb-init curl python3 build-base
 
 # Replicate monorepo structure for workspace resolution
+COPY packages/auth-core packages/auth-core
+RUN cd packages/auth-core && npm install
+
 COPY packages/commons packages/commons
 RUN cd packages/commons && npm install
 

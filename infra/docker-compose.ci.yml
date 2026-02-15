@@ -48,6 +48,7 @@ services:
       PORT: ${BFF_PLATFORM_PORT:-4000}
       SERVICE_TOKEN: ${SERVICE_TOKEN:-ci-test-token}
       N8N_WEBHOOK_URL: http://n8n:5678/webhook/chat
+      BFF_AUTH_URL: http://bff-auth:${BFF_AUTH_PORT:-4001}
       BFF_AUTH_BASE: http://bff-auth:${BFF_AUTH_PORT:-4001}/api/v1
       # CI uses port 6173 - override CORS_ALLOWED for CI environment
       CORS_ALLOWED: http://localhost:6173,http://127.0.0.1:6173
