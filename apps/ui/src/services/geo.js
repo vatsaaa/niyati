@@ -2,6 +2,19 @@ import { bffFetchWithRetry } from './api';
 import { simpleHash } from '../utils/hash';
 import { CACHE_CONFIG } from '../config';
 
+/**
+ * Custom error thrown when geocoding returns multiple candidate locations.
+ * The caller (e.g. useChat) should present these options to the user for selection.
+ */
+export class AmbiguousLocationError extends Error {
+  constructor(place, suggestions) {
+    super(`Multiple locations found for "${place}". Please select one.`);
+    this.name = 'AmbiguousLocationError';
+    this.suggestions = suggestions;
+    this.place = place;
+  }
+}
+
 // Well-known cities/places that should not be disambiguated by user country
 // These are unique enough that they don't need country context
 const WELL_KNOWN_PLACES = new Set([
@@ -114,7 +127,11 @@ export async function resolveLocationAndTimezone(placeOfBirth, countries = []) {
   let locationData = null;
   if (actualData.status === 'ok' && (actualData.place || actualData.location)) {
     locationData = actualData.place || actualData.location;
-  } else if (actualData.status === 'ambiguous' && actualData.suggestions && actualData.suggestions.length > 0) {
+  } else if (actualData.status === 'ambiguous' && actualData.suggestions && actualData.suggestions.length > 1) {
+    // Multiple candidates — throw so the UI can present disambiguation options
+    throw new AmbiguousLocationError(placeOfBirth, actualData.suggestions);
+  } else if (actualData.status === 'ambiguous' && actualData.suggestions && actualData.suggestions.length === 1) {
+    // Only one suggestion — use it directly
     locationData = actualData.suggestions[0];
   }
 

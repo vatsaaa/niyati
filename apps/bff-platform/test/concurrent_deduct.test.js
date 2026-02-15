@@ -14,7 +14,7 @@ describe('POST /users/deduct-credits - Concurrent Operations', () => {
         sanitize: v => v,
         ErrorCodes: responses.ErrorCodes,
         config: {},
-        dateUtils: { computeIsAdult: jest.fn(() => true) }
+        dateUtils: { computeIsAdult: jest.fn(() => true), validateDateOfBirth: jest.fn(() => ({ valid: true })) }
       };
     });
 

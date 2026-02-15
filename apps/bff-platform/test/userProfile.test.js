@@ -15,7 +15,7 @@ describe('bff-platform GET/DELETE /users/profile', () => {
         sanitize: v => v,
         ErrorCodes: responses.ErrorCodes,
         config: {},
-        dateUtils: { computeIsAdult: jest.fn(() => true) },
+        dateUtils: { computeIsAdult: jest.fn(() => true), validateDateOfBirth: jest.fn(() => ({ valid: true })) },
         authenticateOrReject: (req, res, next) => next()
       };
     });
@@ -141,5 +141,86 @@ describe('bff-platform GET/DELETE /users/profile', () => {
 
       expect(res.statusCode).toBe(500);
     });
+  });
+});
+
+describe('bff-platform POST /users/profile date validation', () => {
+  let app;
+
+  beforeEach(() => {
+    jest.resetModules();
+    process.env.SERVICE_TOKEN = '';
+
+    jest.mock('@niyati/commons', () => {
+      const responses = require('@niyati/commons/lib/responses');
+      const realDateUtils = jest.requireActual('@niyati/commons/lib/dateUtils');
+      return {
+        logger: { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn(), fatal: jest.fn(), trace: jest.fn() },
+        sanitize: v => v,
+        ErrorCodes: responses.ErrorCodes,
+        config: {},
+        dateUtils: realDateUtils,
+        authenticateOrReject: (req, res, next) => next()
+      };
+    });
+
+    const router = require('../lib/users');
+    const { app: testApp } = createTestApp('/api/v1/users', router);
+    app = testApp;
+  });
+
+  afterEach(() => jest.restoreAllMocks());
+
+  test('rejects invalid date (Feb 31) with PROFILE_002', async () => {
+    const mockDb = createMockDb({ rows: [{ user_id: 'u1' }], rowCount: 1 });
+    app.set('db', mockDb);
+
+    const res = await request(app)
+      .post('/api/v1/users/profile')
+      .send({ phoneNumber: '+919899162012', dateOfBirth: '1979-02-31' });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error.code).toBe('PROFILE_002');
+    expect(res.body.error.message).toMatch(/doesn.*exist/i);
+  });
+
+  test('rejects future date with PROFILE_002', async () => {
+    const mockDb = createMockDb({ rows: [{ user_id: 'u1' }], rowCount: 1 });
+    app.set('db', mockDb);
+
+    const res = await request(app)
+      .post('/api/v1/users/profile')
+      .send({ phoneNumber: '+919899162012', dateOfBirth: '2030-03-15' });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error.code).toBe('PROFILE_002');
+    expect(res.body.error.message).toMatch(/future/i);
+  });
+
+  test('rejects underage user (< 13) with PROFILE_003', async () => {
+    const now = new Date();
+    const dob = new Date(now.getFullYear() - 10, now.getMonth(), now.getDate());
+    const mockDb = createMockDb({ rows: [{ user_id: 'u1' }], rowCount: 1 });
+    app.set('db', mockDb);
+
+    const res = await request(app)
+      .post('/api/v1/users/profile')
+      .send({ phoneNumber: '+919899162012', dateOfBirth: dob.toISOString().split('T')[0] });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.body.error.code).toBe('PROFILE_003');
+    expect(res.body.error.message).toMatch(/13/);
+  });
+
+  test('accepts valid DOB and saves profile', async () => {
+    const mockDb = createMockDb({ rows: [{ user_id: 'u1', phone_number: '+919899162012', name: 'Test', is_adult: true }], rowCount: 1 });
+    app.set('db', mockDb);
+
+    const res = await request(app)
+      .post('/api/v1/users/profile')
+      .send({ phoneNumber: '+919899162012', dateOfBirth: '1979-05-19', name: 'Test' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.status).toBe('ok');
   });
 });

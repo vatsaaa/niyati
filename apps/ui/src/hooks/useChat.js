@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react';
 import { extractProfileFields } from '../utils/profileExtractor';
-import { normalizeDateString, normalizeTimeString } from '../utils/normalizers';
-import { resolveLocationAndTimezone } from '../services/geo';
+import { normalizeDateString, normalizeTimeString, validateNormalizedDate } from '../utils/normalizers';
+import { resolveLocationAndTimezone, AmbiguousLocationError } from '../services/geo';
 import { formatPlaceFromLocation, formatDobForDisplay, formatTimeForDisplay } from '../utils/formatters';
 import { bffFetchWithRetry, sendClientLog } from '../services/api';
 import { N8N_WEBHOOK_URL, N8N_WEBHOOK_FALLBACK_URL } from '../config';
@@ -235,6 +235,8 @@ export function useChat(profile, updateProfile, addMessage, auth) {
   // Track last classification to support follow-up deduction heuristic
   // Persist across renders using useRef so follow-ups are detected reliably
   const lastClassificationRef = useRef(null);
+  // Track pending disambiguation when geocode returns multiple candidates
+  const pendingDisambiguationRef = useRef(null);
 
   const handleSend = async (inputText, setInputText) => {
     // Enhanced input validation
@@ -281,6 +283,37 @@ export function useChat(profile, updateProfile, addMessage, auth) {
       return;
     }
 
+    // Handle pending place disambiguation (user selected a numbered option)
+    if (pendingDisambiguationRef.current) {
+      const pending = pendingDisambiguationRef.current;
+      const choiceMatch = sanitizedInput.match(/^(\d+)$/);
+      const idx = choiceMatch ? parseInt(choiceMatch[1], 10) - 1 : -1;
+      if (idx >= 0 && idx < pending.suggestions.length) {
+        const chosen = pending.suggestions[idx];
+        const formatted = formatPlaceFromLocation(chosen);
+        const locationUpdate = {
+          placeOfBirth: formatted || chosen.display_name || pending.place,
+          placeOfBirth_raw: chosen.display_name || '',
+          lat: chosen.lat,
+          lon: chosen.lon
+        };
+        updateProfile(locationUpdate);
+        currentProfile = { ...currentProfile, ...locationUpdate };
+        pendingDisambiguationRef.current = null;
+        addMessage({
+          id: Date.now() + Math.random(),
+          text: `Got it! I've set your place of birth to ${locationUpdate.placeOfBirth}.`,
+          sender: 'bot',
+          timestamp: new Date()
+        });
+        setIsLoading(false);
+        return;
+      } else {
+        // Not a valid selection — clear disambiguation and continue normally
+        pendingDisambiguationRef.current = null;
+      }
+    }
+
     // Only extract and update profile fields if profile hasn't been sent yet
     const profileAlreadyLocked = isProfileLocked();
     let profileJustCompleted = false;
@@ -290,6 +323,22 @@ export function useChat(profile, updateProfile, addMessage, auth) {
         const extracted = await extractProfileFields(userMessage.text);
 
         if (extracted.name || extracted.dob || extracted.placeOfBirth || extracted.timeOfBirth) {
+          // Validate date of birth before accepting it
+          if (extracted.dob) {
+            const normalizedDob = normalizeDateString(extracted.dob) || extracted.dob;
+            const dateCheck = validateNormalizedDate(normalizedDob);
+            if (!dateCheck.valid) {
+              addMessage({
+                id: Date.now() + Math.random(),
+                text: dateCheck.message,
+                sender: 'bot',
+                timestamp: new Date()
+              });
+              // Don't accept the invalid date — skip profile update for this field
+              extracted.dob = null;
+            }
+          }
+
           const updated = {
             ...currentProfile, // Preserve all existing fields including credits
             name: extracted.name || currentProfile.name,
@@ -324,13 +373,25 @@ export function useChat(profile, updateProfile, addMessage, auth) {
               currentProfile = { ...currentProfile, ...locationUpdate }; // Ensure local copy is also updated
             }
           } catch (err) {
-            console.warn('Place resolution failed:', err?.message || err);
-            addMessage({
-              id: Date.now(),
-              text: 'Automatic location detection failed — please enter your place of birth manually.',
-              sender: 'bot',
-              timestamp: new Date(),
-            });
+            if (err instanceof AmbiguousLocationError && err.suggestions?.length > 1) {
+              // Present disambiguation options to the user
+              pendingDisambiguationRef.current = { place: extracted.placeOfBirth, suggestions: err.suggestions };
+              const options = err.suggestions.map((s, i) => `${i + 1}. ${s.display_name || s.city || 'Unknown'}`).join('\n');
+              addMessage({
+                id: Date.now() + Math.random(),
+                text: `I found multiple locations for "${extracted.placeOfBirth}":\n${options}\n\nPlease select the correct one by entering its number, or provide more details.`,
+                sender: 'bot',
+                timestamp: new Date()
+              });
+            } else {
+              console.warn('Place resolution failed:', err?.message || err);
+              addMessage({
+                id: Date.now(),
+                text: 'Automatic location detection failed — please enter your place of birth manually.',
+                sender: 'bot',
+                timestamp: new Date(),
+              });
+            }
           }
         }
         

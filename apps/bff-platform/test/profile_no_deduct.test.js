@@ -13,7 +13,7 @@ describe('profile update does not deduct credits', () => {
         logger: { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn(), fatal: jest.fn(), trace: jest.fn(),  warn: jest.fn(), error: jest.fn() },
         sanitize: v => v,
         ErrorCodes: responses.ErrorCodes,
-        config: {}, dateUtils: { computeIsAdult: jest.fn(() => true) }
+        config: {}, dateUtils: { computeIsAdult: jest.fn(() => true), validateDateOfBirth: jest.fn(() => ({ valid: true })) }
       };
     });
 

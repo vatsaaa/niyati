@@ -18,7 +18,7 @@ describe('bff-platform users routes', () => {
         sanitize: v => v,
         ErrorCodes: responses.ErrorCodes,
         config: {},
-        dateUtils: { computeIsAdult: jest.fn(() => true) },
+        dateUtils: { computeIsAdult: jest.fn(() => true), validateDateOfBirth: jest.fn(() => ({ valid: true })) },
         // Passthrough auth middleware for business-logic tests
         authenticateOrReject: (req, res, next) => next()
       };
@@ -355,7 +355,7 @@ describe('bff-platform users auth enforcement', () => {
         sanitize: v => v,
         ErrorCodes: responses.ErrorCodes,
         config: {},
-        dateUtils: { computeIsAdult: jest.fn(() => true) },
+        dateUtils: { computeIsAdult: jest.fn(() => true), validateDateOfBirth: jest.fn(() => ({ valid: true })) },
         // Rejecting auth middleware — returns 401 for unauthenticated requests
         authenticateOrReject: (req, res, next) => {
           const auth = req.headers.authorization || '';

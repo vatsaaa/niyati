@@ -120,3 +120,29 @@ export function normalizeDateString(s, countryHint = 'US') {
 
   return null;
 }
+
+/**
+ * Validates a normalized YYYY-MM-DD date string for date-of-birth purposes.
+ * Checks: (1) valid calendar date, (2) not in the future.
+ * Returns { valid: true } if OK (or null/empty), or { valid: false, message } with a user-facing error.
+ * @param {string|null} dateStr - The date string in YYYY-MM-DD format.
+ * @returns {{ valid: boolean, message?: string }}
+ */
+export function validateNormalizedDate(dateStr) {
+  if (!dateStr) return { valid: true };
+  const match = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return { valid: false, message: `The date "${dateStr}" doesn't appear to be valid. Please use a format like "19 May 1979" or "1979-05-19".` };
+  const year = parseInt(match[1], 10);
+  const month = parseInt(match[2], 10);
+  const day = parseInt(match[3], 10);
+  const d = new Date(year, month - 1, day);
+  if (d.getFullYear() !== year || d.getMonth() !== month - 1 || d.getDate() !== day) {
+    return { valid: false, message: `The date "${dateStr}" doesn't exist. Could you double-check your date of birth?` };
+  }
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  if (d > today) {
+    return { valid: false, message: `The date you provided (${dateStr}) is in the future. Please share your actual date of birth.` };
+  }
+  return { valid: true };
+}
