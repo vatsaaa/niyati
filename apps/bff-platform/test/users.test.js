@@ -32,6 +32,21 @@ describe('bff-platform users routes', () => {
   afterEach(() => jest.restoreAllMocks());
 
   describe('POST /identify', () => {
+    test('uses BFF_AUTH_URL when BFF_AUTH_BASE not set', async () => {
+      delete process.env.BFF_AUTH_BASE;
+      process.env.BFF_AUTH_URL = 'http://bff-auth:4001';
+      const fakeDb = { async query(sql, params) { return { rows: [], rowCount: 0 }; } };
+      const getMock = jest.fn().mockResolvedValueOnce({ data: { status: 'ok', data: { user: null } } });
+      require('axios').get = getMock;
+      app.set('db', fakeDb);
+      await request(app).post('/api/v1/users/identify').send({ phoneNumber: '+1234' });
+      expect(getMock).toHaveBeenCalledWith(
+        expect.stringContaining('http://bff-auth:4001/api/v1/internal/users/lookup'),
+        expect.any(Object)
+      );
+      delete process.env.BFF_AUTH_URL;
+    });
+
     test('returns returning false when user not found', async () => {
       const fakeDb = { async query(sql, params) { return { rows: [], rowCount: 0 }; } };
       // mock bff-auth lookup to return no user (avoid network call)

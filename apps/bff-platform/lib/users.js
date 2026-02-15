@@ -165,7 +165,9 @@ router.post('/identify', async (req, res) => {
     }
 
     // Identity lookup from bff-auth internal API (single source of truth for PII)
-    const BFF_AUTH_BASE = process.env.BFF_AUTH_BASE || 'http://bff-auth:3001/api/v1';
+    const BFF_AUTH_BASE = process.env.BFF_AUTH_BASE
+      || (process.env.BFF_AUTH_URL ? `${process.env.BFF_AUTH_URL.replace(/\/$/, '')}/api/v1` : null)
+      || 'http://bff-auth:3001/api/v1';
     const svcToken = process.env.SERVICE_TOKEN || '';
     let authUser = null;
     
@@ -412,7 +414,9 @@ router.get('/lookup', async (req, res) => {
     if (!phone && !id) return res.sendError(ErrorCodes.MISSING_REQUIRED_FIELD, 'missing_lookup_identifier');
 
     // Delegate to bff-auth internal API (single responsibility: identity)
-    const BFF_AUTH_BASE = process.env.BFF_AUTH_BASE || 'http://bff-auth:3001/api/v1';
+    const BFF_AUTH_BASE = process.env.BFF_AUTH_BASE
+      || (process.env.BFF_AUTH_URL ? `${process.env.BFF_AUTH_URL.replace(/\/$/, '')}/api/v1` : null)
+      || 'http://bff-auth:3001/api/v1';
     const svcToken = process.env.SERVICE_TOKEN || '';
 
     if (id) {
