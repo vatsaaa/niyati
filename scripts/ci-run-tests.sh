@@ -334,14 +334,13 @@ BACKEND_EXIT=0
 if [[ "$SKIP_BACKEND" -eq 0 ]]; then
     log_step "🧪 Running backend tests..."
 
-    # Install shared packages (auth-core must come before commons which depends on it)
-    npm install --prefix packages/auth-core --prefer-offline --no-audit --silent
-    npm ci --prefix packages/commons --prefer-offline --no-audit --silent
+    # Install all workspace packages from root (resolves file: cross-references like auth-core → commons)
+    npm install --prefer-offline --no-audit --silent
 
     # bff-platform tests (run package test script so coverage flag in package.json is respected)
     log_info "Testing bff-platform..."
     cd apps/bff-platform
-    npm ci --include=dev --prefer-offline --no-audit --silent
+    npm install --include=dev --prefer-offline --no-audit --silent
     NODE_ENV=test npm test --silent || BACKEND_EXIT=1
     # collect coverage artifact if produced
     if [[ -d "coverage" ]]; then
@@ -354,7 +353,7 @@ if [[ "$SKIP_BACKEND" -eq 0 ]]; then
     if [[ "$BACKEND_EXIT" -eq 0 ]]; then
         log_info "Testing bff-auth..."
         cd apps/bff-auth
-        npm ci --include=dev --prefer-offline --no-audit --silent
+        npm install --include=dev --prefer-offline --no-audit --silent
         NODE_ENV=test npm test --silent || BACKEND_EXIT=1
         if [[ -d "coverage" ]]; then
             mkdir -p "$ARTIFACTS_COVERAGE_DIR/bff-auth"
