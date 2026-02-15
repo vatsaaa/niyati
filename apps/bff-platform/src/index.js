@@ -347,7 +347,10 @@ apiRouter.post('/chat', chatLimiter || noop, chatAuthMiddleware, async (req, res
         },
         session: {
           id: sessionId,
-          startedAt: new Date().toISOString()
+          startedAt: new Date().toISOString(),
+          currentDate: new Date().toISOString().slice(0, 10),
+          currentDay: new Date().toLocaleDateString('en-US', { weekday: 'long' }),
+          currentTime: new Date().toTimeString().slice(0, 5)
         },
         reqId: metadata.reqId || null,
         source: 'bff-platform',
