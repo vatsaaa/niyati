@@ -706,6 +706,183 @@ router.post('/add-credits', authMiddleware, async (req, res) => {
   }
 });
 
+// GET /users/credits
+// Query params: phoneNumber (required)
+// Returns current credit balance for a user
+router.get('/credits', authMiddleware, async (req, res) => {
+  try {
+    const phone = (req.query.phoneNumber || '').trim();
+    if (!phone) {
+      return res.sendError(ErrorCodes.MISSING_REQUIRED_FIELD, 'missing_phone_number');
+    }
+
+    const db = req.app.get('db');
+    if (!db) return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Database not configured');
+
+    const result = await db.query(`
+      SELECT uc.credits, uc.is_paid, uc.total_paid_amount, uc.credits_last_reset
+      FROM user_profiles up
+      JOIN user_credits uc ON up.user_id = uc.user_id
+      WHERE regexp_replace(up.phone_number, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g')
+      LIMIT 1
+    `, [phone]);
+
+    if (!result || !result.rows || result.rows.length === 0) {
+      return res.sendError(ErrorCodes.NOT_FOUND, 'user_not_found');
+    }
+
+    const row = result.rows[0];
+    return res.sendSuccess({
+      credits: row.credits,
+      isPaid: !!row.is_paid,
+      totalPaidAmount: row.total_paid_amount || 0,
+      lastReset: row.credits_last_reset || null
+    });
+  } catch (err) {
+    logger.error(sanitize({ msg: 'users.credits.error', err: err && err.message }));
+    return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'credits_fetch_failed');
+  }
+});
+
+// GET /users/transactions
+// Query params: phoneNumber (required), limit (optional, default 50)
+// Returns transaction history for a user
+router.get('/transactions', authMiddleware, async (req, res) => {
+  try {
+    const phone = (req.query.phoneNumber || '').trim();
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
+
+    if (!phone) {
+      return res.sendError(ErrorCodes.MISSING_REQUIRED_FIELD, 'missing_phone_number');
+    }
+
+    const db = req.app.get('db');
+    if (!db) return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Database not configured');
+
+    // Resolve user_id
+    const userResult = await db.query(`
+      SELECT user_id FROM user_profiles
+      WHERE regexp_replace(phone_number, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g')
+      LIMIT 1
+    `, [phone]);
+
+    if (!userResult || !userResult.rows || userResult.rows.length === 0) {
+      return res.sendError(ErrorCodes.NOT_FOUND, 'user_not_found');
+    }
+
+    const userId = userResult.rows[0].user_id;
+
+    // Fetch charge_transactions for this user's phone_number
+    const txnResult = await db.query(`
+      SELECT id, request_id, credits_charged, query_type, status, metadata, created_at
+      FROM charge_transactions
+      WHERE phone_number = $1
+         OR phone_number IN (
+           SELECT phone_number FROM user_profiles WHERE user_id = $2
+         )
+      ORDER BY created_at DESC
+      LIMIT $3
+    `, [phone, userId, limit]);
+
+    const transactions = (txnResult && txnResult.rows) || [];
+
+    return res.sendSuccess({ transactions });
+  } catch (err) {
+    logger.error(sanitize({ msg: 'users.transactions.error', err: err && err.message }));
+    return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'transactions_fetch_failed');
+  }
+});
+
+// GET /users/profile?phoneNumber=...
+// Returns the full user profile
+// Requires authentication (Bearer token)
+router.get('/profile', authMiddleware, async (req, res) => {
+  try {
+    const phone = (req.query.phoneNumber || '').trim();
+    if (!phone) {
+      return res.sendError(ErrorCodes.MISSING_REQUIRED_FIELD, 'missing_phone_number');
+    }
+
+    const db = req.app.get('db');
+    if (!db) return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Database not configured');
+
+    const result = await db.query(`
+      SELECT user_id, phone_number, name, date_of_birth, time_of_birth,
+             place_of_birth, lat, lon, timezone, consent_given, is_adult, created_at
+      FROM user_profiles
+      WHERE regexp_replace(phone_number, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g')
+      LIMIT 1
+    `, [phone]);
+
+    if (!result || !result.rows || result.rows.length === 0) {
+      return res.sendError(ErrorCodes.NOT_FOUND, 'user_not_found');
+    }
+
+    const row = result.rows[0];
+    return res.sendSuccess({
+      profile: {
+        userId: row.user_id,
+        phoneNumber: row.phone_number,
+        name: row.name,
+        dateOfBirth: row.date_of_birth,
+        timeOfBirth: row.time_of_birth,
+        placeOfBirth: row.place_of_birth,
+        lat: row.lat,
+        lon: row.lon,
+        timezone: row.timezone,
+        consentGiven: !!row.consent_given,
+        isAdult: !!row.is_adult,
+        createdAt: row.created_at
+      }
+    });
+  } catch (err) {
+    logger.error(sanitize({ msg: 'users.profile.get.error', err: err && err.message, stack: err && err.stack }));
+    return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'profile_fetch_failed');
+  }
+});
+
+// DELETE /users/profile
+// Body: { phoneNumber }
+// Deletes user profile and all associated data (account deletion)
+// Requires authentication (Bearer token)
+router.delete('/profile', authMiddleware, async (req, res) => {
+  try {
+    const phone = (req.body && req.body.phoneNumber || '').trim();
+    if (!phone) {
+      return res.sendError(ErrorCodes.MISSING_REQUIRED_FIELD, 'missing_phone_number');
+    }
+
+    const db = req.app.get('db');
+    if (!db) return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'Database not configured');
+
+    // Resolve user_id first
+    const userResult = await db.query(`
+      SELECT user_id FROM user_profiles
+      WHERE regexp_replace(phone_number, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g')
+      LIMIT 1
+    `, [phone]);
+
+    if (!userResult || !userResult.rows || userResult.rows.length === 0) {
+      return res.sendError(ErrorCodes.NOT_FOUND, 'user_not_found');
+    }
+
+    const userId = userResult.rows[0].user_id;
+
+    // Delete related data in order (child tables first)
+    await db.query('DELETE FROM charge_transactions WHERE phone_number = $1', [phone]);
+    await db.query('DELETE FROM chat_messages WHERE user_id = $1', [userId]);
+    await db.query('DELETE FROM payment_verifications WHERE user_id = $1', [userId]);
+    await db.query('DELETE FROM user_credits WHERE user_id = $1', [userId]);
+    await db.query('DELETE FROM user_profiles WHERE user_id = $1', [userId]);
+
+    logger.info({ msg: 'users.profile.deleted', phone, userId });
+    return res.sendSuccess({ deleted: true, userId });
+  } catch (err) {
+    logger.error(sanitize({ msg: 'users.profile.delete.error', err: err && err.message, stack: err && err.stack }));
+    return res.sendError(ErrorCodes.INTERNAL_SERVER_ERROR, 'profile_delete_failed');
+  }
+});
+
 // GET /users/config
 // Returns configurable credits settings for the UI
 router.get('/config', async (req, res) => {

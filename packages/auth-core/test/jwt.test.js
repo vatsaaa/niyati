@@ -42,7 +42,7 @@ describe('createJwtProvider', () => {
     expect(() => provider.createAccessToken({ sub: 1 })).toThrow('secret not configured');
   });
 
-  test('defaults: algorithm HS256, expiresIn 15m, no issuer/audience', () => {
+  test('defaults: algorithm HS256, expiresIn 24h, no issuer/audience', () => {
     const { createJwtProvider } = require('../lib/jwt');
     const provider = createJwtProvider({ secret: SECRET });
 
@@ -50,9 +50,9 @@ describe('createJwtProvider', () => {
     const decoded = jwt.decode(token, { complete: true });
     expect(decoded.header.alg).toBe('HS256');
     expect(decoded.payload.sub).toBe(99);
-    // exp should be roughly 15 min from now
+    // exp should be 24 hours from now
     const diff = decoded.payload.exp - decoded.payload.iat;
-    expect(diff).toBe(15 * 60);
+    expect(diff).toBe(24 * 60 * 60);
   });
 
   test('expiresIn can be overridden per-call', () => {

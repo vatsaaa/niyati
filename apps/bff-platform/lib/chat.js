@@ -37,13 +37,15 @@ router.post('/classify', async (req, res) => {
     const creditCost = await getQueryCreditCost(message, config);
     const isBillable = !(await isCasualConversation(message));
     const isFuture = await isFutureQuestion(message);
+    const isPremium = queryType === 'premium';
 
-    logger.info({ msg: 'chat_classify', queryType, creditCost, isBillable, isFuture, messageLength: message.length });
+    logger.info({ msg: 'chat_classify', queryType, creditCost, isBillable, isPremium, isFuture, messageLength: message.length });
 
     return res.sendSuccess({
       queryType,
       creditCost,
       isBillable,
+      isPremium,
       isFutureQuery: isFuture,
       config: {
         credits_horoscope_cost: config.credits_horoscope_cost,

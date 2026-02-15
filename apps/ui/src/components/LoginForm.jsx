@@ -14,6 +14,9 @@ const LoginForm = ({
   const [tempPhone, setTempPhone] = useState('');
   const [showDropdown, setShowDropdown] = useState(false);
   const [countrySearch, setCountrySearch] = useState('');
+  const [phoneError, setPhoneError] = useState('');
+  const [consentError, setConsentError] = useState('');
+  const [networkError, setNetworkError] = useState('');
   const dropdownRef = useRef(null);
 
   // Filter countries based on search
@@ -36,12 +39,17 @@ const LoginForm = ({
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (!tempPhone.trim() || tempPhone.length !== (selectedCountry?.phoneLength || 10)) {
-      alert(`Please enter a valid ${selectedCountry?.phoneLength || 10}-digit phone number`);
+    setPhoneError('');
+    setConsentError('');
+    setNetworkError('');
+
+    const expectedLen = selectedCountry?.phoneLength || 10;
+    if (!tempPhone.trim() || tempPhone.length !== expectedLen) {
+      setPhoneError(`Please enter a valid ${expectedLen}-digit phone number`);
       return;
     }
     if (!consentChecked) {
-      alert('Please accept the Privacy Policy to continue');
+      setConsentError('Please accept the privacy policy to continue');
       return;
     }
     // Call identify endpoint to check if returning user
@@ -74,7 +82,8 @@ const LoginForm = ({
           }
         }
       } catch (e) {
-        // Best-effort: ignore errors and continue login
+        setNetworkError('Connection error. Please check your internet and try again.');
+        return;
       }
       return onLogin(tempPhone, selectedCountry, null, null);
     })();
@@ -156,20 +165,32 @@ const LoginForm = ({
                 const max = selectedCountry?.phoneLength || 10;
                 const value = e.target.value.replace(/\D/g, '').slice(0, max);
                 setTempPhone(value);
+                if (phoneError) setPhoneError('');
+                if (networkError) setNetworkError('');
               }}
-              className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-12 pr-4 py-3 text-slate-200 focus:outline-none focus:border-purple-500 transition-colors"
+              className={`w-full bg-slate-950 border rounded-xl pl-12 pr-4 py-3 text-slate-200 focus:outline-none transition-colors ${
+                phoneError ? 'border-red-500 ring-1 ring-red-500' : 'border-slate-700 focus:border-purple-500'
+              }`}
               maxLength={selectedCountry?.phoneLength || 10}
             />
           </div>
         </div>
+        {phoneError && (
+          <p className="text-red-400 text-xs text-left -mt-2">{phoneError}</p>
+        )}
 
         <div className="flex items-start gap-2">
           <label className="flex items-center gap-2 text-xs text-slate-200">
             <input
               type="checkbox"
               checked={consentChecked}
-              onChange={(e) => setConsentChecked(e.target.checked)}
-              className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-purple-600 focus:ring-0"
+              onChange={(e) => {
+                setConsentChecked(e.target.checked);
+                if (consentError) setConsentError('');
+              }}
+              className={`w-4 h-4 rounded bg-slate-800 text-purple-600 focus:ring-0 ${
+                consentError ? 'border-red-500' : 'border-slate-600'
+              }`}
             />
             <span className="text-left">
               I consent to sharing my birth information and agree to the{' '}
@@ -183,6 +204,12 @@ const LoginForm = ({
             </span>
           </label>
         </div>
+        {consentError && (
+          <p className="text-red-400 text-xs text-left -mt-2">{consentError}</p>
+        )}
+        {networkError && (
+          <p className="text-red-400 text-xs text-left -mt-2">{networkError}</p>
+        )}
 
         <button
           type="submit"
