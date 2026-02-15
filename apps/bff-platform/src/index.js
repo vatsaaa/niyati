@@ -147,8 +147,17 @@ const telemetryRouter = createTelemetryRouter({
   packageJsonPath: '../package.json'
 });
 
+// Rate limiters for platform routes (skip in test environment to avoid flaky tests)
+let chatLimiter, paymentSubmitLimiter, identifyLimiter, generalLimiter;
+if (process.env.NODE_ENV !== 'test') {
+  ({ chatLimiter, paymentSubmitLimiter, identifyLimiter, generalLimiter } = require('../lib/rateLimiters'));
+}
+const noop = (req, res, next) => next();
+
 const API_VERSION = process.env.API_VERSION || 'v1';
 const apiRouter = express.Router();
+// Apply general rate limiter to all API routes (safety net)
+if (generalLimiter) apiRouter.use(generalLimiter);
 // Note: authentication is applied selectively to routes that require it.
 // We will apply `authenticateOrReject` to the POST /api/v1/chat handler below
 // so that lightweight public endpoints like `/api/v1/chat/classify` remain
@@ -159,6 +168,14 @@ apiRouter.use('/telemetry', telemetryRouter);
 // Users sync endpoint
 const usersRouter = require('../lib/users');
 apiRouter.use('/users', usersRouter);
+
+// Payment routes
+const paymentsRouter = require('../lib/payments');
+apiRouter.use('/payments', paymentsRouter);
+
+// Chat history routes (message save + history retrieval)
+const chatHistoryRouter = require('../lib/chatHistory');
+apiRouter.use('/chat', chatHistoryRouter);
 
 // Profile extraction endpoint (NLP-based field extraction)
 const profileRouter = require('../lib/profileExtractor');
@@ -176,8 +193,9 @@ apiRouter.use('/chat', chatRouter);
 // persists minimal authoritative state to users table (if DB available), and forwards
 // a canonical payload to n8n. Returns canonical response to UI.
 // Apply authenticateOrReject only to this route when available
+// Apply chat rate limiter to POST /chat
 const chatAuthMiddleware = (commons && commons.authenticateOrReject) ? commons.authenticateOrReject : (req, res, next) => next();
-apiRouter.post('/chat', chatAuthMiddleware, async (req, res) => {
+apiRouter.post('/chat', chatLimiter || noop, chatAuthMiddleware, async (req, res) => {
   try {
     const body = req.body || {};
     const message = (body.message || '').toString();

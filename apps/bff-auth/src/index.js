@@ -146,6 +146,22 @@ apiRouter.use('/auth', authRouter);
 apiRouter.use('/users', usersRouter);
 apiRouter.use('/internal', internalRouter);
 apiRouter.use('/telemetry', telemetryRouter);
+
+// Wire auth-core rate limiters (skip in test to avoid flaky tests)
+if (process.env.NODE_ENV !== 'test') {
+  try {
+    const { createRateLimiter } = require('@niyati/auth-core/lib/rateLimiter');
+    const limiters = createRateLimiter();
+    // Apply login limiter to user identification
+    apiRouter.use('/users/identify', limiters.loginLimiter);
+    // Apply token refresh limiter
+    apiRouter.use('/auth/refresh', limiters.tokenRefreshLimiter);
+    logger.info({ msg: 'Auth rate limiters wired successfully' });
+  } catch (e) {
+    logger.warn({ msg: 'Failed to wire rate limiters', err: e && e.message });
+  }
+}
+
 app.use(`/api/${API_VERSION}`, apiRouter);
 
 app.get('/', (req, res) => res.sendSuccess({ service: 'bff-auth', version: API_VERSION }));
