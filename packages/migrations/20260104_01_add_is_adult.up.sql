@@ -12,7 +12,7 @@ DROP TABLE IF EXISTS users CASCADE;
 DROP EXTENSION IF EXISTS pgcrypto CASCADE;
 
 -- Ensure pgcrypto is available for gen_random_uuid()
-CREATE EXTENSION pgcrypto;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 CREATE TABLE users (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
